@@ -144,26 +144,46 @@ jobs:
           APP="$(find build-ios-sim -maxdepth 4 -name 'SilentHill.app' -type d | head -1)"
           xcrun simctl install "$DEV" "$APP"
 
+          # Resolved once, before the launch: on a loaded runner this one call
+          # has taken four minutes, and it is needed to watch for the log.
+          CONTAINER=$(xcrun simctl get_app_container "$DEV" com.silenthill.port data 2>/dev/null || true)
+          echo "container: ${CONTAINER:-(none)}"
+
           # --console streams stdout/stderr; SDL routes the port's SH_DBG output
           # there. Time-boxed because a successful launch never exits on its own.
           # Kept in a file as well: simctl's own failure message goes to the same
           # stream, and a launch that never started is the thing worth seeing.
           xcrun simctl launch --console-pty "$DEV" com.silenthill.port > launch.out 2>&1 &
           LAUNCH_PID=$!
-          sleep 45
+
+          # Waits for the game's own log rather than sleeping a fixed 45s. A cold
+          # simulator on a busy runner has taken minutes to service a launch, and
+          # a flat window reported that as "the app never started".
+          GAME_LOG=""
+          set +x
+          for i in $(seq 1 60); do
+            sleep 5
+            for f in "$CONTAINER/Documents"/*.log "$CONTAINER/Documents/SilentHill.log"; do
+              [ -f "$f" ] && GAME_LOG="$f"
+            done
+            if [ -n "$GAME_LOG" ]; then
+              echo "the app wrote $GAME_LOG after $((i * 5))s"
+              break
+            fi
+            [ $((i % 6)) -eq 0 ] && echo "still waiting for the app's log ($((i * 5))s)"
+          done
+          set -x
+          # Past the first write, so the log covers startup and not just its open.
+          [ -n "$GAME_LOG" ] && sleep 25
           kill $LAUNCH_PID 2>/dev/null || true
 
           echo "=== what the launch printed ==="
           cat launch.out || true
 
           echo "=== did it write a log into the container? ==="
-          CONTAINER=$(xcrun simctl get_app_container "$DEV" com.silenthill.port data 2>/dev/null || true)
-          GAME_LOG=""
           if [ -n "$CONTAINER" ]; then
             ls -la "$CONTAINER/Documents" || true
-            for f in "$CONTAINER/Documents"/*.log "$CONTAINER/Documents/SilentHill.log"; do
-              [ -f "$f" ] && { GAME_LOG="$f"; echo "--- $f ---"; tail -60 "$f"; }
-            done
+            [ -n "$GAME_LOG" ] && { echo "--- $GAME_LOG ---"; tail -60 "$GAME_LOG"; }
           fi
 
           # A launch that never got as far as writing anything used to pass this

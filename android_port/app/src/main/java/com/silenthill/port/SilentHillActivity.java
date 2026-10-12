@@ -3,7 +3,6 @@ package com.silenthill.port;
 import android.app.AlertDialog;
 import android.content.Context;
 import android.content.DialogInterface;
-import android.content.res.AssetManager;
 import android.text.InputType;
 import android.widget.EditText;
 import android.widget.LinearLayout;
@@ -14,10 +13,6 @@ import android.util.Log;
 import org.libsdl.app.SDLActivity;
 
 import java.io.File;
-import java.io.FileOutputStream;
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.OutputStream;
 
 public class SilentHillActivity extends SDLActivity {
 
@@ -171,15 +166,11 @@ public class SilentHillActivity extends SDLActivity {
     }
 
     /**
-     * Copies the port's own assets out of the APK and into the app's external
-     * files dir, which is where native code looks for them (main() chdir()s
-     * there, and fs_pc.c resolves "./gamedata" against it).
-     *
-     * This is only the redistributable half of the data: decal.png, the
-     * OFL-licensed fonts, the language pack, UI sounds. The game's own content
-     * is NOT shipped and never will be -- the user drops their own
-     * "Silent Hill (USA).bin" and its extracted gamedata/ into the same
-     * directory.
+     * The port's own redistributable files (fonts, language packs, UI sounds),
+     * never the game's content: the player supplies their own disc image.
+     * SetupActivity has normally compared and updated them already, and asked
+     * about any that changed; a launch that skips setup only fills in what is
+     * missing, so it can never overwrite anything without asking.
      */
     private void unpackBundledAssets() {
         File target = StorageLocations.resolve(this);
@@ -187,52 +178,6 @@ public class SilentHillActivity extends SDLActivity {
             Log.e(TAG, "No data root; cannot stage bundled assets.");
             return;
         }
-        try {
-            copyAssetTree(getAssets(), "gamedata", target);
-            copyAssetTree(getAssets(), "licenses", target);
-        } catch (IOException e) {
-            Log.e(TAG, "Failed staging bundled assets: " + e.getMessage());
-        }
-    }
-
-    private void copyAssetTree(AssetManager am, String path, File destRoot) throws IOException {
-        String[] children = am.list(path);
-
-        if (children == null || children.length == 0) {
-            copyAssetFile(am, path, new File(destRoot, path));
-            return;
-        }
-
-        File dir = new File(destRoot, path);
-        if (!dir.isDirectory() && !dir.mkdirs()) {
-            throw new IOException("mkdir failed: " + dir);
-        }
-        for (String child : children) {
-            copyAssetTree(am, path + "/" + child, destRoot);
-        }
-    }
-
-    private void copyAssetFile(AssetManager am, String assetPath, File dest) throws IOException {
-        // Overwriting every launch would stomp a user's edited pl.lang, so only
-        // write when the file is missing. Size is not compared: these assets do
-        // not change without an app update, and the whole point is that the
-        // user may legitimately replace them.
-        if (dest.exists()) {
-            return;
-        }
-        File parent = dest.getParentFile();
-        if (parent != null && !parent.isDirectory() && !parent.mkdirs()) {
-            throw new IOException("mkdir failed: " + parent);
-        }
-
-        byte[] buf = new byte[16 * 1024];
-        try (InputStream in = am.open(assetPath);
-             OutputStream out = new FileOutputStream(dest)) {
-            int n;
-            while ((n = in.read(buf)) > 0) {
-                out.write(buf, 0, n);
-            }
-        }
-        Log.i(TAG, "staged " + assetPath);
+        BundledAssets.copyMissing(this, target);
     }
 }

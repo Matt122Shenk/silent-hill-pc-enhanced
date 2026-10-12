@@ -79,6 +79,14 @@ static int QuickScriptWanted(void)
     "/usr/share/fonts/wenquanyi/wqy-microhei/wqy-microhei.ttc", \
     "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc", \
     "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf"
+/* Android has carried a CJK face since its first release; which one depends on
+ * the version (Noto CJK from 7.0, Droid fallback before). */
+#define CJK_ANDROID_FACES \
+    "/system/fonts/NotoSansCJK-Regular.ttc", \
+    "/system/fonts/NotoSansSC-Regular.otf", \
+    "/system/fonts/NotoSansJP-Regular.otf", \
+    "/system/fonts/DroidSansFallbackFull.ttf", \
+    "/system/fonts/DroidSansFallback.ttf"
 
 static const char* const s_FacesJa[] = {
     CJK_USER_FACES,
@@ -89,6 +97,7 @@ static const char* const s_FacesJa[] = {
     "/System/Library/Fonts/Hiragino Sans GB.ttc",
     "/Library/Fonts/Arial Unicode.ttf",
     CJK_LINUX_FACES,
+    CJK_ANDROID_FACES,
 };
 static const char* const s_FacesZh[] = {
     CJK_USER_FACES,
@@ -99,6 +108,7 @@ static const char* const s_FacesZh[] = {
     "/System/Library/Fonts/STHeiti Medium.ttc",
     "/Library/Fonts/Arial Unicode.ttf",
     CJK_LINUX_FACES,
+    CJK_ANDROID_FACES,
 };
 
 /* The first face in the list that really draws the script, by asking it for a

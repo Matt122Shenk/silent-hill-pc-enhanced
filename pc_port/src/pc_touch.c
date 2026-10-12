@@ -433,12 +433,14 @@ static int Tc_Mode(void)
             return TC_MODE_BACK;
     }
 
-    /* The brightness screen is a slider with no pointer support, so touch could
-     * open it and then had no way out. It leaves on enter|cancel; Back sends
-     * cancel, which leaves the setting as it was. */
+    /* The brightness screen leaves on enter|cancel and has no exit a finger can
+     * reach, so it keeps the corner Back. BACK_CURSOR, not BACK: options.c takes
+     * taps there to pick a row and step it, and under BACK every one of those
+     * taps also fired the tap-anywhere Cancel, so one tap moved the value a
+     * single step and closed the screen. */
     if (g_GameWork.gameState == GameState_OptionScreen &&
         g_GameWork.gameStateSteps[0] == OptionsMenuState_Brightness)
-        return TC_MODE_BACK;
+        return TC_MODE_BACK_CURSOR;
 
     /* The bonus options page is entered from the main options list with a
      * shoulder button (options.c takes any of L1/L2/R1/R2), which a

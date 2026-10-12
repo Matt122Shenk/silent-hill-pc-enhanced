@@ -16,6 +16,7 @@ import android.util.Log;
 import android.view.Gravity;
 import android.view.View;
 import android.widget.Button;
+import android.widget.CheckBox;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.ScrollView;
@@ -834,6 +835,90 @@ public class SetupActivity extends Activity {
     }
 
     private void launchGame() {
+        final File root = StorageLocations.resolve(this);
+        final List<String> outdated =
+            (root != null) ? BundledAssets.stage(this, root) : new ArrayList<String>();
+
+        if (outdated.isEmpty()) {
+            startGame();
+            return;
+        }
+
+        int mode = BundledAssets.mode(this);
+        if (mode == BundledAssets.MODE_ALWAYS) {
+            BundledAssets.update(this, root, outdated);
+            startGame();
+            return;
+        }
+        if (mode == BundledAssets.MODE_NEVER) {
+            startGame();
+            return;
+        }
+        askToUpdateFiles(root, outdated);
+    }
+
+    /**
+     * Asked on every launch until it is answered for good: a player who says
+     * "not now" is still running text and fonts the new code was not written
+     * for, and should hear about it again rather than forget it happened.
+     */
+    private void askToUpdateFiles(final File root, final List<String> outdated) {
+        StringBuilder list = new StringBuilder();
+        int shown = Math.min(outdated.size(), 12);
+        for (int i = 0; i < shown; i++) {
+            list.append("\n  ").append(outdated.get(i).replaceFirst("^gamedata/", ""));
+        }
+        if (outdated.size() > shown) {
+            list.append("\n  and ").append(outdated.size() - shown).append(" more");
+        }
+
+        TextView msg = new TextView(this);
+        msg.setText("This version of the app comes with newer copies of "
+                  + outdated.size() + (outdated.size() == 1 ? " file" : " files")
+                  + " the game already has:\n" + list + "\n\n"
+                  + "Old copies can make text show the wrong letters. Your current "
+                  + "copies are moved to " + BundledAssets.BACKUP_DIR
+                  + ", so nothing is lost.");
+
+        final CheckBox dontAsk = new CheckBox(this);
+        dontAsk.setText("Don't ask again");
+
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        int pad = (int) (20 * getResources().getDisplayMetrics().density);
+        box.setPadding(pad, pad / 2, pad, 0);
+        box.addView(msg);
+        box.addView(dontAsk);
+
+        ScrollView scroll = new ScrollView(this);
+        scroll.addView(box);
+
+        new AlertDialog.Builder(this)
+            .setTitle("Update game files?")
+            .setView(scroll)
+            .setCancelable(false)
+            .setPositiveButton("Update", new DialogInterface.OnClickListener() {
+                @Override public void onClick(DialogInterface d, int which) {
+                    if (dontAsk.isChecked()) {
+                        BundledAssets.setMode(SetupActivity.this, BundledAssets.MODE_ALWAYS);
+                    }
+                    BundledAssets.update(SetupActivity.this, root, outdated);
+                    startGame();
+                }
+            })
+            .setNegativeButton("Keep mine", new DialogInterface.OnClickListener() {
+                @Override public void onClick(DialogInterface d, int which) {
+                    if (dontAsk.isChecked()) {
+                        BundledAssets.setMode(SetupActivity.this, BundledAssets.MODE_NEVER);
+                        BundledAssets.keep(SetupActivity.this, root, outdated);
+                    }
+                    startGame();
+                }
+            })
+            .show();
+    }
+
+    private void startGame() {
         startActivity(new Intent(this, SilentHillActivity.class));
         finish();
     }

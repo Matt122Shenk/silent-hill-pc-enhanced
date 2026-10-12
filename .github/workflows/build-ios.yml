@@ -146,17 +146,47 @@ jobs:
 
           # --console streams stdout/stderr; SDL routes the port's SH_DBG output
           # there. Time-boxed because a successful launch never exits on its own.
-          xcrun simctl launch --console-pty "$DEV" com.silenthill.port &
+          # Kept in a file as well: simctl's own failure message goes to the same
+          # stream, and a launch that never started is the thing worth seeing.
+          xcrun simctl launch --console-pty "$DEV" com.silenthill.port > launch.out 2>&1 &
           LAUNCH_PID=$!
           sleep 45
           kill $LAUNCH_PID 2>/dev/null || true
 
+          echo "=== what the launch printed ==="
+          cat launch.out || true
+
           echo "=== did it write a log into the container? ==="
           CONTAINER=$(xcrun simctl get_app_container "$DEV" com.silenthill.port data 2>/dev/null || true)
+          GAME_LOG=""
           if [ -n "$CONTAINER" ]; then
             ls -la "$CONTAINER/Documents" || true
             for f in "$CONTAINER/Documents"/*.log "$CONTAINER/Documents/SilentHill.log"; do
-              [ -f "$f" ] && { echo "--- $f ---"; tail -60 "$f"; }
+              [ -f "$f" ] && { GAME_LOG="$f"; echo "--- $f ---"; tail -60 "$f"; }
             done
           fi
+
+          # A launch that never got as far as writing anything used to pass this
+          # job in silence, which is the one outcome it exists to catch. Say what
+          # the system saw before failing: the app's own os_log, then any crash
+          # report, from the simulator's container and the host's reports dir.
+          if [ -z "$GAME_LOG" ]; then
+            echo "=== the app wrote no log; what did the system see? ==="
+            xcrun simctl spawn "$DEV" log show --style compact --last 3m \
+              --predicate 'process == "SilentHill"' 2>&1 | tail -80 || true
+            SIMREPORTS="$HOME/Library/Developer/CoreSimulator/Devices/$DEV/data/Library/Logs/CrashReporter"
+            for d in "$HOME/Library/Logs/DiagnosticReports" "$SIMREPORTS"; do
+              echo "--- $d ---"
+              ls -la "$d" 2>/dev/null || true
+              for c in "$d"/SilentHill*; do
+                [ -f "$c" ] && { echo "--- $c ---"; head -60 "$c"; }
+              done
+            done
+          fi
+
           xcrun simctl shutdown "$DEV" || true
+
+          if [ -z "$GAME_LOG" ]; then
+            echo "The app never wrote a log: it did not reach main(), or died before config load."
+            exit 1
+          fi

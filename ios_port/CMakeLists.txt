@@ -63,6 +63,7 @@ endif()
 set(SH_IOS_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/src/ios_paths.m"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/ios_bootstrap.m"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/ios_fonts.m"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/ios_ra_http.m"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/ios_ra_login.m"
     CACHE INTERNAL "iOS platform sources compiled into the game target")

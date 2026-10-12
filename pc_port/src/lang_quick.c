@@ -111,9 +111,47 @@ static const char* const s_FacesZh[] = {
     CJK_ANDROID_FACES,
 };
 
-/* The first face in the list that really draws the script, by asking it for a
- * glyph only that script has -- a file that exists but lacks them would turn
- * every label into empty boxes. Read once per script per run; NULL if none. */
+/* Does this file really draw the script? A file that exists but lacks the
+ * glyphs would turn every label into empty boxes. */
+static int FaceDrawsScript(const char* path, int probe)
+{
+    FILE*          f = fopen(path, "rb");
+    long           n;
+    unsigned char* data;
+    stbtt_fontinfo info;
+    int            ok = 0;
+
+    if (f == NULL)
+        return 0;
+    fseek(f, 0, SEEK_END);
+    n = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    data = (n > 0 && n < (128L << 20)) ? (unsigned char*)malloc((size_t)n) : NULL;
+    if (data != NULL && fread(data, 1, (size_t)n, f) == (size_t)n &&
+        stbtt_InitFont(&info, data, stbtt_GetFontOffsetForIndex(data, 0)) &&
+        stbtt_FindGlyphIndex(&info, probe) != 0)
+    {
+        ok = 1;
+    }
+    free(data);
+    fclose(f);
+    return ok;
+}
+
+static const char* FaceFromList(const char* const* list, int count, int probe)
+{
+    int i;
+
+    for (i = 0; i < count; i++)
+    {
+        if (list[i] != NULL && FaceDrawsScript(list[i], probe))
+            return list[i];
+    }
+    return NULL;
+}
+
+/* The first face that really draws the script. Read once per script per run;
+ * NULL if none. */
 static const char* CjkFace(int script)
 {
     static const char* s_Found[3];
@@ -124,7 +162,6 @@ static const char* CjkFace(int script)
                                    : (int)(sizeof(s_FacesJa) / sizeof(s_FacesJa[0]));
     /* hiragana A; and the simplified form of "set" (U+8BBE), absent from Japanese faces */
     int                probe = (script == LANG_QUICK_SCRIPT_CHINESE) ? 0x8BBE : 0x3042;
-    int                i;
 
     if (script != LANG_QUICK_SCRIPT_JAPANESE && script != LANG_QUICK_SCRIPT_CHINESE)
         return NULL;
@@ -132,28 +169,37 @@ static const char* CjkFace(int script)
         return s_Found[script];
     s_Probed[script] = 1;
 
-    for (i = 0; i < count && s_Found[script] == NULL; i++)
+    /* The player's own file first, wherever they are: gamedata/font/cjk.* is
+     * how a system with no CJK face, or a player who prefers another, supplies
+     * one. These three are also at the head of the lists below, so the second
+     * pass retries them -- three failed fopen()s, once per run. */
     {
-        FILE*          f = fopen(list[i], "rb");
-        long           n;
-        unsigned char* data;
-        stbtt_fontinfo info;
+        static const char* const userFaces[] = { CJK_USER_FACES };
 
-        if (f == NULL)
-            continue;
-        fseek(f, 0, SEEK_END);
-        n = ftell(f);
-        fseek(f, 0, SEEK_SET);
-        data = (n > 0 && n < (128L << 20)) ? (unsigned char*)malloc((size_t)n) : NULL;
-        if (data != NULL && fread(data, 1, (size_t)n, f) == (size_t)n &&
-            stbtt_InitFont(&info, data, stbtt_GetFontOffsetForIndex(data, 0)) &&
-            stbtt_FindGlyphIndex(&info, probe) != 0)
-        {
-            s_Found[script] = list[i];
-        }
-        free(data);
-        fclose(f);
+        s_Found[script] = FaceFromList(userFaces, (int)(sizeof(userFaces) / sizeof(userFaces[0])), probe);
     }
+
+#ifdef SH_IOS
+    /* iOS keeps its faces where no fixed path finds them -- the folders under
+     * /System/Library/Fonts have moved between releases and a face can be
+     * downloaded on demand -- so CoreText is asked for the file instead. Every
+     * remaining entry in the lists below is a Windows, macOS, Linux or Android
+     * path, so there is nothing after this to fall through to. */
+    if (s_Found[script] == NULL)
+    {
+        extern const char* const* Ios_CjkFontPaths(int script);
+        const char* const*        iosFaces = Ios_CjkFontPaths(script);
+        int                       n        = 0;
+
+        while (iosFaces != NULL && n < 8 && iosFaces[n] != NULL)
+            n++;
+        if (n > 0)
+            s_Found[script] = FaceFromList(iosFaces, n, probe);
+    }
+#endif
+
+    if (s_Found[script] == NULL)
+        s_Found[script] = FaceFromList(list, count, probe);
 
     if (s_Found[script] != NULL)
         SH_LOG("[LANG] overlay font for %s: %s",

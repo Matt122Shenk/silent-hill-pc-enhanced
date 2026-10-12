@@ -740,6 +740,10 @@ elseif(IOS)
         "-framework Foundation"
         "-framework QuartzCore"
         "-framework CoreGraphics"
+        # ios_fonts.m asks CoreText for the file holding a CJK face: iOS
+        # has no fixed path for one, so a hardcoded list finds nothing and
+        # the quick menu falls back to English for Japanese and Chinese.
+        "-framework CoreText"
         "-framework CoreMotion"
         "-framework AudioToolbox"
         "-framework AVFoundation"

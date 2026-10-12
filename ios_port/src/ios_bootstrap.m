@@ -314,11 +314,14 @@ void Ios_StageBundledAssets(void)
         NSFileManager* fm     = [NSFileManager defaultManager];
         NSString*      docs   = [fm stringWithFileSystemRepresentation:docsC length:strlen(docsC)];
         NSString*      bundle = [fm stringWithFileSystemRepresentation:bundleC length:strlen(bundleC)];
-        /* gamecontrollerdb.txt is a loose file at the bundle root rather than
-         * part of a tree, and PsyCross opens it by that name relative to the
-         * working directory -- so until it was staged, a pad SDL's built-in
-         * list does not already know could not be mapped at all. */
-        NSArray<NSString*>*        items = @[ @"gamedata", @"licenses", @"gamecontrollerdb.txt" ];
+        /* gamecontrollerdb.txt is deliberately NOT here, though it looked like
+         * it belonged: PsyCross loads it through SDL_RWFromFile, and on Apple
+         * platforms that checks the app bundle BEFORE the working directory
+         * (SDL_OpenFPFromBundleOrFallback). The bundle's copy therefore always
+         * wins, so staging one into Documents only puts a file there that the
+         * game will never read -- worse than absent, because the PAD warning
+         * tells the player to add their pad's GUID to it. */
+        NSArray<NSString*>*        items = @[ @"gamedata", @"licenses" ];
         NSMutableArray<NSString*>* files = [NSMutableArray array];
         NSUserDefaults*            prefs = [NSUserDefaults standardUserDefaults];
         NSString*                  stamp = [NSString stringWithFormat:@"%s %s:%@",

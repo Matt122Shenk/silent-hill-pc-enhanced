@@ -183,6 +183,11 @@ jobs:
           echo "=== did it write a log into the container? ==="
           if [ -n "$CONTAINER" ]; then
             ls -la "$CONTAINER/Documents" || true
+            # What the bundle staged, and the manifest that decides whether a
+            # later app version may replace any of it (ios_bootstrap.m).
+            ls -la "$CONTAINER/Documents/gamedata" || true
+            echo "--- gamedata/.bundled_assets ---"
+            cat "$CONTAINER/Documents/gamedata/.bundled_assets" || true
             [ -n "$GAME_LOG" ] && { echo "--- $GAME_LOG ---"; tail -60 "$GAME_LOG"; }
           fi
 

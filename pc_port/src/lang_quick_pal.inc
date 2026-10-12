@@ -33,6 +33,7 @@
 { "Music Volume",         { "Musiklautstärke",     "Volume musique",        "Volumen de música",     "Volume musica"         } },
 { "Effects Volume",       { "Effektlautstärke",    "Volume effets",         "Volumen de efectos",    "Volume effetti"        } },
 { "Disable D-pad for Movement", { "Steuerkreuz nicht zum Laufen", "Croix dir. sans déplacement", "Cruceta sin movimiento", "Croce direz. senza movimento" } },
+{ "Crosshair Style",      { "Fadenkreuz-Stil",     "Style de réticule",    "Estilo de retícula",   "Stile mirino"          } },
 { "Edit Keybinds",        { "Tastenbelegung",      "Modifier les touches",  "Editar controles",      "Modifica tasti"        } },
 { "Control Type",         { "Steuerungsart",       "Type de réglage",       "Tipo de ajuste",        "Tipo di regolazione"   } },
 { "Aspect Trim",          { "Seitenverhältnis",    "Ajust. du format",      "Ajuste de aspecto",     "Regolaz. formato"      } },
@@ -55,6 +56,12 @@
 { "Melee Swing Pullback", { "Nahkampf-Ausholen",   "Recul en mêlée",        "Retroceso cuerpo a cuerpo", "Arretramento in mischia" } },
 
 /* --- Values --- */
+/* crosshair_style shapes. "Cross (+)" keeps the (+) so it cannot be read as
+ * the Cross BUTTON, which shares the English word. */
+{ "Cross (+)",            { "Kreuz (+)",           "Croix (+)",             "Cruz (+)",              "Croce (+)"             } },
+{ "Dot",                  { "Punkt",               "Point",                 "Punto",                 "Punto"                 } },
+{ "Circle",               { "Kreis",               "Cercle",                "Círculo",               "Cerchio"               } },
+{ "Dashes",               { "Striche",             "Tirets",                "Guiones",               "Trattini"              } },
 { "Auto",                 { NULL,                  NULL,                    "Auto.",                 NULL                    } },
 { "Stereo",               { NULL,                  "Stéréo",                "Estéreo",               NULL                    } },
 { "Quad",                 { NULL,                  NULL,                    NULL,                    NULL                    } },
@@ -77,6 +84,7 @@
 /* --- Cheats + debug --- */
 { "God mode",             { "Gottmodus",           "Mode dieu",             "Modo dios",             "Modalità dio"          } },
 { "Noclip",               { NULL,                  NULL,                    NULL,                    NULL                    } },
+{ "Infinite ammo",        { "Unbegrenzte Munition", "Munitions infinies",   "Munición infinita",     "Munizioni infinite"    } },
 { "Enemies ignore Harry", { "Gegner ignorieren Harry", "Ennemis ignorent Harry", "Enemigos ignoran a Harry", "Nemici ignorano Harry" } },
 { "Unlimited enemies",    { "Unbegrenzt Gegner",   "Ennemis illimités",     "Enemigos ilimitados",   "Nemici illimitati"     } },
 { "Big head mode",        { "Großkopf-Modus",      "Mode grosse tête",      "Modo cabezón",          "Modalità testone"      } },
@@ -88,7 +96,7 @@
 { "Free camera",          { "Freie Kamera",        "Caméra libre",          "Cámara libre",          "Telecamera libera"     } },
 { "Allow console",        { "Konsole erlauben",    "Autoriser la console",  "Permitir consola",      "Consenti console"      } },
 { "Collision visualizer", { "Kollisionsanzeige",   "Afficher les collisions", "Ver colisiones",      "Mostra collisioni"     } },
-{ "Keyframe viewer (K)",  { "Keyframe-Anzeige (K)", "Visionneuse d'images clés (K)", "Visor de fotogramas clave (K)", "Visore fotogrammi chiave (K)" } },
+{ "Keyframe viewer (kf)", { "Keyframe-Anzeige (kf)", "Visionneuse d'images clés (kf)", "Visor de fotogramas clave (kf)", "Visore fotogrammi chiave (kf)" } },
 { "Fast forward (Ctrl+F5)", { "Vorspulen (Strg+F5)", "Avance rapide (Ctrl+F5)", "Avance rápido (Ctrl+F5)", "Avanti veloce (Ctrl+F5)" } },
 { "Wireframe (Ctrl+F1)",  { "Drahtgitter (Strg+F1)", "Fil de fer (Ctrl+F1)", "Alambre (Ctrl+F1)",   "Wireframe (Ctrl+F1)"   } },
 { "No textures (Ctrl+F2)", { "Keine Texturen (Strg+F2)", "Sans textures (Ctrl+F2)", "Sin texturas (Ctrl+F2)", "Senza texture (Ctrl+F2)" } },

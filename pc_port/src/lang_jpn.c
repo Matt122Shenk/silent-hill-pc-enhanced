@@ -10,6 +10,7 @@
 #include "main/fsqueue.h"   /* FILE_VIN_OPTION_BIN, FILE_VIN_SAVELOAD_BIN */
 #include "pc_kanji.h"       /* Pc_KanjiIsLead (SJIS pair walk) */
 #include "lang_zh.h"
+#include "pc_config.h"
 #include "sh_log.h"
 
 /* NTSC-J menu text comes off the disc rather than out of the binary.
@@ -81,7 +82,11 @@ static const char* JpnUiLookup(const s_JpnUiEntry* tbl, int count, const char* u
 
 const char* Pc_JpnInventoryLabel(const char* us)
 {
-    if (g_GameRegion != Region_JPN || us == NULL)
+    /* Keyed on the TEXT, not the disc: these are a compiled table, so they are
+     * just as available to a Japanese pack mounted on a PAL or US disc. (The
+     * main-menu strings are not -- those are read out of the Japanese disc's
+     * own VIN overlays, so they still need that disc.) */
+    if (!Pc_LangSjisActive() || us == NULL)
         return NULL;
     return JpnUiLookup(s_JpnInv, JPN_INV_COUNT, us);
 }
@@ -274,6 +279,12 @@ const char* Pc_JpnMenuText(const char* us)
     int i;
 
     if (us == NULL)
+        return NULL;
+
+    /* English on a Japanese disc: every one of these would replace a compiled
+     * US literal with the disc's Japanese, which is exactly what this language
+     * exists to avoid. NULL means "keep what the port compiled". */
+    if (g_PcConfig.jpLanguage == JP_LANG_ENGLISH)
         return NULL;
 
     {

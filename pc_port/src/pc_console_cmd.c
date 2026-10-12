@@ -25,6 +25,9 @@
  *   INFO                 - name, health, position and state of the selection
  *   GOTO / BRING         - Harry to the selection / the selected enemy to Harry
  *   FREEZE [0|1|ALL|NONE] - hold enemies still (UNFREEZE = FREEZE 0)
+ *   AFKEGG                  - trigger the Dark Harry easter egg now (debug)
+ *   NOCOL / NOCOLLIDE [0|1] - phase the selection (player if none) out of
+ *                             collision except the ground
  *   BIND <key> <cmds>    - run one or more console commands from a key;
  *                          BIND LIST / UNBIND <key> / UNBINDALL
  *   ABOUT                - PC port credits (same block the staff roll appends)
@@ -52,6 +55,7 @@
 #include "map_registry.h"
 #include "dbg_overlay.h"
 #include "pc_config.h"
+#include "pc_title_style.h"
 #include "pc_credits.h"
 #include "pc_pick.h"
 #include "pc_binds.h"
@@ -512,7 +516,7 @@ static const char* const HELP_LINES[] = {
     " invdim <pct>   off-center carousel dim strength",
     " fmv            list movies (numbered)",
     " fmv <name|#>   play a movie (also intro1-2, end1-5)",
-    " kf [n]         keyframe inspector: set/show frame (K key)",
+    " kf [n]         keyframe viewer: toggle, or view frame n",
     " playas [name]  play as another character (bare = list)",
     " minimapnomap [0|1]  minimap before the map is found: 0 hide, 1 empty panel",
     " bind <key> <cmd>[;<cmd>...]  run console commands from a key",
@@ -1088,6 +1092,30 @@ static void cmd_select(const char* arg)
     cprintf("selected %s  scale %.2f", what, Pc_Pick_GetScale() / 4096.0f);
 }
 
+static void cmd_nocol(const char* arg)
+{
+    char what[64];
+    int  on;
+
+    /* Primarily a player cheat, so a bare NOCOL with nothing clicked means
+     * Harry rather than an error. */
+    if (Pc_Pick_Kind() == PcPick_None)
+        Pc_Pick_SelectPlayer();
+
+    on = (arg[0] == '1') ? 1 :
+         (arg[0] == '0') ? 0 : !Pc_Pick_GetNoCollide();
+
+    if (!Pc_Pick_SetNoCollide(on)) {
+        cprintf("nocollide: select a character first (props have no character collision)");
+        return;
+    }
+
+    Pc_Pick_Describe(what, sizeof(what));
+    cprintf("%s nocollide %s%s", what, on ? "ON" : "off",
+            on ? " - walls, characters and attacks pass through; the ground still holds"
+               : "");
+}
+
 static void cmd_scale(const char* arg)
 {
     char what[64];
@@ -1366,6 +1394,21 @@ static void cmd_about(void)
         cprintf("no PC port credits defined");
 }
 
+/* Console args are passed through as typed, so word arguments compare without
+ * regard to case. */
+static int StrCaseEq(const char* a, const char* b)
+{
+    for (; *a != '\0' && *b != '\0'; a++, b++)
+    {
+        int ca = (*a >= 'A' && *a <= 'Z') ? (*a + 32) : *a;
+        int cb = (*b >= 'A' && *b <= 'Z') ? (*b + 32) : *b;
+
+        if (ca != cb)
+            return 0;
+    }
+    return *a == *b;
+}
+
 void Pc_ConsoleExec(const char* line)
 {
     char cmd[48];
@@ -1425,6 +1468,18 @@ void Pc_ConsoleExec(const char* line)
         cmd_select(arg);
     } else if (strcmp(cmd, "SCALE") == 0) {
         cmd_scale(arg);
+    } else if (strcmp(cmd, "AFKEGG") == 0) {
+        /* Debug trigger for the Dark Harry easter egg (pc_dark_harry.c), so it
+         * can be tested without standing still for five minutes. */
+        extern const char* Pc_DarkHarry_Spawn(void);
+        const char* why = Pc_DarkHarry_Spawn();
+        if (why == NULL) {
+            cprintf("afkegg: he is here");
+        } else {
+            cprintf("afkegg: refused - %s", why);
+        }
+    } else if (strcmp(cmd, "NOCOL") == 0 || strcmp(cmd, "NOCOLLIDE") == 0) {
+        cmd_nocol(arg);
     } else if (strcmp(cmd, "HEALTH") == 0 || strcmp(cmd, "HP") == 0) {
         cmd_health(arg, 0);
     } else if (strcmp(cmd, "HEAL") == 0) {
@@ -1513,6 +1568,48 @@ void Pc_ConsoleExec(const char* line)
         else if (arg[0] == '0') g_PcUnlimitedEnemies = 0;
         else g_PcUnlimitedEnemies = !g_PcUnlimitedEnemies;
         cprintf("unlimited enemies %s (cap now %d)", g_PcUnlimitedEnemies ? "ON" : "OFF", NPC_COUNT_MAX);
+    } else if (strcmp(cmd, "LANGCHECK") == 0) {
+        /* Every layer of the current language in one place. The layers
+         * install independently, so "the menus are translated" is no
+         * evidence that the story text is. */
+        Pc_LangSelfCheck(cprintf);
+    } else if (strcmp(cmd, "MENUSTYLE") == 0) {
+        /* Three main menus, and no disc carries all three: us is a full
+         * picture, pal composes black + logo + fog, japanese has its own
+         * stylized logo. The port ships the two a disc can lack. */
+        static const char* const names[3] = { "US", "PAL", "JAPANESE" };
+        int was = g_PcConfig.menuStyle;
+        int now;
+
+        if (StrCaseEq(arg, "auto"))
+            g_PcConfig.menuStyle = TITLE_STYLE_AUTO;
+        else if (StrCaseEq(arg, "us") || StrCaseEq(arg, "western") || StrCaseEq(arg, "ntsc"))
+            g_PcConfig.menuStyle = TITLE_STYLE_US;
+        else if (StrCaseEq(arg, "pal") || StrCaseEq(arg, "eur"))
+            g_PcConfig.menuStyle = TITLE_STYLE_PAL;
+        else if (StrCaseEq(arg, "japanese") || StrCaseEq(arg, "jp") || StrCaseEq(arg, "ntscj"))
+            g_PcConfig.menuStyle = TITLE_STYLE_JP;
+        else if (arg[0] != '\0') {
+            cprintf("usage: MENUSTYLE auto|us|pal|japanese");
+            return;
+        } else {
+            /* No argument: step auto -> us -> pal -> japanese -> auto. */
+            g_PcConfig.menuStyle = (was < TITLE_STYLE_US || was >= TITLE_STYLE_JP)
+                                       ? (was < TITLE_STYLE_US ? TITLE_STYLE_US : TITLE_STYLE_AUTO)
+                                       : was + 1;
+        }
+
+        PcConfig_SaveKeyValue("menu_style",
+                              g_PcConfig.menuStyle == TITLE_STYLE_US  ? "us" :
+                              g_PcConfig.menuStyle == TITLE_STYLE_PAL ? "pal" :
+                              g_PcConfig.menuStyle == TITLE_STYLE_JP  ? "japanese" : "auto");
+        now = Pc_TitleStyle();
+        if (g_PcConfig.menuStyle == TITLE_STYLE_AUTO)
+            cprintf("menu style AUTO - this disc's own, %s", names[now]);
+        else
+            cprintf("menu style %s", names[now]);
+        if (was != g_PcConfig.menuStyle && !Pc_TitleStyleApply())
+            cprintf("  shows next time the title screen is up");
     } else if (strcmp(cmd, "INFAMMO") == 0 || strcmp(cmd, "INFINITEAMMO") == 0) {
         extern int g_PcInfiniteAmmo;
         g_PcInfiniteAmmo = (arg[0] == '1') ? 1 : (arg[0] == '0') ? 0 : !g_PcInfiniteAmmo;
@@ -2219,10 +2316,11 @@ void Pc_ConsoleExec(const char* line)
             if (v < 0) v = 0;
             g_DebugAnimKf     = v;
             g_DebugAnimKfView = 1; /* setting a frame implies viewing it */
-            cprintf("keyframe %d (max %d) - K toggles, , . step", g_DebugAnimKf, maxKf);
+            cprintf("keyframe %d (max %d) - kf toggles, , . step", g_DebugAnimKf, maxKf);
         } else {
-            cprintf("keyframe %d / %d (view %s)", g_DebugAnimKf, maxKf,
-                    g_DebugAnimKfView ? "ON" : "OFF");
+            g_DebugAnimKfView = !g_DebugAnimKfView;
+            cprintf("keyframe viewer %s (keyframe %d / %d)",
+                    g_DebugAnimKfView ? "ON" : "OFF", g_DebugAnimKf, maxKf);
         }
     } else if (strcmp(cmd, "PLAYAS") == 0) {
         extern int         Pc_PlayAs_SetByName(const char* name, int save);

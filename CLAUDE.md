@@ -40,3 +40,27 @@ Build and deploy the launcher yourself when its source changes (bump AssemblyFil
 ## Keyboard Controls
 
 Cross=C, Circle=V, Triangle=Z, Square=X, Start=Enter, Select=Space, DPad=Arrows, L1=A, R1=D, L2=RSHIFT, R2=LSHIFT
+
+## Code Navigation: Graphify FIRST, Grep second
+
+The repo is indexed in Graphify (MCP server `graphify`, workspace `silent-hill`,
+repo `SlickAmogus/silent-hill-decomp`, ~13.7k nodes). Reach for its tools before
+Grep/Glob whenever the question is about code structure rather than literal text:
+
+- where is X defined -> `graphify_find`
+- how does X work / where is behaviour Y handled -> `query_graph`
+  (`skeleton=true` to locate, `false` to read bodies)
+- who calls X / what does X call -> `graphify_callers` / `graphify_callees`
+- what breaks if I change X -> `graphify_impact` / `impact_and_risk`
+- a file's dependents and dependencies -> `graphify_file_neighbors`
+
+Grep/Glob remain the right tool for exact strings and regexes (log tags, config
+keys, literal messages), anything in a file edited this session, and anything
+the graph reports as absent.
+
+**On this branch (`android-port`) the index only covers the shared code.** The
+graph is built from the repo's default branch `pc-port` at the commit named in
+each result's `freshness`, so the Android-only files -- `pc_port/src/pc_touch.c`,
+`android_port/`, this branch's own additions -- are NOT in it (`graphify_find
+Tc_Mode` returns nothing). For those, Grep. Never trust graph line numbers for a
+file this branch has touched; re-read it.

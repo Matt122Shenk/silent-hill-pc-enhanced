@@ -36,6 +36,12 @@ static s32         s_PageNext; /* where the next page starts; 0 = none pending *
 static s16         s_PageColorId;
 static s32         s_PageAlign;
 
+/** Text index 2D layer.
+ * If modifying `Gfx_StringSetPosition`, when setting it to
+ * a value lower than 6, text will not be affected by the fade effect.
+ */
+static s32 g_Strings2dLayerIdx = 6;
+
 /* Text Size (g_PcConfig.textSize) for the message being drawn: Q12 factor and
  * the 240-line Y it grows from. 1.0 leaves every glyph on the original path. */
 static s32         s_MsgScale = Q12(1.0f);
@@ -74,6 +80,23 @@ static void Pc_MsgGlyphQuad(GsOT* ot, PACKET** lowResPacket, s32 x, s32 y,
         *lowResPacket = (PACKET*)poly + sizeof(POLY_FT4);
 }
 
+/* DISABLED, and it must stay disabled until the exemption can name primitives
+ * rather than a bucket. A scaled glyph is a POLY_FT4 (a SPRT draws texels 1:1
+ * and cannot be resized) and the renderer's rule is that a POLY on a world
+ * frame IS world geometry, so enlarged text was filtered like a wall. Naming
+ * the strings bucket fixed that -- but g_Strings2dLayerIdx is bucket 6 of
+ * g_OtTags0, the SAME ordering table the world draws into, so every tree and
+ * snow billboard that sorted into bucket 6 was exempted along with the text
+ * and drawn as screen-space 2D. Stretched diamond billboards in map0_s00.
+ * Worse, the value persists once set, so one scaled message poisoned every
+ * later frame. Blurry large text is the lesser fault by far. */
+static void Pc_MsgMarkUiBucket(void)
+{
+    extern int g_PsxUi2dBucket;
+
+    g_PsxUi2dBucket = -1;
+}
+
 /* Pick the scale for a message block and where it grows from: boxes at the
  * bottom of the screen grow upward from their last line, the rest downward
  * from their first. Shrunk as needed so the widest line and the whole block
@@ -95,6 +118,7 @@ static void Pc_MsgScaleSetup(s32 blockTop, s32 lineCount, s32 longestLineWidth, 
     if (scale <= Q12(1.0f) || lineCount <= 0)
     {
         s_MsgScale = Q12(1.0f);
+        Pc_MsgMarkUiBucket();
         return;
     }
 
@@ -106,6 +130,7 @@ static void Pc_MsgScaleSetup(s32 blockTop, s32 lineCount, s32 longestLineWidth, 
         scale = (s32)(((s64)room << 12) / height);
 
     s_MsgScale = (scale > Q12(1.0f)) ? scale : Q12(1.0f);
+    Pc_MsgMarkUiBucket();
 }
 
 void Pc_MapMsgPageReset(void)
@@ -189,11 +214,6 @@ static s16 g_StringColorId = StringColorId_White;
 
 // 2 bytes of padding.
 
-/** Text index 2D layer.
- * If modifying `Gfx_StringSetPosition`, when setting it to
- * a value lower than 6, text will not be affected by the fade effect.
- */
-static s32 g_Strings2dLayerIdx = 6;
 
 
 // ========================================
@@ -345,7 +365,7 @@ bool Gfx_StringDraw(char* str, s32 strLength) // 0x8004A8E8
 #ifdef SH_PC_PORT
         /* NTSC-J: SJIS pairs (the select-prompt options like Yes/No route the
          * JP map messages through this drawer) — one 12x16 kanji atlas cell. */
-        else if (g_GameRegion == Region_JPN && Pc_KanjiIsLead(charCode) && strCpy[1] != '\0')
+        else if (Pc_LangSjisActive() && Pc_KanjiIsLead(charCode) && strCpy[1] != '\0')
         {
             unsigned int   kPage;
             int            kU, kV;
@@ -685,7 +705,7 @@ s32 Gfx_MapMsg_CalculateWidths(s32 mapMsgIdx) // 0x8004ACF4
 
 #ifdef SH_PC_PORT
                 /* NTSC-J: an SJIS pair is one fixed-width kanji cell. */
-                if (g_GameRegion == Region_JPN && Pc_KanjiIsLead((u8)charCode) && mapMsg[1] != '\0')
+                if (Pc_LangSjisActive() && Pc_KanjiIsLead((u8)charCode) && mapMsg[1] != '\0')
                 {
                     g_MapMsg_Widths[g_MapMsg_WidthIdx - 1] += FONT_12X16_GLYPH_SIZE_X;
                     mapMsg += 2;
@@ -1079,7 +1099,7 @@ s32 Gfx_MapMsg_StringDraw(char* mapMsg, s32 strLength) // 0x8004AF18
             /* NTSC-J: an SJIS pair draws one 12x16 kanji cell from the PC
              * atlas — same SPRT/FT4 shape as the Latin glyphs, different
              * uv/page/clut. Absent glyphs advance silently. */
-            if (g_GameRegion == Region_JPN && Pc_KanjiIsLead((u8)charCode) && ((u8*)mapMsg)[1] != '\0')
+            if (Pc_LangSjisActive() && Pc_KanjiIsLead((u8)charCode) && ((u8*)mapMsg)[1] != '\0')
             {
                 unsigned int   kPage;
                 int            kU, kV;

@@ -1,5 +1,8 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "pc_config.h"
+#include "lang_pack.h"
+#include "pc_title_style.h"
+#include "lang_text.h"
 #include "pc_binds.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -35,12 +38,23 @@ s_PcConfig g_PcConfig = {
 #endif
     .weatherSimHz      = 60,   /* per-frame weather sim; 30 = the console's cadence */
     .cutsceneLineGapMs = 300,
+#if defined(SH_IOS) || defined(__ANDROID__)
+    .darkHarry         = 0,   /* mobile: off unless dark_harry = 1 in config.cfg */
+#else
+    .darkHarry         = 1,   /* on by default for now */
+#endif
+    .darkHarryAfkSec   = 300, /* five minutes */
+    .darkHarryDistance = 14,
+    .darkHarryX        = 0,   /* unset: see dark_harry_x */
+    .darkHarryZ        = 0,
+    .msgVoiceTailMs    = 1000, /* added text-box voices hold 1s past the clip */
     .skipIntros     = 0,
     .showConsole    = 0,
     .psxDither      = -1, /* -1 = absent; see the dithering/texture_filter migration */
     .dithering      = 1,  /* PSX ordered dither on, the long-standing default */
     .textureFilter  = 0,  /* point sampling */
     .scaling        = 2,  /* bilinear: what the present blit always did */
+    .imageAdjustScope = 1, /* world frames only; menus and FMVs left alone */
     .widescreenMode  = 1, /* 0=pillarbox, 1=Hor+ (default, no bars + correct proportions), 2=stretch */
     .menuPillarbox   = 1, /* 1=pillarbox 2D screens (black bars), 0=stretch to fill */
 #if defined(SH_IOS) || defined(__ANDROID__)
@@ -277,11 +291,16 @@ s_PcConfig g_PcConfig = {
     .keyGfxNext  = "]",
     .keyExitGame = "Escape",
 
+    .languageCode   = "auto", /* resolved per disc in Pc_LangInit */
     .language       = 0, /* 0=en 1=de 2=fr 3=es 4=it — PAL-disc text language; USA: menu translations on fan-patched discs */
-    .jpLanguage     = 0, /* 0=ja 1=zh — NTSC-J text language (Chinese needs a fan-translated JP disc) */
+    .jpLanguage     = 0, /* 0=ja 1=zh 2=en — NTSC-J text language */
+    .crossRegionLanguages = 1, /* see pc_config.h */
+    .tpsRestZoom    = 0.0f, /* the original resting distance */
+    .otsRestZoom    = 0.0f,
+    .menuStyle      = TITLE_STYLE_AUTO, /* the disc's own title screen */
     .region         = 0, /* 0=auto (USA wins) 1=usa 2=pal 3=jap — preferred disc when several are present */
     .discImage      = "", /* exact .bin in gamedata/ (launcher Disc dropdown); empty = auto */
-    .uncensored     = 0, /* 0=retail PAL Mumblers (default); 1=restore Grey Children on EUR (matches US) */
+    .uncensored     = 0, /* 0=retail Mumblers (default); 1=restore Grey Children on EUR/JPN (matches US) */
     .pcPortCredits  = 1, /* 1=append the PC Port Credits block to the staff roll; 0=vanilla roll */
     .playerCharacter = "harry", /* play as: harry|lisa|cybil|kaufmann|dahlia|... (also - / = in K view) */
     .femaleVoicePitch = 140, /* voiced cries; breath caps at 118 of its own. 0 = off */
@@ -613,6 +632,39 @@ void PcConfig_Load(const char* path)
         {
             g_PcConfig.fpsCap = atoi(value);
         }
+        else if (strcmp(key, "dark_harry") == 0)
+        {
+            g_PcConfig.darkHarry = (atoi(value) != 0);
+        }
+        else if (strcmp(key, "dark_harry_afk_sec") == 0)
+        {
+            int v = atoi(value);
+            if (v < 5)    v = 5;
+            if (v > 3600) v = 3600;
+            g_PcConfig.darkHarryAfkSec = v;
+        }
+        else if (strcmp(key, "dark_harry_distance") == 0)
+        {
+            int v = atoi(value);
+            if (v < 2)  v = 2;
+            if (v > 60) v = 60;
+            g_PcConfig.darkHarryDistance = v;
+        }
+        else if (strcmp(key, "dark_harry_x") == 0)
+        {
+            g_PcConfig.darkHarryX = atoi(value);
+        }
+        else if (strcmp(key, "dark_harry_z") == 0)
+        {
+            g_PcConfig.darkHarryZ = atoi(value);
+        }
+        else if (strcmp(key, "msg_voice_tail_ms") == 0)
+        {
+            int v = atoi(value);
+            if (v < 0)     v = 0;
+            if (v > 10000) v = 10000;
+            g_PcConfig.msgVoiceTailMs = v;
+        }
         else if (strcmp(key, "cutscene_line_gap_ms") == 0)
         {
             g_PcConfig.cutsceneLineGapMs = atoi(value);
@@ -657,6 +709,14 @@ void PcConfig_Load(const char* path)
             if (v > 6) v = 6;
             g_PcConfig.textureFilter = v;
             s_sawDitherKeys = 1;
+        }
+        else if (strcmp(key, "image_adjust_scope") == 0)
+        {
+            g_PcConfig.imageAdjustScope = (atoi(value) != 0);
+        }
+        else if (strcmp(key, "native_resolution") == 0)
+        {
+            g_PcConfig.nativeResolution = (atoi(value) != 0);
         }
         else if (strcmp(key, "scaling") == 0)
         {
@@ -912,21 +972,37 @@ void PcConfig_Load(const char* path)
         {
             g_PcConfig.movementOriginal = (atoi(value) != 0);
         }
+        else if (strcmp(key, "cross_region_languages") == 0)
+        {
+            g_PcConfig.crossRegionLanguages = (atoi(value) != 0);
+        }
         else if (strcmp(key, "language") == 0)
         {
-            /* Language id string. Index order matches the PAL disc's
-             * option-menu / VIN2-5 dir order. Unknown -> English. */
-            if (strcmp(value, "de") == 0)      g_PcConfig.language = 1;
-            else if (strcmp(value, "fr") == 0) g_PcConfig.language = 2;
-            else if (strcmp(value, "es") == 0) g_PcConfig.language = 3;
-            else if (strcmp(value, "it") == 0) g_PcConfig.language = 4;
-            else if (strcmp(value, "pl") == 0) g_PcConfig.language = 5; /* PC-side pack (gamedata/lang/pl.lang) */
-            else                               g_PcConfig.language = 0;
+            /* Kept verbatim; Pc_LangInit turns it into an id once the
+             * region and the pack registry are both available. */
+            snprintf(g_PcConfig.languageCode,
+                     sizeof(g_PcConfig.languageCode), "%s", value);
+            /* Not resolved here. The id a code means depends on the disc, and
+             * the disc is not known yet; a region-blind guess made here used
+             * to disagree with the real resolution until Pc_LangInit ran. */
+            g_PcConfig.language = 0;
+        }
+        else if (strcmp(key, "menu_style") == 0)
+        {
+            /* Which title screen to show. Unknown -> follow the disc. */
+            g_PcConfig.menuStyle = (strcmp(value, "us") == 0 ||
+                                    strcmp(value, "western") == 0)  ? TITLE_STYLE_US
+                                 : (strcmp(value, "pal") == 0)      ? TITLE_STYLE_PAL
+                                 : (strcmp(value, "japanese") == 0 ||
+                                    strcmp(value, "jp") == 0)       ? TITLE_STYLE_JP
+                                                                    : TITLE_STYLE_AUTO;
         }
         else if (strcmp(key, "jp_language") == 0)
         {
             /* NTSC-J text language. Unknown -> Japanese. */
-            g_PcConfig.jpLanguage = (strcmp(value, "zh") == 0) ? 1 : 0;
+            g_PcConfig.jpLanguage = (strcmp(value, "zh") == 0) ? JP_LANG_CHINESE
+                                  : (strcmp(value, "en") == 0) ? JP_LANG_ENGLISH
+                                                               : JP_LANG_JAPANESE;
         }
         else if (strcmp(key, "region") == 0)
         {
@@ -991,6 +1067,15 @@ void PcConfig_Load(const char* path)
         else if (strcmp(key, "invert_controller_y") == 0)
         {
             g_PcConfig.invertControllerY = (atoi(value) != 0);
+        }
+        else if (strcmp(key, "tps_rest_zoom_amount") == 0 ||
+                 strcmp(key, "ots_rest_zoom_amount") == 0)
+        {
+            float v = (float)atof(value);
+            if (v < -200.0f) v = -200.0f;
+            if (v >  200.0f) v =  200.0f;
+            if (key[0] == 't') g_PcConfig.tpsRestZoom = v;
+            else               g_PcConfig.otsRestZoom = v;
         }
         else if (strcmp(key, "tps_aim_zoom_amount") == 0)
         {
@@ -1503,6 +1588,17 @@ else if (strcmp(key, "enable_plugins") == 0)
         }
         SH_LOG("[CFG] psx_dither = %d migrated to dithering = %d, texture_filter = %d",
                g_PcConfig.psxDither, g_PcConfig.dithering, g_PcConfig.textureFilter);
+    }
+    else
+    {
+        /* The reverse: psxDither is what the in-game Texture_Filter row cycles,
+         * one 8-way value over the pair. Composed here so the row opens on
+         * what is in effect instead of on a stale legacy key -- without this it
+         * showed whatever psx_dither happened to say, which for everyone whose
+         * config has the new keys is the default, not their setting. */
+        g_PcConfig.psxDither = g_PcConfig.dithering ? 1
+                             : (g_PcConfig.textureFilter == 0 ? 0
+                                                              : g_PcConfig.textureFilter + 1);
     }
 
     /* Default migration: reapply a changed persisted DEFAULT to users still sitting

@@ -134,7 +134,7 @@ public partial class Form1 : Form
              * appears during a download). Created in code rather than the designer (the flag
              * is custom-painted), so it cannot be nudged from the design surface;
              * re-check this against Form1.Designer.cs after any layout change. */
-            Location = new System.Drawing.Point(416, 532),
+            Location = new System.Drawing.Point(416, 558),
             Size = new System.Drawing.Size(30, 22),
             Text = "",
             FlatStyle = FlatStyle.Standard,
@@ -182,6 +182,80 @@ public partial class Form1 : Form
     /// translation — resolution, refresh rate, FPS cap, disc image and level are
     /// left alone because their selected text is what gets written to config.cfg.
     /// </summary>
+    /// Codes parallel to comboGameLang's items. Never read the item text: it is
+    /// translated, the codes are not.
+    private readonly List<string> _gameLangCodes = new List<string>();
+
+    /* The "Native (PSX)" resolution entry: config native_resolution = 1, with
+     * width/height kept as the WINDOW size the game scales its own modes into. */
+    private string _nativeResText;
+
+    /// Build the Game Language row: Automatic, the languages every disc family
+    /// carries, then whatever packs are installed in gamedata/lang.
+    ///
+    /// The launcher does not know which disc will be mounted, so it offers all
+    /// of them and lets the game decide -- it already falls back to Automatic
+    /// for anything this disc cannot render, and says so in its log.
+    /// The dropdown's current code -- the user's intent, saved or not.
+    private string CurrentGameLanguageCode()
+    {
+        int i = comboGameLang.SelectedIndex;
+        return (i >= 0 && i < _gameLangCodes.Count) ? _gameLangCodes[i] : config.Get("language", "auto");
+    }
+
+    private void BuildGameLangList()
+    {
+        comboGameLang.Items.Clear();
+        _gameLangCodes.Clear();
+
+        void Add(string name, string code)
+        {
+            if (_gameLangCodes.Any(c => string.Equals(c, code, StringComparison.OrdinalIgnoreCase)))
+                return;
+            comboGameLang.Items.Add(name);
+            _gameLangCodes.Add(code);
+        }
+
+        // "en" is NOT PAL English: it is the disc's own, so on a USA disc it is
+        // US English and on every disc it is what Automatic already gives. The
+        // PAL script travels as the en_pal pack, and that is its code anywhere.
+        Add("Automatic",   "auto");
+        Add("US English",  "en_us");
+        Add("PAL English", "en_pal");
+        Add("German",      "de");
+        Add("French",      "fr");
+        Add("Spanish",     "es");
+        Add("Italian",     "it");
+
+        try
+        {
+            string dir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "gamedata", "lang");
+
+            if (Directory.Exists(dir))
+            {
+                foreach (string f in Directory.GetFiles(dir, "*.lang").OrderBy(x => x))
+                {
+                    string code = null, name = null;
+
+                    // Only the headers, which the format puts first.
+                    foreach (string line in File.ReadLines(f, Encoding.UTF8).Take(16))
+                    {
+                        if (line.StartsWith("!code=")) code = line.Substring(6).Trim();
+                        else if (line.StartsWith("!name=")) name = line.Substring(6).Trim();
+                        if (code != null && name != null) break;
+                    }
+
+                    if (!string.IsNullOrEmpty(code))
+                        Add(string.IsNullOrEmpty(name) ? code : name, code);
+                }
+            }
+        }
+        catch
+        {
+            // An unreadable pack folder costs the extra rows, nothing else.
+        }
+    }
+
     private void LocalizeValueLists()
     {
         // "はい"/"いいえ" and "Nein" are wider than "Yes"/"No", and each of these
@@ -190,6 +264,7 @@ public partial class Form1 : Form
                                   pgxpYes, pgxpNo, loggingYes, loggingNo, consoleYes, consoleNo })
             r.AutoSize = true;
 
+        Loc.LocalizeItems(comboGameLang);
         Loc.LocalizeItems(comboFullscreen);
         Loc.LocalizeItems(comboSkipIntros);
         Loc.LocalizeItems(comboPillarbox);
@@ -721,9 +796,21 @@ public partial class Form1 : Form
             "Overrides the Level setting.");
 
         const string uncensoredTip =
-            "PAL discs only. Checked (default): the censored \"Mumblers\", as on the\n" +
-            "retail PAL disc. Unchecked: the original Grey Children, as in the US version.\n" +
-            "No effect on USA / NTSC-J discs.";
+            "PAL and NTSC-J discs. Checked (default): the censored \"Mumblers\", as on\n" +
+            "the retail disc. Unchecked: the original Grey Children, as on the US disc.\n" +
+            "PAL censors them everywhere, NTSC-J in the school and the amusement park.\n" +
+            "No effect on a USA disc, which was never censored.";
+        Set(lblMenuType,   Loc.T("Which main menu the game shows: the US picture, "
+                                + "PAL's fog-only title, or the Japanese logo. "
+                                + "Auto follows the disc."));
+        Set(comboMenuType, Loc.T("Which main menu the game shows: the US picture, "
+                                + "PAL's fog-only title, or the Japanese logo. "
+                                + "Auto follows the disc."));
+        const string gameLangTip =
+            "Which language the game runs in. Automatic follows the disc: US English" +
+            " on a USA disc, PAL English on a PAL one, Japanese on NTSC-J.";
+        Set(lblGameLang,   Loc.T(gameLangTip));
+        Set(comboGameLang, Loc.T(gameLangTip));
         Set(lblUncensored,  uncensoredTip);
         Set(chkUncensored,  uncensoredTip);
 
@@ -965,6 +1052,11 @@ public partial class Form1 : Form
         foreach (var r in resolutions)
             comboResolution.Items.Add($"{r.w}x{r.h}");
 
+        /* Last, under 320x240: every screen at the resolution the game itself
+         * uses (320x224 play, 640x448 Konami, 320x448 menus), not one fixed size. */
+        _nativeResText = Loc.T("Native (PSX)");
+        comboResolution.Items.Add(_nativeResText);
+
         // Unique refresh rates, highest first.
         var refreshRates = new List<int>();
         foreach (var m in modes)
@@ -1038,6 +1130,31 @@ public partial class Form1 : Form
         // still `uncensored`, so the mapping is inverted here. Default 0
         // (censored) → checked, so the box defaults on.
         chkUncensored.Checked = config.Get("uncensored", "0") == "0";
+
+        // Game language. Built once, then selected by code, because the row is
+        // a mix of what every disc carries and whatever packs are installed.
+        BuildGameLangList();
+        {
+            string gl = config.Get("language", "auto").Trim();
+            int    at = _gameLangCodes.FindIndex(
+                            c => string.Equals(c, gl, StringComparison.OrdinalIgnoreCase));
+
+            // An unknown or removed code lands on Automatic rather than on
+            // whatever happens to be first, which is what the game does too.
+            comboGameLang.SelectedIndex = at >= 0 ? at : 0;
+        }
+
+        // Main-menu style. "auto" is the disc's own, which is what every
+        // existing config says and what the game defaults to, so it stays the
+        // first item rather than silently pinning a style on the next save.
+        {
+            string ms = config.Get("menu_style", "auto").Trim().ToLowerInvariant();
+            comboMenuType.SelectedIndex =
+                  ms == "us" || ms == "western" || ms == "ntsc" ? 1
+                : ms == "pal" || ms == "eur"                    ? 2
+                : ms == "japanese" || ms == "jp" || ms == "ntscj" ? 3
+                : 0;
+        }
 
         // fullscreen
         // fullscreen: 0 = windowed, 1 = exclusive fullscreen, 2 = borderless.
@@ -1174,9 +1291,16 @@ public partial class Form1 : Form
         /* A size set by hand in config.cfg, or one this machine's driver does
          * not enumerate, still has to be selectable: without this the box comes
          * up blank and the next Save writes whatever the user picks instead. */
-        if (!comboResolution.Items.Contains(res))
-            InsertResolutionSorted(res);
-        comboResolution.SelectedItem = res;
+        if (config.Get("native_resolution", "0") == "1" && _nativeResText != null)
+        {
+            comboResolution.SelectedItem = _nativeResText;
+        }
+        else
+        {
+            if (!comboResolution.Items.Contains(res))
+                InsertResolutionSorted(res);
+            comboResolution.SelectedItem = res;
+        }
 
         // refresh rate is config-only now (auto-detected by default); keep the
         // hidden combo populated harmlessly so its references stay valid.
@@ -1253,9 +1377,36 @@ public partial class Form1 : Form
             "0");                                        // Windowed
         config.Set("vsync", radioVsyncYes.Checked ? "1" : "0");
         // resolution
-        if (comboResolution.SelectedItem != null)
+        if (comboResolution.SelectedItem != null &&
+            comboResolution.SelectedItem.ToString() == _nativeResText)
+        {
+            /* The render size follows the game, so width/height only size the
+             * window: the desktop when fullscreen, otherwise the largest whole
+             * multiple of 320x240 that leaves room on the screen. */
+            var scr = Screen.PrimaryScreen;
+            int ww, wh;
+
+            if (comboFullscreen.SelectedIndex != 1)
+            {
+                ww = scr.Bounds.Width;
+                wh = scr.Bounds.Height;
+            }
+            else
+            {
+                int k = Math.Min(scr.WorkingArea.Width * 9 / 10 / 320,
+                                 scr.WorkingArea.Height * 9 / 10 / 240);
+                if (k < 2) k = 2;
+                ww = 320 * k;
+                wh = 240 * k;
+            }
+            config.Set("native_resolution", "1");
+            config.Set("width", ww.ToString());
+            config.Set("height", wh.ToString());
+        }
+        else if (comboResolution.SelectedItem != null)
         {
             var parts = comboResolution.SelectedItem.ToString().Split('x');
+            config.Set("native_resolution", "0");
             config.Set("width", parts[0]);
             config.Set("height", parts[1]);
         }
@@ -1352,6 +1503,22 @@ public partial class Form1 : Form
 
         config.Set("randomizer", chkRandomizer.Checked ? "1" : "0");
         config.Set("uncensored", chkUncensored.Checked ? "0" : "1"); // checked = censored
+
+        // By INDEX into the parallel code list, for the same reason as below:
+        // the visible names are translated, the codes are not.
+        if (comboGameLang.SelectedIndex >= 0 &&
+            comboGameLang.SelectedIndex < _gameLangCodes.Count)
+            config.Set("language", _gameLangCodes[comboGameLang.SelectedIndex]);
+
+        // Read by INDEX, never by item text: the items are region codes the
+        // game parses, and Loc must never be able to change what lands here.
+        switch (comboMenuType.SelectedIndex)
+        {
+            case 1:  config.Set("menu_style", "us");       break;
+            case 2:  config.Set("menu_style", "pal");      break;
+            case 3:  config.Set("menu_style", "japanese"); break;
+            default: config.Set("menu_style", "auto");     break;
+        }
 
         // Level: persist only the map id, not the " - description" suffix. Skipped
         // while the randomizer owns the row — the selection is the synthetic
@@ -1915,7 +2082,7 @@ public partial class Form1 : Form
 
     private void btnManager_Click(object sender, EventArgs e)
     {
-        using (var f = new SilentHillPC_Launcher.ModManagerForm(config, AppDomain.CurrentDomain.BaseDirectory))
+        using (var f = new SilentHillPC_Launcher.ModManagerForm(config, AppDomain.CurrentDomain.BaseDirectory, CurrentGameLanguageCode()))
         {
             f.ShowDialog(this);
         }

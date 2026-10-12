@@ -769,6 +769,20 @@ static int Tc_GamepadStyle(void)
     return g_PcConfig.touchStyle == TouchStyle_Gamepad;
 }
 
+/* Context, but with the movement stick pinned where it is drawn rather than
+ * springing up under the thumb. Everything else about the context style is
+ * unchanged -- this only decides where the stick's centre is and whether it
+ * follows a thumb that runs past the rim. */
+static int Tc_FixedStick(void)
+{
+    return g_PcConfig.touchStyle == TouchStyle_ContextFixed;
+}
+
+/* Where the pinned stick lives, in the same space as the button table. Lower
+ * left, clear of Fire and of the corner buttons. */
+#define TC_FIXED_STICK_CX 0.170f
+#define TC_FIXED_STICK_CY 0.740f
+
 /* A scripted scene, as opposed to message or examine text. A tap in an advance
  * state injects enter and ONLY enter (s_AdvanceHeld below), which advances text
  * but never skips a scene, so scenes could not be skipped at all on a
@@ -1190,29 +1204,6 @@ void Pc_Touch_Update(void)
         Pc_TouchMouseGate_Update();
     }
 
-    /* [SKIPPROBE] One line each time the Skip button appears, naming the state
-     * that produced it and whether an ending script is stamping. Four attempts
-     * to keep this button off the post-boss endings have failed on a wrong
-     * guess about which code runs there, so it is measured now instead.
-     * Edge-triggered, never per frame. REMOVE once the ending is identified. */
-    {
-        extern int g_PcEndingFrame;
-        static int s_skipProbeWas;
-        const int  m       = Tc_Mode();
-        const int  showing = (Tc_SoloButton(m) == TB_SKIP);
-
-        if (showing && !s_skipProbeWas)
-        {
-            SH_DBG("[SKIPPROBE] mode=%d gs=%d ss=%d steps=%d,%d,%d map=%d room=%d endingAge=%d",
-                   m, (int)g_GameWork.gameState, (int)g_SysWork.sysState,
-                   (int)g_SysWork.sysStateSteps[0], (int)g_SysWork.sysStateSteps[1],
-                   (int)g_SysWork.sysStateSteps[2],
-                   (int)g_SavegamePtr->mapIdx, (int)g_SavegamePtr->mapRoomIdx,
-                   (int)(g_TickCount - g_PcEndingFrame));
-        }
-        s_skipProbeWas = showing;
-    }
-
     mode = Tc_Mode();
     if (mode == TC_MODE_OFF)
     {
@@ -1444,6 +1435,14 @@ void Pc_Touch_Update(void)
                 else if (vx < TC_LEFT_ZONE && !s_StickActive)
                 {
                     t->role = TR_MOVE;
+                    if (Tc_FixedStick())
+                    {
+                        /* Pinned: the centre is where the ring is drawn, not
+                         * where the thumb landed, so pushing from anywhere in
+                         * the zone steers in the direction of the push. */
+                        t->originX = TC_FIXED_STICK_CX;
+                        t->originY = TC_FIXED_STICK_CY;
+                    }
                     if (Tc_AltCam())
                         Tc_LeftLanding(t, now);
                 }
@@ -1587,8 +1586,14 @@ void Pc_Touch_Update(void)
                     float ox = dx / len * TC_STICK_RADIUS;
                     float oy = dy / len * TC_STICK_RADIUS;
 
-                    t->originX = vx - (ox / aspect);
-                    t->originY = vy - oy;
+                    /* A pinned stick clamps at the rim; a floating one drags
+                     * its origin along so a long push cannot run out of stick
+                     * and stall mid-corridor. */
+                    if (!Tc_FixedStick())
+                    {
+                        t->originX = vx - (ox / aspect);
+                        t->originY = vy - oy;
+                    }
                     dx  = ox;
                     dy  = oy;
                     len = TC_STICK_RADIUS;
@@ -2480,10 +2485,18 @@ void Pc_Touch_Draw(void)
             }
         }
     }
-    else if (s_StickActive && mode == TC_MODE_GAMEPLAY)
+    else if ((s_StickActive || Tc_FixedStick()) && mode == TC_MODE_GAMEPLAY)
     {
-        int ox = TC_UX(s_StickOx), oy = TC_UY(s_StickOy);
-        int kx = TC_UX(s_StickKx), ky = TC_UY(s_StickKy);
+        /* Idle and pinned: the ring sits at its fixed centre with the knob
+         * resting in the middle, because an unpressed stick still has to be
+         * visible to be aimed at. While a thumb is on it the live values
+         * already describe it. */
+        const float sox = s_StickActive ? s_StickOx : TC_FIXED_STICK_CX;
+        const float soy = s_StickActive ? s_StickOy : TC_FIXED_STICK_CY;
+        const float skx = s_StickActive ? s_StickKx : TC_FIXED_STICK_CX;
+        const float sky = s_StickActive ? s_StickKy : TC_FIXED_STICK_CY;
+        int ox = TC_UX(sox), oy = TC_UY(soy);
+        int kx = TC_UX(skx), ky = TC_UY(sky);
         int rr = TC_UR(TC_STICK_RADIUS);
 
         Tc_Ring(&batch, ox, oy, rr, (rr * 88) / 100, 150);

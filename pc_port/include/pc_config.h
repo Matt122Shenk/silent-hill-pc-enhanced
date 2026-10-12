@@ -61,7 +61,12 @@ typedef struct {
 typedef enum
 {
     TouchStyle_Context = 0, /* floating stick + drag-look + context buttons */
-    TouchStyle_Gamepad = 1  /* a fixed virtual PSX pad */
+    TouchStyle_Gamepad = 1, /* a fixed virtual PSX pad */
+    /* Context, but with the movement stick pinned where it is drawn
+     * instead of appearing under the thumb. Appended rather than
+     * inserted so a config.cfg written by an older build still means
+     * exactly what it said. */
+    TouchStyle_ContextFixed = 2
 } e_TouchStyle;
 
 typedef enum
@@ -90,6 +95,25 @@ typedef struct {
     int cutsceneLineGapMs; /* min silence (ms) between cutscene voice lines — simulates PSX CD
                             * seek latency so tightly-timed lines don't run together. Applied as a
                             * MINIMUM (never shortens an authored gap). 0 = off. Default 300. */
+    /* "Dark Harry" easter egg (pc_dark_harry.c), NOT original-game behaviour.
+     * darkHarry 0 = off entirely. afkSec = seconds of no input before he
+     * appears; distance = how far out, in world units, which wants to be the
+     * fog wall for the intended effect. (config keys: dark_harry,
+     * dark_harry_afk_sec, dark_harry_distance) */
+    int darkHarry;
+    int darkHarryAfkSec;
+    int darkHarryDistance;
+    /* Fixed spot he appears at, in HUNDREDTHS of a world unit (1250 = 12.5).
+     * Both zero = no landmark set, fall back to "ahead of the player at
+     * darkHarryDistance". (config keys: dark_harry_x, dark_harry_z) */
+    int darkHarryX;
+    int darkHarryZ;
+
+    int msgVoiceTailMs;  /* how long an added text-box voice (load/XA/msg_<KEY>.wav) keeps its
+                          * page on screen after the clip ends, in ms. The authored ~J timer was
+                          * written for a silent line and is often shorter than a recording of it.
+                          * 0 = hold for the clip only. Default 1000.
+                          * (config key: msg_voice_tail_ms) */
     int skipIntros;      /* 0 = normal boot; 1 = skip the warning screen, Konami/KCET logos and
                           * intro movie, landing on the main menu; 2 = additionally auto-start a
                           * New Game on NORMAL at the configured `map` and skip the opening movie,
@@ -119,6 +143,11 @@ typedef struct {
      * Default 2, which is what the present always did. Only has an effect when
      * the two sizes differ, so mostly borderless at a low render resolution. */
     int scaling;
+    /* Native (PSX) resolution: render each screen at the mode the game itself
+     * sets (320x224 play, 640x448 Konami, 320x448 menus) and scale it to a 4:3
+     * picture in the window. width/height are then only the window size. Off
+     * by default (config key: native_resolution). */
+    int nativeResolution;
     int widescreenMode;  /* 0 = pillarbox (PSX-faithful, default), 1 = Hor+ (extra side content), 2 = stretch */
     int menuPillarbox;   /* 1 = pillarbox 2D screens (menus/load) with 4:3 black bars instead of stretching to fill (config key: menu_pillarbox) */
     int allowLooseFiles; /* 1 = scan gamedata/load/{folder}/{name}.{ext} before CD read (texture mod support) */
@@ -243,6 +272,11 @@ typedef struct {
      * Brightness screen. (config keys: brightness / contrast / saturation) */
     float brightness;           /* output brightness multiplier, 0.25..2.0; default 1.0 */
     float contrast;             /* output contrast around mid-grey, 0.5..2.0; default 1.0 */
+
+    /* What brightness/contrast/saturation are allowed to touch (config key:
+     * image_adjust_scope): 1 = only frames that render the 3D world (default),
+     * 0 = the whole composed frame, menus and FMVs included. */
+    int imageAdjustScope;
     float saturation;           /* output colour saturation, 0..2.0; default 1.0 */
     float xaVolume;             /* XA cutscene-voice stream volume, 0..1; default 1.0 (config key: xa_volume) */
     float fmvVolume;            /* FMV movie (SDL PCM) volume, 0..1; default 1.0 (config key: fmv_volume) */
@@ -316,6 +350,14 @@ typedef struct {
     float tpsAimZoom;       /* Thirdperson aim dolly, -200..200%. 0 = no zoom (rest distance), 100 (default) = the original zoom, 200 = as close as the camera goes; negative pulls the aim camera back (wider view while aiming) (config key: tps_aim_zoom_amount) */
     float otsFov;           /* Over-the-Shoulder horizontal FOV in degrees, 40..140; default 71.1 (a no-op). Separate from tpsFov (config key: ots_fov) */
     float otsAimZoom;       /* OTS aim dolly, -200..200%; same meaning as tpsAimZoom (config key: ots_aim_zoom_amount) */
+    /* Resting dolly, -200..200%, 0 = the original distance. Same scale as the
+     * aim dolly and along the same axis, so the camera can sit closer to Harry
+     * without touching the FOV -- widening the FOV to get nearer flattens the
+     * depth cues, which is the thing this avoids. The aim dolly then measures
+     * from wherever rest ends up, which is what "0 = rest distance" already
+     * says it does. (config keys: tps_rest_zoom_amount, ots_rest_zoom_amount) */
+    float tpsRestZoom;
+    float otsRestZoom;
     /* Per-camera position offsets in the view frame (Q12): X = lateral along the
      * right vector (shoulder side; g_OtsSide flips it), Y = vertical (shown +up in
      * the menu; stored PSX-down). "Rest" = not aiming, "Aim" = aiming; the camera
@@ -408,6 +450,25 @@ typedef struct {
      * text the port supplies. Chinese needs a disc carrying the fan
      * translation; on a stock JP disc it changes nothing but the menus. */
     int jpLanguage;
+    /* Which of the three main menus to show, independent of the disc:
+     * auto / us / pal / japanese. See pc_title_style.h. */
+    /* Cross-region languages: offer every installed pack on every disc and
+     * show the Language row off a PAL disc. ON by default -- most Brazilian
+     * players own the USA disc, and a US disc with no Language row is the
+     * reason a translator had to ship their own font patch to test. Off, a
+     * US or JP disc offers only its own languages and the Shift-JIS packs.
+     * (On a US or JP disc the PAL glyph grid is a pinned override, never an
+     * upload: that home is other art there -- see Font_EurGridBacked.)
+     * (config: cross_region_languages) */
+    int crossRegionLanguages;
+
+    /* The language as the config spells it. The id it means depends on the
+     * disc -- "de" is the disc's own German on PAL and the de pack anywhere
+     * else -- and the parser runs before the region is known, so the code is
+     * kept and Pc_LangInit resolves it once. (config key: language) */
+    char languageCode[16];
+
+    int menuStyle; /* TITLE_STYLE_* in pc_title_style.h; < 0 = follow the disc */
 
     /* Preferred disc region when several discs are in gamedata/: 0=auto
      * (USA wins, then PAL, then NTSC-J), 1=usa, 2=pal, 3=jap (config key:
@@ -421,11 +482,12 @@ typedef struct {
      * name-priority order. */
     char discImage[128];
 
-    /* Restore the Grey Children on a PAL/EUR disc (config key: uncensored).
-     * PAL is the only region that censors them into Mumblers; the Grey Child
-     * model ships on the disc, just unused. 1 = keep Grey Children (matches
-     * US/NTSC content); 0 = retail PAL Mumblers (default). No effect on
-     * US/NTSC-J discs, which already render their retail creature. */
+    /* Restore the Grey Children on a PAL or NTSC-J disc (config key:
+     * uncensored). Both censor them into Mumblers -- PAL everywhere, NTSC-J in
+     * the school and the amusement park -- and both carry the unused Grey
+     * Child model, so nothing has to be supplied. 1 = keep Grey Children
+     * (matches the US disc); 0 = retail behaviour for the disc (default). No
+     * effect on a USA disc, which was never censored. */
     int uncensored;
 
     /* Append a "PC Port Credits" block to the end of the staff roll, and back
@@ -439,7 +501,7 @@ typedef struct {
     /* Play as another character (config key: player_character): harry (default),
      * lisa, cybil, kaufmann, dahlia. Swaps the player's rendered model while
      * keeping Harry's animations/gameplay; also cycled in-game with - / = while
-     * the K keyframe viewer is on, or the console PLAYAS command. */
+     * the keyframe viewer is on, or the console PLAYAS command. */
     char playerCharacter[16];
 
     /* Raise the pitch of Harry's OWN VOICE sound effects — his hurt cries,

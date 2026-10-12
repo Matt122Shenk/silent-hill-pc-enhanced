@@ -16,10 +16,37 @@
 /* Selectable languages, in options-menu (and config `language`) order:
  * 0=en 1=de 2=fr 3=es 4=it are the PAL disc's own; LANG_PACK_FIRST and up are
  * PC-side packs loaded from gamedata/lang (see lang_pack.h). */
-#define LANG_PACK_FIRST 5
-#define LANG_COUNT      6
+/* NTSC-U English costs no data: the port compiles the US script, so "do not
+ * install any of the disc's text" IS that language. It exists as an id of its
+ * own so a PAL player can pick it, since PAL English is a separate
+ * retranslation and slot 0 on a PAL disc is the PAL one. */
+#define LANG_EN_US 5
 
-extern const char* const s_LangIds[LANG_COUNT];
+#define LANG_PACK_FIRST 6
+
+/* NTSC-J has its own short list on the same row. English is the port's: the
+ * Japanese release with the compiled US text, for players who want that
+ * disc's presentation and a script they can read. */
+#define JP_LANG_JAPANESE 0
+#define JP_LANG_CHINESE  1
+#define JP_LANG_ENGLISH  2
+#define JP_LANG_COUNT    3
+
+/* Only the five disc languages are fixed. Every slot past them is an installed
+ * pack, discovered at runtime from gamedata/lang (lang_pack.c), so the count
+ * comes from Pc_LangSlotCount() and the id from Pc_LangIdForSlot(). */
+extern const char* const s_LangIds[LANG_PACK_FIRST];
+
+/* Config id for any slot ("en".."it", then each installed pack's code). */
+const char* Pc_LangIdForSlot(int slot);
+
+/* Re-read gamedata/lang (a mod was installed while the game was running). */
+void Pc_LangPacksRescan(void);
+
+/* Non-zero when the drawn text is Shift-JIS, so a byte pair is one kanji cell.
+ * True for a Japanese disc showing Japanese or Chinese, and for a `!font=sjis`
+ * pack on any disc at all. */
+int Pc_LangSjisActive(void);
 
 /* Non-zero when an EUR disc is active (localized text pipeline in use). */
 int Pc_LangActive(void);
@@ -45,6 +72,7 @@ int         Pc_LangSlotCurrent(void);
 void        Pc_LangSlotSet(int slot);
 const char* Pc_LangSlotName(int slot);
 int         Pc_LangSlotNameX(int slot);
+int         Pc_LangSlotArrowSpread(int slot); /* outward shift of the row's arrows */
 
 /* Live language switch (0=en 1=de 2=fr 3=es 4=it): persists the config key,
  * rebinds the file table, reloads item text. Title-screen options only. */
@@ -86,10 +114,22 @@ void Pc_TextOverrideApply(int mapIdx);
  * unchanged). Pc_LangMenuTextWidth measures a (first line of a) menu string
  * in pixels for the centered title/difficulty entries. */
 const char* Pc_LangMenuText(const char* str);
+/* Gfx_StringDraw length argument for a string of unfixed length (see lang_menu.c). */
+int         Pc_LangMenuGlyphCount(const char* str);
 
 /* The DE/FR/ES/IT column (lang 1..4) of the menu table for one US literal, as
  * Latin-1; NULL when absent. Region-blind: lang_quick.c decides when it applies. */
+/* `lang` 1..4 is the retail numbering; pass -1 for "whatever column the
+ * current language maps to", which is how a de/fr/es/it PACK reads these. */
 const char* Pc_LangMenuPal(const char* us, int lang);
+
+/* Column 0..3 of the compiled de/fr/es/it tables for the current language, or
+ * -1 if it has none. A pack of the same name maps to the same column. */
+int         Pc_LangPalColumn(void);
 int         Pc_LangMenuTextWidth(const char* str);
+
+/* Report every layer of the current language (pack, story, item text, font)
+ * through `out`. Backs the LANGCHECK console command. */
+void        Pc_LangSelfCheck(void (*out)(const char*, ...));
 
 #endif

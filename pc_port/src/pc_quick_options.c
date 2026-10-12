@@ -34,6 +34,7 @@
 #include "pc_bind_panel.h"
 #include "pc_mouse_cursor.h"
 #include "pc_config.h"
+#include "lang_text.h"
 #include "pc_cheats.h"
 #include "control_style.h"
 #include "lang_quick.h"
@@ -66,11 +67,12 @@ enum { QO_X_SHADOW = 0, QO_X_SPEAKERS, QO_X_BGM, QO_X_SFX,
        QO_X_TPSFOV, QO_X_FPSFOV,
        QO_X_FPSHEADX, QO_X_FPSHEADY, QO_X_FPSHEADZ, QO_X_FPSSWING,
        QO_X_OTSFOV, QO_X_TPSAIMZOOM, QO_X_OTSAIMZOOM, QO_X_TPSOTSAIM,
+       QO_X_TPSRESTZOOM, QO_X_OTSRESTZOOM,
        QO_X_TPSRESTX, QO_X_TPSRESTY, QO_X_TPSAIMX, QO_X_TPSAIMY,
        QO_X_OTSRESTX, QO_X_OTSRESTY, QO_X_OTSAIMX, QO_X_OTSAIMY,
        QO_X_SPU,
        QO_X_DREAMSTR, QO_X_DREAMBLUR, QO_X_DPADMOVE,
-       QO_X_CAMSTYLE, QO_X_OTSSIDE };
+       QO_X_CAMSTYLE, QO_X_OTSSIDE, QO_X_CROSSHAIRSTYLE };
 extern const char* PcOpt_QuickExtraLabel(int which, char* buf, int bufsz);
 extern void        PcOpt_QuickExtraAdjust(int which, int dir);
 extern void        PcOpt_QuickViewReset(int mode);
@@ -157,7 +159,7 @@ typedef struct
  * further on those three needs the ceiling raised, or the rows split onto
  * another page. */
 static const QoRowDef s_page0[] = {
-    { ROW_OPT,   "psx_dither",           0, NULL },  /* Texture_Filter */
+    { ROW_OPT,   "texture_filter",       0, NULL },  /* Texture_Filter */
     { ROW_OPT,   "msaa",                 0, NULL },  /* Antialiasing (restart) */
     { ROW_OPT,   "post_process",         0, NULL },
     { ROW_OPT,   "tonemap",              0, NULL },
@@ -192,6 +194,9 @@ static const QoRowDef s_page1[] = {
     { ROW_OPT,   "minimap_require_map",  0, NULL },
     { ROW_OPT,   "crosshair",            0, NULL },
     { ROW_OPT,   "crosshair_size",       0, NULL },
+    /* Quick menu only: crosshair_style has no row in the PC Options table and
+     * does not get one, that page keeps its slack for the next HUD setting. */
+    { ROW_EXTRA, NULL, QO_X_CROSSHAIRSTYLE,  "Crosshair Style" },
     { ROW_OPT,   "text_size",            0, NULL },
     { ROW_OPT,   "low_health_glow",      0, NULL },
 /* Not on mobile: it would not do anything. PsyX_SPUAL_SetOutputMode is an
@@ -291,6 +296,7 @@ static const QoRowDef s_page2Tps[] = {
     { ROW_EXTRA,  NULL, QO_X_TPSFOV,       "FOV" },
     { ROW_EXTRA,  NULL, QO_X_TPSOTSAIM,    "OTS Aim (while in TPS)" },
     { ROW_EXTRA,  NULL, QO_X_TPSAIMZOOM,   "Aim Zoom" },
+    { ROW_EXTRA,  NULL, QO_X_TPSRESTZOOM,  "Rest Zoom" },
     { ROW_EXTRA,  NULL, QO_X_TPSRESTX,     "Rest X (left/right)" },
     { ROW_EXTRA,  NULL, QO_X_TPSRESTY,     "Rest Y (up/down)" },
     { ROW_EXTRA,  NULL, QO_X_TPSAIMX,      "Aim X (left/right)" },
@@ -307,6 +313,7 @@ _Static_assert(sizeof(s_page2Tps) / sizeof(s_page2Tps[0]) <= QO_MAX_ROWS,
 static const QoRowDef s_page2Ots[] = {
     { ROW_EXTRA,  NULL, QO_X_OTSFOV,       "FOV" },
     { ROW_EXTRA,  NULL, QO_X_OTSAIMZOOM,   "Aim Zoom" },
+    { ROW_EXTRA,  NULL, QO_X_OTSRESTZOOM,  "Rest Zoom" },
     { ROW_EXTRA,  NULL, QO_X_OTSRESTX,     "Rest X (left/right)" },
     { ROW_EXTRA,  NULL, QO_X_OTSRESTY,     "Rest Y (up/down)" },
     { ROW_EXTRA,  NULL, QO_X_OTSAIMX,      "Aim X (left/right)" },
@@ -446,7 +453,7 @@ static const QoRowDef s_pageControls[] = {
     /* Which pad drives the game when a TV remote or a second pad is also
      * connected. Saved, so it is the default next launch too. */
     { ROW_OPT,   "preferred_controller",   0, "Controller" },
-    { ROW_OPT,   "touch_style",            0, NULL },  /* Context or Gamepad */
+    { ROW_OPT,   "touch_style",            0, NULL },  /* Context, Context_Fixed or Gamepad */
     { ROW_OPT,   "control_2d",             0, NULL },  /* screen-relative movement */
     { ROW_OPT,   "touch_controls",         0, NULL },  /* Automatic / On / Off */
     { ROW_OPT,   "touch_look_sensitivity", 0, NULL },
@@ -666,6 +673,7 @@ static stbtt_fontinfo s_font;
 static unsigned char* s_fontData;
 static int            s_fontOk;
 static int            s_fontsTried;
+static int            s_fontsScript = -1; /* Pc_LangQuickScript the face was picked for */
 
 /* Baked text, re-baked when the pixel size or the page changes; values are
  * re-baked whenever their text changes. */
@@ -755,7 +763,8 @@ static GLuint qo_make_shader(GLenum type, const char* src)
 {
     GLuint sh = glCreateShader(type);
     GLint  ok = 0;
-    glShaderSource(sh, 1, &src, NULL);
+    const char* parts[2] = { PsyX_Shader_Preamble(type == GL_FRAGMENT_SHADER, PSYX_GLSL_LEGACY), src };
+    glShaderSource(sh, 2, parts, NULL);
     glCompileShader(sh);
     glGetShaderiv(sh, GL_COMPILE_STATUS, &ok);
     if (!ok)
@@ -1199,18 +1208,15 @@ static int qo_font_check(void)
 
 static void qo_fonts_init(void)
 {
-    static const char* paths[] = {
-        "gamedata/font/Oswald-Regular.ttf",
-        "gamedata/font/BarlowSemiCondensed-Regular.ttf",
-        "C:/Windows/Fonts/segoeui.ttf",
-        "C:/Windows/Fonts/arial.ttf",
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-    };
+    static const char* paths[16];
+    int count = Pc_LangQuickFontPaths(paths, 16);
     int i;
-    if (s_fontsTried)
-        return;
-    s_fontsTried = 1;
-    for (i = 0; i < (int)(sizeof(paths) / sizeof(paths[0])); i++)
+
+    s_fontsTried  = 1;
+    s_fontsScript = Pc_LangQuickScript();
+    s_fontOk      = 0;
+
+    for (i = 0; i < count; i++)
     {
         long           sz   = 0;
         unsigned char* data = qo_read_file(paths[i], &sz);
@@ -2307,7 +2313,18 @@ void Pc_QuickOptions_Draw(void)
         qo_atlas_ensure();
         qo_build_white();
     }
-    if (!s_fontsTried) qo_fonts_init();
+    /* Also when the language changes script: a Latin face has no kana, so the
+     * text baked from it is dropped with it. The old face's memory is
+     * abandoned rather than freed, as on any reload (stbtt points into it). */
+    if (!s_fontsTried || s_fontsScript != Pc_LangQuickScript())
+    {
+        if (s_fontsTried)
+        {
+            qo_free_text();
+            s_viewRowsDirty = 1;
+        }
+        qo_fonts_init();
+    }
 
     if (s_sel >= nRows) s_sel = nRows - 1;
     if (s_sel < 0)      s_sel = 0;

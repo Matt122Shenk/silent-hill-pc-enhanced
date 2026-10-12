@@ -1041,6 +1041,15 @@ static void Pc_EnsureModFolders(void)
     fclose(f);
 }
 #endif
+extern int (*g_PsyX_TextGlyphTest)(int tpage, int clut);
+extern int Font_IsTextGlyphPrim(int tpage, int clut);
+extern int BootScreen_IsLogoPrim(int clut);
+
+/* Kanji/hanzi cells, and the boot screens' logo images. */
+static int Pc_UnfilteredPrim(int tpage, int clut)
+{
+    return Font_IsTextGlyphPrim(tpage, clut) || BootScreen_IsLogoPrim(clut);
+}
 
 int main(int argc, char* argv[])
 {
@@ -1548,6 +1557,17 @@ int main(int argc, char* argv[])
      * as their ADDED events arrive, and that has to see the preference. */
     snprintf(g_cfg_preferredController, sizeof(g_cfg_preferredController), "%s",
              g_PcConfig.preferredController);
+    /* Prims that stay point-sampled under the Menus filter (PsyX_GPU.cpp). */
+    g_PsyX_TextGlyphTest = Pc_UnfilteredPrim;
+
+    /* Before PsyX_Initialise too: it decides whether the window may be
+     * multisampled (the native target is scaled onto it by a blit). */
+    {
+        extern int g_PcNativeRender;
+        g_PcNativeRender = g_PcConfig.nativeResolution;
+        if (g_PcNativeRender)
+            SH_LOG("Render: native PSX resolution, %dx%d window", windowWidth, windowHeight);
+    }
 
     /* Initialize PsyCross (creates SDL2 window + OpenGL context) */
     SH_LOG("Initializing PsyCross (SDL2 + OpenGL)...");
@@ -1855,6 +1875,10 @@ int main(int argc, char* argv[])
             g_cfg_brightness = g_PcConfig.brightness;
             g_cfg_contrast   = g_PcConfig.contrast;
             g_cfg_saturation = g_PcConfig.saturation;
+            {
+                extern int g_cfg_imageAdjustScope;
+                g_cfg_imageAdjustScope = g_PcConfig.imageAdjustScope;
+            }
         }
         g_PsyX_FlashlightSize      = g_PcConfig.flashlightSize;
         {

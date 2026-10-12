@@ -288,7 +288,7 @@ static const CheatRow s_debug[] = {
      * with no way to advance past it. They also cost a row apiece on a panel
      * that is five settings tall. */
     { "Collision visualizer", CH_TOGGLE,  &g_CollVisEnabled,  NULL, MOB_HIDE },
-    { "Keyframe viewer (K)",  CH_TOGGLE,  &g_DebugAnimKfView, NULL, MOB_HIDE },
+    { "Keyframe viewer (kf)",  CH_TOGGLE,  &g_DebugAnimKfView, NULL, MOB_HIDE },
     /* Also on Ctrl+F5 / Ctrl+F1 / Ctrl+F2. The key and the row drive the same
      * state, except fast-forward, where the key is a HOLD and this row is a
      * sticky toggle -- they use separate flags so releasing the key cannot

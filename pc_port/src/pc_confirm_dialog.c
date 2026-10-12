@@ -22,6 +22,7 @@
 
 #include <SDL.h>
 #include <PsyX/common/glad.h>
+#include <PsyX/PsyX_backend.h>
 
 #include "stb_truetype.h"
 
@@ -61,6 +62,7 @@ static stbtt_fontinfo s_font;
 static unsigned char* s_fontData;
 static int            s_fontOk;
 static int            s_fontsTried;
+static int            s_fontsScript = -1;
 
 /* Baked text, keyed to the pixel size it was baked at (re-baked on resize). */
 static GLuint s_texTitle, s_texMsg, s_texYes, s_texNo, s_texHint;
@@ -84,7 +86,8 @@ static GLuint cd_make_shader(GLenum type, const char* src)
 {
     GLuint sh = glCreateShader(type);
     GLint  ok = 0;
-    glShaderSource(sh, 1, &src, NULL);
+    const char* parts[2] = { PsyX_Shader_Preamble(type == GL_FRAGMENT_SHADER, PSYX_GLSL_LEGACY), src };
+    glShaderSource(sh, 2, parts, NULL);
     glCompileShader(sh);
     glGetShaderiv(sh, GL_COMPILE_STATUS, &ok);
     if (!ok)
@@ -238,18 +241,15 @@ static unsigned char* cd_read_file(const char* path)
 
 static void cd_fonts_init(void)
 {
-    static const char* paths[] = {
-        "gamedata/font/Oswald-Regular.ttf",
-        "gamedata/font/BarlowSemiCondensed-Regular.ttf",
-        "C:/Windows/Fonts/segoeui.ttf",
-        "C:/Windows/Fonts/arial.ttf",
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-    };
+    static const char* paths[16];
+    int count = Pc_LangQuickFontPaths(paths, 16);
     int i;
-    if (s_fontsTried)
-        return;
-    s_fontsTried = 1;
-    for (i = 0; i < (int)(sizeof(paths) / sizeof(paths[0])); i++)
+
+    s_fontsTried  = 1;
+    s_fontsScript = Pc_LangQuickScript();
+    s_fontOk      = 0;
+    s_textDirty   = 1; /* anything baked came from the old face */
+    for (i = 0; i < count; i++)
     {
         unsigned char* data = cd_read_file(paths[i]);
         if (!data)
@@ -467,7 +467,7 @@ void Pc_ConfirmDialog_Draw(void)
 
     if (!s_glReady) cd_gl_init();
     if (s_glReady != 1) return;
-    if (!s_fontsTried) cd_fonts_init();
+    if (!s_fontsTried || s_fontsScript != Pc_LangQuickScript()) cd_fonts_init();
 
     glGetIntegerv(GL_CURRENT_PROGRAM, &prevProg);
     glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &prevVao);

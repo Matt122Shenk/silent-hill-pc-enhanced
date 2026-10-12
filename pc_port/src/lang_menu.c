@@ -317,19 +317,107 @@ static const s_MenuTranslation s_MenuTr[] = {
           "Je_n'ai_pas_la_carte\n\t\tde_ce_lieu.",
           "No_tengo_el_mapa\n\t\tde_este_lugar.",
           "Non_ho_la_mappa\n\t\tdi_questo_posto." } },
+
+    /* --- Language row values --- */
+    { "English",
+        { "Englisch", "Anglais", "Ingl\xE9s", "Inglese" } },
+    { "German",
+        { "Deutsch", "Allemand", "Alem\xE1n", "Tedesco" } },
+    { "French",
+        { "Franz\xF6sisch", "Fran\xE7" "ais", "Franc\xE9s", "Francese" } },
+    { "Spanish",
+        { "Spanisch", "Espagnol", "Espa\xF1ol", "Spagnolo" } },
+    { "Italian",
+        { "Italienisch", "Italien", "Italiano", "Italiano" } },
+    { "Japanese",
+        { "Japanisch", "Japonais", "Japon\xE9s", "Giapponese" } },
+    { "Chinese",
+        { "Chinesisch", "Chinois", "Chino", "Cinese" } },
+
+    /* --- Inventory: whether the item can be used here (max ~10) --- */
+    { "==Use_OK==",
+        { "==Geht==", "==OK==", "==S\xED==", "==S\xEC==" } },
+    { "==Use_OK?==",
+        { "==Geht?==", "==OK?==", "==S\xED?==", "==S\xEC?==" } },
+    { "==Use_NG==",
+        { "==Nein==", "==Non==", "==No==", "==No==" } },
+
+    /* The other memory-card messages were already here; this one was not. The
+     * leading \x07 is the colour byte every message in that box carries. */
+    { "\x07You_removed_the_MEMORY_CARD!",
+        { "\x07MEMORY_CARD_entfernt!", "\x07MEMORY_CARD_retir\xE9" "e_!",
+          "\x07\xA1MEMORY_CARD_retirada!", "\x07MEMORY_CARD_rimossa!" } },
+
+    /* --- Results screen (a value follows each label) --- */
+    { "Defeated_enemy_by_fighting",
+        { "Im_Kampf_besiegt", "Vaincus_au_combat", "Vencidos_luchando", "Sconfitti_in_lotta" } },
+
+    /* --- PC Options rows (max ~14..17) --- */
+    { "[R]_Reset",
+        { "[R]_Zur\xFC" "cksetzen", "[R]_R\xE9init.", "[R]_Reiniciar", "[R]_Ripristina" } },
+
+    /* --- Setting values (max ~11). A technical term keeps its English. --- */
+    { "VSync",                           { NULL, NULL, NULL, NULL } },
+    { "PGXP",                            { NULL, NULL, NULL, NULL } },
+    { "Aniso_2x",                        { NULL, NULL, NULL, NULL } },
+    { "Aniso_4x",                        { NULL, NULL, NULL, NULL } },
+    { "Aniso_8x",                        { NULL, NULL, NULL, NULL } },
+    { "Aniso_16x",                       { NULL, NULL, NULL, NULL } },
+    { "CRT",                             { NULL, NULL, NULL, NULL } },
+    { "PSX_Retro",                       { NULL, NULL, NULL, NULL } },
+    { "Reinhard",                        { NULL, NULL, NULL, NULL } },
+    { "ACES",                            { NULL, NULL, NULL, NULL } },
+    { "30_Hz",                           { NULL, NULL, NULL, NULL } },
+    { "60_Hz",                           { NULL, NULL, NULL, NULL } },
+
+    /* --- Save/load screen (raw literals, not table rows) --- */
+    { "\x07________\x01New_save",
+        { "\x07______Neu_speichern", "\x07_____Nouvelle_partie", "\x07_____Nueva_partida", "\x07____Nuovo_salvataggio" } },
+    { "\x07____Crea\x01t\x01" "e_\x01n\x01" "e\x01w_\x01" "fi\x01le",
+        { "\x07____Datei_erstellen", "\x07____Cr\xE9" "er_un_fichier", "\x07____Crear_archivo", "\x07____Crea_file" } },
+    { "\x07____Fil\x01" "e_\x01\x01is_\x01\x01" "da\x01ma\x01g\x01" "ed",
+        { "\x07____Datei_besch\xE4" "digt", "\x07____Fichier_endommag\xE9", "\x07____Archivo_da\xF1" "ado", "\x07____File_danneggiato" } },
+    { "\x07Out_of_blocks",
+        { "\x07Keine_Bl\xF6" "cke_frei", "\x07Plus_de_blocs", "\x07Sin_bloques_libres", "\x07" "Blocchi_esauriti" } },
+    { "\x07No_data_file",
+        { "\x07Keine_Datei", "\x07" "Aucun_fichier", "\x07Sin_archivo", "\x07Nessun_file" } },
+
+    /* --- Save-point name --- */
+    { "Bus",
+        { "Bus", "Bus", "Autob\xFAs", "Autobus" } },
+
+    /* --- Brightness screen. The trailing spaces are the layout. --- */
+    { "BRIGHTNESS_",
+        { "HELLIGKEIT_", "LUMINOSITE_", "BRILLO_", "LUMINOSITA_" } },
+    { "CONTRAST_____",
+        { "KONTRAST_____", "CONTRASTE____", "CONTRASTE____", "CONTRASTO____" } },
+    { "SATURATION_",
+        { "SATTIGUNG_", "SATURATION_", "SATURACION_", "SATURAZIONE_" } },
+
+    /* --- Controller presets --- */
+    { "USER",
+        { "BENUTZER", "PERSO", "USUARIO", "UTENTE" } },
+    { "TYPE_1",
+        { "TYP_1", "TYPE_1", "TIPO_1", "TIPO_1" } },
+    { "TYPE_2",
+        { "TYP_2", "TYPE_2", "TIPO_2", "TIPO_2" } },
+    { "TYPE_3",
+        { "TYP_3", "TYPE_3", "TIPO_3", "TIPO_3" } },
 };
 
 const char* Pc_LangMenuText(const char* str)
 {
-    int lang = g_PcConfig.language;
     int i;
+    int col;
 
     if (str == NULL)
         return str;
 
     /* NTSC-J serves these from the disc's own overlays — Japanese on a retail
-     * disc (which is what retail draws), Chinese on the fan-translated one. */
-    if (g_GameRegion == Region_JPN)
+     * disc (which is what retail draws), Chinese on the fan-translated one.
+     * Not under a pack: the pack is the language then, and this branch
+     * answered first, so every menu stayed English while the story was not. */
+    if (g_GameRegion == Region_JPN && !Pc_LangPackActive())
     {
         const char* jp = Pc_JpnMenuText(str);
         return jp ? jp : str;
@@ -350,14 +438,20 @@ const char* Pc_LangMenuText(const char* str)
     if (Pc_LangPackActive())
     {
         const char* tr = Pc_LangPackMenu(str);
-        return tr ? tr : str;
+
+        if (tr != NULL)
+            return tr;
+        /* Not in the pack: a de/fr/es/it pack still has a column below. */
     }
 
     /* EUR discs always; USA only when a fan-translated disc is active (its
      * story/item text comes from the disc, these tables cover the menus the
-     * patch can't reach — the port renders menus from compiled strings). */
-    if (!(g_GameRegion == Region_EUR || (g_GameRegion == Region_USA && Pc_FanTextActive())) ||
-        lang < 1 || lang > 4)
+     * patch can't reach — the port renders menus from compiled strings). And
+     * any disc for a pack with a column, which is the same language. */
+    col = Pc_LangPalColumn();
+    if (col < 0 ||
+        !(g_GameRegion == Region_EUR || Pc_LangPackActive() ||
+          (g_GameRegion == Region_USA && Pc_FanTextActive())))
     {
         return str;
     }
@@ -366,7 +460,7 @@ const char* Pc_LangMenuText(const char* str)
     {
         if (s_MenuTr[i].us[0] == str[0] && strcmp(s_MenuTr[i].us, str) == 0)
         {
-            return s_MenuTr[i].tr[lang - 1] ? s_MenuTr[i].tr[lang - 1] : str;
+            return s_MenuTr[i].tr[col] ? s_MenuTr[i].tr[col] : str;
         }
     }
 
@@ -375,6 +469,29 @@ const char* Pc_LangMenuText(const char* str)
 
 /* Pixel width of a (single-line prefix of a) menu string, for the centered
  * title/difficulty entries whose US x-offsets are hardcoded constants. */
+/* The glyph budget Gfx_StringDraw spends on `str`. That drawer stops on a
+ * COUNT, never on the terminator, and only glyph-emitting bytes count: spaces
+ * and control bytes pass for free and a Shift-JIS pair is one. Retail passes
+ * fixed counts for its fixed strings; a string whose length nobody fixed, such
+ * as a language pack's own menu label, has to be counted the same way or it is
+ * cut (10 drew "PAL Englis" and "Russki (al") or, over-counted, read past its
+ * end. Counted on the translated form, which is what the drawer walks. */
+int Pc_LangMenuGlyphCount(const char* str)
+{
+    const unsigned char* p = (const unsigned char*)Pc_LangMenuText(str);
+    int                  n = 0;
+
+    for (; *p != 0; p++)
+    {
+        if (*p == '_' || *p < GLYPH_TABLE_ASCII_OFFSET)
+            continue;
+        if (Pc_LangSjisActive() && Pc_KanjiIsLead(*p) && p[1] != 0)
+            p++;
+        n++;
+    }
+    return n;
+}
+
 int Pc_LangMenuTextWidth(const char* str)
 {
     int         width = 0;
@@ -409,7 +526,7 @@ int Pc_LangMenuTextWidth(const char* str)
 
         /* NTSC-J draws SJIS pairs as one 12px kanji cell (Gfx_StringDraw), so
          * measuring their bytes separately would roughly double the width. */
-        if (g_GameRegion == Region_JPN && Pc_KanjiIsLead(c) && str[1] != '\0')
+        if (Pc_LangSjisActive() && Pc_KanjiIsLead(c) && str[1] != '\0')
         {
             width += FONT_12X16_GLYPH_SIZE_X;
             str++;
@@ -436,17 +553,50 @@ int Pc_LangMenuTextWidth(const char* str)
     return width;
 }
 
+/* Which column of the compiled de/fr/es/it tables this language reads.
+ *
+ * Those tables were written for the PAL disc, where German is language 1. The
+ * PACK called "de" is the same language and wants the same menus, overlays and
+ * prompts -- it carries the story and the items, and nothing else -- so it maps
+ * to the same column rather than falling back to English on a US disc. Packs
+ * with no column (Polish, Russian, Japanese, Chinese) carry their own and are
+ * unaffected. Returns -1 when there is no column to read. */
+int Pc_LangPalColumn(void)
+{
+    int lang = g_PcConfig.language;
+    int i;
+
+    if (lang >= 1 && lang < LANG_PACK_FIRST && lang != LANG_EN_US)
+        return lang - 1;
+
+    if (Pc_LangPackActive())
+    {
+        const char* code = Pc_LangIdForSlot(lang);
+
+        for (i = 1; i < LANG_PACK_FIRST; i++)
+        {
+            if (i != LANG_EN_US && strcmp(code, s_LangIds[i]) == 0)
+                return i - 1;
+        }
+    }
+    return -1;
+}
+
 const char* Pc_LangMenuPal(const char* us, int lang)
 {
     int i;
 
-    if (us == NULL || lang < 1 || lang > 4)
+    /* `lang` 1..4 is the retail numbering; a pack passes -1 and the column is
+     * resolved from its code instead. */
+    int col = (lang >= 1 && lang <= 4) ? (lang - 1) : Pc_LangPalColumn();
+
+    if (us == NULL || col < 0)
         return NULL;
 
     for (i = 0; i < (int)(sizeof(s_MenuTr) / sizeof(s_MenuTr[0])); i++)
     {
         if (s_MenuTr[i].us[0] == us[0] && strcmp(s_MenuTr[i].us, us) == 0)
-            return s_MenuTr[i].tr[lang - 1];
+            return s_MenuTr[i].tr[col];
     }
     return NULL;
 }

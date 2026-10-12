@@ -16,7 +16,8 @@
 #include "pc_big_tmd.h"   /* Pc_BigTmd_DestCapacity — oversized loose ITEM TMDs */
 #include "pc_big_ipd.h"   /* Pc_BigIpd_DestCapacity — oversized loose map chunks */
 #include "lang_pack.h"    /* Pc_LangPackActive — FONT16 Polish glyph patch */
-#include "font_region.h"  /* Font_PatchPolishGlyphs */
+#include "font_region.h"  /* Font_PatchPackGlyphs */
+#include "lang_ru.h"      /* Pc_RuActive: a Russian disc needs one cell fixed too */
 #include "sh_log.h"
 
 #ifndef _WIN32
@@ -1210,15 +1211,37 @@ bool Fs_QueuePostLoadTim(s_FsQueueEntry* entry)
     }
 
 #ifdef SH_PC_PORT
-    /* Polish ships no FONT16 of its own: build its extra letterforms into the
-     * atlas pixels right before upload. No-op unless the Polish pack is the
-     * active language, and covers every FONT16 reload site (boot, Konami,
-     * title, save-select) since they all pass through here. */
-    if (Pc_LangPackActive() &&
-        FSQ_INFO_VALID(entry->info) &&
+    if (FSQ_INFO_VALID(entry->info) &&
         (int)(entry->info - &g_FileTable[0]) == FILE_1ST_FONT16_TIM)
     {
-        Font_PatchPolishGlyphs(tim.paddr, tim.prect->w, tim.prect->h);
+        /* A font pack built for the other region stores the same glyphs in a
+         * different shape, and the destination comes from the descriptor
+         * rather than the file, so it would smear across VRAM. Re-lay it to
+         * the active layout first; a pack already in the right shape, which is
+         * every pack in use today, is left untouched. */
+        void* pix = tim.paddr;
+        int   fw  = tim.prect->w;
+        int   fh  = tim.prect->h;
+
+        if (Font_FitAtlasToLayout(&pix, &fw, &fh))
+        {
+            tim.paddr   = (u_long*)pix;
+            tempRect.w  = (short)fw;
+            tempRect.h  = (short)fh;
+        }
+
+        /* A pack language ships no FONT16 of its own: build its letterforms
+         * into the atlas pixels right before upload. Covers every FONT16
+         * reload site (boot, Konami, title, save-select) since they all pass
+         * through here, and dispatches on which pack is active -- Polish adds
+         * a few cells, Russian replaces the atlas. */
+        if ((Pc_LangPackActive() || Pc_RuActive()) && !Font_HiresGridLive())
+        {
+            /* Not while the pinned grid carries the pack's cells: this strip
+             * is not what the pack draws, and the patchers would only report
+             * that a strip has no room for them. */
+            Font_PatchPackGlyphs(tim.paddr, fw, fh);
+        }
     }
 
     /* A resumed post-load already uploaded this TIM to VRAM on its first pass. */
@@ -1585,11 +1608,99 @@ bool Fs_QueuePostLoadTim(s_FsQueueEntry* entry)
                             (int)pixelRect.x, (int)pixelRect.y,
                             (int)pixelRect.w, (int)pixelRect.h,
                             cx, cy, discBitDepth);
-                        looseHires = HiresOverride_RegisterLoosePngAllRows(
-                            whole, buf, (unsigned int)sz,
-                            (int)pixelRect.x, (int)pixelRect.y,
-                            (int)pixelRect.w, (int)pixelRect.h,
-                            cx, cy, rows, discBitDepth) == 0;
+                        /* A hi-res font pack is built for one region's atlas
+                         * shape, and this maps it onto the rect the descriptor
+                         * names, so the other region's pack came out garbled.
+                         * Re-lay its cells first; its pixel size says which
+                         * shape it is, because only one atlas divides it
+                         * evenly. A pack already matching is untouched. */
+                        int relaid   = 0;
+                        int declined = 0; /* a pack this language must not use */
+
+                        if (FSQ_INFO_VALID(entry->info) &&
+                            (int)(entry->info - &g_FileTable[0]) == FILE_1ST_FONT16_TIM)
+                        {
+                            unsigned char* rgba = NULL;
+                            int            rw = 0, rh = 0;
+
+                            if (HiresOverride_DecodeToRGBA(buf, (unsigned int)sz,
+                                                           &rgba, &rw, &rh) == 0)
+                            {
+                                /* A US-cut pack is for US English on a USA disc
+                                 * only; the PAL pack has all 126 cells and
+                                 * travels. And no Latin pack at all can stand in
+                                 * for Russian, which replaces every cell with
+                                 * Cyrillic: covering them drew Latin letterforms
+                                 * at Cyrillic byte values. The upload above has
+                                 * already dropped the previous override for this
+                                 * rect, so declining here leaves the native
+                                 * atlas showing, which is the right font. Only
+                                 * where Cyrillic is IN this rect, though: on a
+                                 * disc whose grid is the pinned override, the
+                                 * strip under this entry is never drawn by
+                                 * Russian, and the entry has to be ready for the
+                                 * next language that does draw the strip. */
+                                const char* why =
+                                    !Font_HiresPackUsable(Font_HiresPackShape(rw, rh))
+                                        ? "it is cut for the US atlas"
+                                  : Font_RussianLayoutActive() && !Font_HiresGridLive()
+                                        ? "Cyrillic is in force and the pack is Latin art"
+                                        : NULL;
+
+                                if (why != NULL)
+                                {
+                                    SH_LOG("[FONT] hi-res font pack declined: %s; "
+                                           "this language uses the disc font", why);
+                                    free(rgba);
+                                    rgba     = NULL;
+                                    declined = 1;
+                                }
+                            }
+                            if (rgba != NULL)
+                            {
+                                unsigned char* fit = NULL;
+                                unsigned char* use = rgba;
+                                int            fw = rw, fh = rh;
+                                int            units = (int)pixelRect.w;
+                                int            uh    = (int)pixelRect.h;
+                                int            built = 0;
+
+                                if (Font_FitHiresAtlasToLayout(rgba, rw, rh,
+                                                               &fit, &fw, &fh,
+                                                               &units, &uh))
+                                {
+                                    use = fit;
+                                }
+
+                                /* A pack language's built letters -- the
+                                 * Portuguese tildes, the Polish forms -- exist
+                                 * only in the 4bpp patch, which a hi-res pack
+                                 * never goes through. Same cell work, on the
+                                 * image. */
+                                built = Font_PatchPackGlyphsHires(
+                                    use, fw, fh, Font_HiresAtlasScale(fw, fh));
+
+                                if (use != rgba || built)
+                                {
+                                    looseHires = HiresOverride_RegisterRGBAKeyed(
+                                        whole, use, fw, fh,
+                                        (int)pixelRect.x, (int)pixelRect.y,
+                                        units, uh, cx, cy, discBitDepth, 0) == 0;
+                                    relaid = 1;
+                                }
+                                free(fit);
+                                free(rgba);
+                            }
+                        }
+
+                        if (!relaid && !declined)
+                        {
+                            looseHires = HiresOverride_RegisterLoosePngAllRows(
+                                whole, buf, (unsigned int)sz,
+                                (int)pixelRect.x, (int)pixelRect.y,
+                                (int)pixelRect.w, (int)pixelRect.h,
+                                cx, cy, rows, discBitDepth) == 0;
+                        }
                         free(buf);
                     }
                 }

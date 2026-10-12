@@ -5,6 +5,7 @@
 #include "pc_config.h"
 #include "xa_player.h"
 #include "pc_msg_voice.h"
+#include "pc_dark_harry.h"
 #include <SDL_timer.h>
 #include <math.h>
 extern void PsyX_EndScene(void);
@@ -192,6 +193,14 @@ s32 g_DebugAnimRate    = Q12(15.0f); /* loop playback rate (q19_12 kf/sec @30fps
 int g_DebugViewNpcSlot = -1;     /* keyframe viewer target: -1 = Harry, else g_SysWork.npcs[] slot */
 int g_DebugAnimPlayGen = 0;      /* bumped on each play (re)start so the loop cursor re-seeds */
 s32 g_TpsCamYaw = 0;             /* TPS orbit yaw (Q12), independent from Harry's body */
+/* Pixels of mouse travel the look code has seen, accumulated for the life of
+ * the process. Read by pc_dark_harry.c, which must NOT call
+ * SDL_GetRelativeMouseState itself -- the call in Pc_TpsCamera_Apply is the
+ * only place gameplay drains the accumulator, so a second reader would eat the
+ * camera's own motion. A running total rather than a per-frame flag, because a
+ * flag would sit latched at "moved" on every frame that code does not run (the
+ * classic camera, where the mouse steers nothing at all). */
+unsigned g_PcMouseLookTravel = 0;
 s32 g_TpsCamPitch = 0;           /* TPS orbit pitch (Q12) */
 /* Camera eye + forward (unit Q12) published each frame by Pc_TpsCamera_Apply for
  * free-aim: the aim ray is cast from g_TpsCamPos along g_TpsCamFwd (screen-center
@@ -581,6 +590,11 @@ static void Pc_TpsCamera_Apply(void)
 
     /* Aim zoom: ease the orbit distance in while aiming a gun, so the shot lines
      * up better. tps_aim_zoom config gates it (on by default). */
+    /* Closest the orbit may sit to the pivot. TP_DIST_AIM_MAX is as near as the
+     * game's own dolly ever goes, so it is the right floor: with both sliders at
+     * +200 the two offsets would otherwise compound to a NEGATIVE radius and put
+     * the camera through Harry and out the other side. */
+#define TP_DIST_MIN TP_DIST_AIM_MAX
     static s32 s_tpDist = TP_DIST;
     static s32 s_otsOff  = 0;   /* camera lateral (X) offset ease; reset on mode entry */
     static s32 s_otsOffY = 0;   /* camera vertical (Y) offset ease */
@@ -602,20 +616,40 @@ static void Pc_TpsCamera_Apply(void)
          * camera at TP_DIST (no zoom), 100% (the default) lands on TP_DIST_AIM (the
          * original zoom), 200% goes all the way to TP_DIST_AIM_MAX (twice as far
          * in). Linear across the whole range. */
-        float zoomPctF = (g_ControlStyle == ControlStyle_Ots) ? g_PcConfig.otsAimZoom
-                                                              : g_PcConfig.tpsAimZoom;
-        s32 pct = (s32)(zoomPctF + (zoomPctF < 0.0f ? -0.5f : 0.5f));
+        int   ots      = (g_ControlStyle == ControlStyle_Ots);
+        float zoomPctF = ots ? g_PcConfig.otsAimZoom  : g_PcConfig.tpsAimZoom;
+        float restPctF = ots ? g_PcConfig.otsRestZoom : g_PcConfig.tpsRestZoom;
+        s32 pct     = (s32)(zoomPctF + (zoomPctF < 0.0f ? -0.5f : 0.5f));
+        s32 restPct = (s32)(restPctF + (restPctF < 0.0f ? -0.5f : 0.5f));
+        s32 step    = TP_DIST - TP_DIST_AIM_MAX; /* the full dolly travel */
+        s32 restDist;
         s32 aimDist;
         s32 target;
 
         if (pct < -200) pct = -200;
         if (pct >  200) pct =  200;
+        if (restPct < -200) restPct = -200;
+        if (restPct >  200) restPct =  200;
+
+        /* The RESTING distance, on the same axis and the same scale as the aim
+         * dolly: 0% (the default) is the original TP_DIST, so this is a no-op
+         * until someone moves it. Widening the FOV to get closer flattens the
+         * depth cues; moving the camera does not, which is the point of it. */
+        restDist = TP_DIST - ((step * restPct) / 200);
 
         /* Negative = pull the aim camera BACK past the rest distance (wider view);
-         * +200 = as close as the dolly goes. Stays positive across the range
-         * (at -200, TP_DIST + (TP_DIST - TP_DIST_AIM_MAX)). */
-        aimDist = TP_DIST - (((TP_DIST - TP_DIST_AIM_MAX) * pct) / 200);
-        target  = isAiming ? aimDist : TP_DIST;
+         * +200 = as close as the dolly goes. Measured FROM the resting distance,
+         * which is what "0 = no zoom (rest distance)" has always meant -- with
+         * rest at its default this is the original expression unchanged. */
+        aimDist = restDist - ((step * pct) / 200);
+
+        /* Never let either end reach the pivot: at the extremes of both sliders
+         * the two offsets compound, and a non-positive orbit radius puts the
+         * camera inside Harry. */
+        if (restDist < TP_DIST_MIN) restDist = TP_DIST_MIN;
+        if (aimDist  < TP_DIST_MIN) aimDist  = TP_DIST_MIN;
+
+        target  = isAiming ? aimDist : restDist;
         s_tpDist += (target - s_tpDist) >> 3;
     }
 
@@ -637,6 +671,7 @@ static void Pc_TpsCamera_Apply(void)
             extern int Pc_Touch_OwnsMouse(void);
             if (Pc_Touch_OwnsMouse()) { mdx = 0; mdy = 0; }
         }
+        g_PcMouseLookTravel += (unsigned)((mdx < 0 ? -mdx : mdx) + (mdy < 0 ? -mdy : mdy));
         /* Mouse-RIGHT (mdx>0) → += yaw → view rotates right.
          * Mouse-UP (mdy<0) → pitch up by default; invert_mouse_y flips it. */
         {
@@ -2249,6 +2284,22 @@ void MainLoop(void) // 0x80032EE0
     // Run game.
     while (true)
     {
+#ifdef SH_PC_PORT
+        /* Android has the window surface while the app is backgrounded. SDL
+         * has un-made the GL context current on this thread for the duration,
+         * and game code reaches GL through DrawSync, so nothing below may run
+         * until it is back. Pump events, yield, try again. */
+        {
+            extern int  g_PsyX_AppPaused;
+            extern void PsyX_PauseIdle(void);
+
+            if (g_PsyX_AppPaused)
+            {
+                PsyX_PauseIdle();
+                continue;
+            }
+        }
+#endif
         g_TickCount++;
 
 #ifdef SH_PC_PORT
@@ -2791,6 +2842,7 @@ void MainLoop(void) // 0x80032EE0
         Sd_TaskPoolDrain();
         XaPlayer_Update();
         Pc_MsgVoice_Update();
+        Pc_DarkHarry_Update(); /* easter egg, pc_dark_harry.c */
 #endif
 
 #ifdef SH_PC_PORT
@@ -3729,8 +3781,21 @@ void MainLoop(void) // 0x80032EE0
             g_PsyX_FogColor[1] = PC_WorldEnvWork.fog.color.g / 255.0f;
             g_PsyX_FogColor[2] = PC_WorldEnvWork.fog.color.b / 255.0f;
         }
-        else if (g_GameWork.gameState == 11 && g_SysWork.sysState == SysState_GameOver) {
-            /* GAME OVER renders its own death scene; the sky is meant to be black there.
+        else if (g_GameWork.gameState == 11 && g_SysWork.sysState == SysState_GameOver &&
+                 !g_PcWorldDrawnThisFrame) {
+            /* GAME OVER renders its own death scene; the sky is meant to be black there --
+             * but only once the world has stopped being drawn.
+             *
+             * The !g_PcWorldDrawnThisFrame test is the last instance of the black-sky
+             * flash described further down, and the reported one: dying snapped the sky BLACK for about a
+             * second while the death played out. SysState_GameOver_Update does not set
+             * BgmStatusFlag_Pause until its step 2, so steps 0 and 1 -- the setup frame
+             * and the half-second fade-out over the body -- still run the gameplay world
+             * update and draw (the gate is on the pause flag, not on sysState). Forcing
+             * the clear black there painted the uncovered fog/sky region black under a
+             * lit world, exactly as MenuActive used to. From step 2 the world is gone,
+             * the flag is clear, and this branch blacks the GAME OVER text and death-tip
+             * screens as it always did.
              *
              * This branch used to ALSO force black on any gameState==11 frame with
              * SysFlag_MenuActive — that was the one-frame BLACK-SKY FLASH on opening the

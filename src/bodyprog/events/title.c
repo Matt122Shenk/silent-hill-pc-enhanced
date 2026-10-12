@@ -7,6 +7,7 @@
 #include "pc_config.h"
 #include "map_registry.h"
 #include "lang_text.h" /* menu translations + width for recentred entries */
+#include "pc_title_style.h"
 #include "main/fileinfo.h" /* g_GameRegion: PAL repositions the achievements hint */
 #endif
 
@@ -1034,7 +1035,7 @@ static void MainMenu_BackgroundDraw(void) // 0x8003B758
     }
 
 #ifdef SH_PC_PORT
-    if (g_GameRegion == Region_EUR)
+    if (Pc_TitleUsesPalLogo())
     {
         Pc_TitleLogoDrawEur();
     }

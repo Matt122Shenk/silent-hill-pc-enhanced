@@ -73,6 +73,7 @@ when two overlap; a character beats a prop at the same depth. Harry is pickable 
 | `goto` | Move Harry next to the selected enemy or prop, on his side of it and facing it, dropped onto the floor there. |
 | `bring` | Move the selected enemy two units in front of Harry, facing him. Props cannot be moved. Unfreeze a frozen enemy first: it keeps drawing its last pose until it runs again. |
 | `freeze [0\|1]` | Hold the selected enemy still: its AI does not run, so it neither moves nor attacks, and damage dealt to it lands when it is unfrozen (`kill` unfreezes it). Bare `freeze` toggles. `freeze all` / `freeze none` act on every enemy in the room; `unfreeze` is `freeze 0`. |
+| `nocol [0\|1]` / `nocollide` | Take the selection out of collision except for the ground: it walks through walls and through other characters, they walk through it, and attacks pass straight through. The ground still holds it up, so it does not fall through floors. Bare `nocol` toggles, and with nothing selected it acts on Harry. Walking outside the map leaves the area with no collision data under you, where Harry drops as he would off any edge, so come back the way you went. |
 
 ## Custom key binds
 
@@ -195,7 +196,7 @@ when it is off.
 |---|---|
 | `xavolume <0..100>` / `xavol` | XA (FMV/voice) volume. **(saved)** |
 | `adsr [0\|1]` | SPU ADSR envelope for looping-SFX ring-out (WIP). |
-| `kf [n]` / `keyframe [n]` | Animation keyframe inspector: set/show frame (`K` toggles view, `,` `.` scrub). |
+| `kf [n]` / `keyframe [n]` | Animation keyframe viewer: bare toggles it on/off, `n` views that frame (`,` `.` scrub). |
 | `fmv` | List FMV movies (numbered). |
 | `fmv <name\|#>` | Play a movie (also aliases `intro1-2`, `end1-5`). |
 
@@ -219,7 +220,7 @@ Require `allow_debug_controls = 1`. (In-game references: `debug` / `debug 2`.)
 | `-` | Give Hunting Rifle + 30 shells. |
 | `=` | Give Shotgun + 30 shells. |
 | `'` | Collision visualizer panel. |
-| `K` / `,` `.` | Keyframe inspector; scrub (hold = faster). |
+| `,` `.` / `N` / `P` | Keyframe viewer (turn it on with `kf`): scrub (hold = faster), change viewed character, play the anim. |
 | `L` | Log the FPS-camera eye offset (for baking `g_PcFpsOffset`). |
 
 **Free camera** (also the quick options menu's Cheats page, no dev controls needed there)

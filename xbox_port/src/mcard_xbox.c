@@ -232,28 +232,55 @@ static FILE* mc_fopen(int chan, const char* mode)
     return fopen(mc_path_for_channel(chan), mode);
 }
 
-/* Build a "fresh card" image: header magic + free dir + 0xFF data. */
+/* Directory frames carry an XOR of their first 127 bytes in byte 127, end
+ * links of 0xFFFF and a frame-63 mirror of the header: what the console BIOS
+ * writes. Cards written that way load in DuckStation, on hardware and in the
+ * port's save converter (tools/savecard), so a save can travel between the
+ * Xbox, the PC port and an emulator. Ported from PsyCross libapi.c (f290785);
+ * reads still ignore checksums and links, so older cards load unchanged. */
+static void mc_seal_frame(unsigned char* frame)
+{
+    unsigned char x = 0;
+    int i;
+    for (i = 0; i < MC_FRAME_SIZE - 1; i++) x ^= frame[i];
+    frame[MC_FRAME_SIZE - 1] = x;
+}
+
+static void mc_make_dir_frame(unsigned char* frame, unsigned int attr, unsigned int size, const char* name)
+{
+    memset(frame, 0, MC_FRAME_SIZE);
+    frame[0] = (unsigned char)attr;
+    frame[4] = (unsigned char)size;
+    frame[5] = (unsigned char)(size >> 8);
+    frame[6] = (unsigned char)(size >> 16);
+    frame[7] = (unsigned char)(size >> 24);
+    frame[8] = 0xFF;
+    frame[9] = 0xFF;
+    if (name) strncpy((char*)frame + 10, name, 20);
+    mc_seal_frame(frame);
+}
+
+/* A standard formatted card, as the console BIOS writes it. */
 static void mc_format_buffer(unsigned char* buf)
 {
     int i;
-    memset(buf, 0xFF, MC_TOTAL_SIZE);
-    /* Frame 0: "MC" magic at offset 0; xor checksum at offset 127. */
-    memset(buf, 0, MC_FRAME_SIZE);
+    memset(buf, 0, MC_BLOCK_SIZE);
+    memset(buf + MC_BLOCK_SIZE, 0xFF, MC_TOTAL_SIZE - MC_BLOCK_SIZE);
     buf[0] = 'M';
     buf[1] = 'C';
-    {
-        unsigned char xorck = 0;
-        for (i = 0; i < MC_FRAME_SIZE - 1; i++) xorck ^= buf[i];
-        buf[MC_FRAME_SIZE - 1] = xorck;
+    mc_seal_frame(buf);
+    for (i = 1; i <= MC_DIR_ENTRY_COUNT; i++)
+        mc_make_dir_frame(buf + i * MC_FRAME_SIZE, MC_DIR_ATTR_FREE, 0, NULL);
+    /* Frames 16..35: empty bad-sector relocation list. */
+    for (i = 16; i < 36; i++) {
+        unsigned char* fr = buf + i * MC_FRAME_SIZE;
+        memset(fr, 0xFF, 4);
+        fr[8] = 0xFF;
+        fr[9] = 0xFF;
+        mc_seal_frame(fr);
     }
-    /* Frames 1..15: free directory entries. */
-    for (i = 0; i < MC_DIR_ENTRY_COUNT; i++) {
-        McDirEntry* d = (McDirEntry*)(buf + (1 + i) * MC_FRAME_SIZE);
-        memset(d, 0, sizeof(*d));
-        d->attr = MC_DIR_ATTR_FREE;
-    }
-    /* Frames 16..35: broken-sector list (0xFF, unused). */
-    memset(buf + 16 * MC_FRAME_SIZE, 0xFF, 20 * MC_FRAME_SIZE);
+    memset(buf + 36 * MC_FRAME_SIZE, 0xFF, 27 * MC_FRAME_SIZE);
+    memcpy(buf + 63 * MC_FRAME_SIZE, buf, MC_FRAME_SIZE);
 }
 
 /* Write a freshly-formatted card image to disk. Returns 1 on success. */
@@ -353,21 +380,35 @@ static int mc_find_dir(int chan, const char* name, McDirEntry* outEntry)
     return 0;
 }
 
-/* Allocate a dir entry (data lives in block == dir index) for a new file. */
+/* Allocate a dir entry (data lives in block == dir index) for a new file.
+ * read()/write() address a file as consecutive blocks from its directory slot,
+ * so the whole run must be free; multi-block files get standard first/middle/
+ * last frames linked to the next block. */
 static int mc_alloc_dir(int chan, const char* name, int blocks)
 {
-    int i;
-    for (i = 1; i <= MC_DIR_ENTRY_COUNT; i++) {
-        McDirEntry e;
-        if (!mc_read_at(chan, i * MC_FRAME_SIZE, &e, sizeof(e))) return 0;
-        if ((e.attr & 0xF0) == MC_DIR_ATTR_FREE) {
-            memset(&e, 0, sizeof(e));
-            e.attr = MC_DIR_ATTR_FIRST_OR_ONLY | (blocks & 0x7);
-            e.size = blocks * MC_BLOCK_SIZE;
-            strncpy(e.name, name, sizeof(e.name) - 1);
-            if (!mc_write_at(chan, i * MC_FRAME_SIZE, &e, sizeof(e))) return 0;
-            return i;
+    unsigned char dir[(MC_DIR_ENTRY_COUNT + 1) * MC_FRAME_SIZE];
+    int i, b;
+
+    if (blocks < 1) blocks = 1;
+    if (!mc_read_at(chan, 0, dir, sizeof(dir))) return 0;
+    for (i = 1; i + blocks - 1 <= MC_DIR_ENTRY_COUNT; i++) {
+        for (b = 0; b < blocks; b++)
+            if ((dir[(i + b) * MC_FRAME_SIZE] & 0xF0) != MC_DIR_ATTR_FREE) break;
+        if (b < blocks) continue;
+        for (b = 0; b < blocks; b++) {
+            unsigned char* fr   = dir + (i + b) * MC_FRAME_SIZE;
+            unsigned int   attr = (b == 0) ? 0x51 : (b == blocks - 1 ? 0x53 : 0x52);
+            mc_make_dir_frame(fr, attr, b == 0 ? (unsigned int)(blocks * MC_BLOCK_SIZE) : 0,
+                              b == 0 ? name : NULL);
+            if (b < blocks - 1) {
+                /* Link = next block index - 1, which is this slot's index. */
+                fr[8] = (unsigned char)(i + b);
+                fr[9] = 0;
+                mc_seal_frame(fr);
+            }
         }
+        if (!mc_write_at(chan, i * MC_FRAME_SIZE, dir + i * MC_FRAME_SIZE, blocks * MC_FRAME_SIZE)) return 0;
+        return i;
     }
     return 0;
 }
@@ -740,11 +781,26 @@ int erase(char* path)
 
     if (!path) return 0;
     name = mc_strip_prefix(path, &chan);
-    dirIdx = mc_find_dir(chan, name, NULL);
+    dirIdx = mc_find_dir(chan, name, &e);
     if (dirIdx == 0) return 0;
-    memset(&e, 0, sizeof(e));
-    e.attr = MC_DIR_ATTR_FREE;
-    if (!mc_write_at(chan, dirIdx * MC_FRAME_SIZE, &e, sizeof(e))) return 0;
+    {
+        /* Follow the block links (a file copied onto a real card need not be
+         * contiguous). Older builds wrote link 0 on single-block files, so the
+         * size decides how many blocks to free, not the link. */
+        unsigned char fr[MC_FRAME_SIZE];
+        int blocks = (int)((e.size + MC_BLOCK_SIZE - 1) / MC_BLOCK_SIZE);
+        int cur    = dirIdx;
+        int b;
+        if (blocks < 1) blocks = 1;
+        for (b = 0; b < blocks && cur >= 1 && cur <= MC_DIR_ENTRY_COUNT; b++) {
+            int next;
+            if (!mc_read_at(chan, cur * MC_FRAME_SIZE, fr, MC_FRAME_SIZE)) return 0;
+            next = fr[8] | (fr[9] << 8);
+            mc_make_dir_frame(fr, MC_DIR_ATTR_FREE, 0, NULL);
+            if (!mc_write_at(chan, cur * MC_FRAME_SIZE, fr, MC_FRAME_SIZE)) return 0;
+            cur = (next == 0xFFFF) ? -1 : next + 1;
+        }
+    }
     SH_DBG("[MCRD] delete '%s' (dir=%d)", path, dirIdx);
     return 1;
 }
@@ -783,6 +839,7 @@ int rename(const char* oldpath, const char* newpath)
     if (!mc_read_at(chanA, dirIdx * MC_FRAME_SIZE, &e, sizeof(e))) return 0;
     memset(e.name, 0, sizeof(e.name));
     strncpy(e.name, newname, sizeof(e.name) - 1);
+    mc_seal_frame((unsigned char*)&e);
     if (!mc_write_at(chanA, dirIdx * MC_FRAME_SIZE, &e, sizeof(e))) return 0;
     SH_DBG("[MCRD] rename '%s' -> '%s' (dir=%d)", oldpath, newpath, dirIdx);
     return 1;

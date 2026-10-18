@@ -13,6 +13,9 @@
 #include "bodyprog/math/math.h"
 #include "bodyprog/screen/screen_data.h"
 #include "pc_config.h"
+#include "bodyprog/text/text_draw.h"
+#include <string.h>
+#include <xboxkrnl/xboxkrnl.h>   /* KeTickCount */
 
 /* PC's GR_ImageAdjustActive with DbgOverlay_Render's scene-frame rule: the
  * grade applies to frames that render the 3D world (InGame / MapEvent) and to
@@ -101,4 +104,46 @@ void Pc_LowHealthGlowUpdate(void)
     #undef GLOW_PERIOD
     #undef GLOW_R_MIN
     #undef GLOW_R_MAX
+}
+
+/* PC's FPS Display (fps_display: 0 off, 1-4 = top-left, top-right, bottom-left,
+ * bottom-right), drawn with the game font instead of the PC's GL overlay.
+ * Counts the frames this hook sees -- one per presented frame -- over
+ * half-second windows, so the number is what is actually reaching the TV.
+ * Called from DbgOverlay_XboxRender (main menu onward). */
+void Xbox_FpsCounterRender(void)
+{
+    static u32 s_winStartMs;
+    static s32 s_winFrames;
+    static s32 s_fps;
+    char       buf[12];
+    s32        corner = g_PcConfig.fpsDisplay;
+    u32        now    = (u32)KeTickCount;
+    s32        x, y, n, v;
+
+    if (s_winStartMs == 0)
+        s_winStartMs = now;
+    s_winFrames++;
+    if (now - s_winStartMs >= 500u)
+    {
+        s_fps        = (s_winFrames * 1000 + (s32)(now - s_winStartMs) / 2) / (s32)(now - s_winStartMs);
+        s_winFrames  = 0;
+        s_winStartMs = now;
+    }
+
+    if (corner < 1 || corner > 4)
+        return;
+
+    v = (s_fps < 0) ? 0 : (s_fps > 999 ? 999 : s_fps);
+    n = 0;
+    if (v >= 100) buf[n++] = (char)('0' + v / 100);
+    if (v >= 10)  buf[n++] = (char)('0' + (v / 10) % 10);
+    buf[n++] = (char)('0' + v % 10);
+    memcpy(buf + n, "_FPS", 5);
+
+    x = (corner == 1 || corner == 3) ? 8 : SCREEN_WIDTH - 8 - 58;
+    y = (corner == 1 || corner == 2) ? 4 : SCREEN_HEIGHT - 20;
+    Gfx_StringSetColor(StringColorId_Green);
+    Gfx_StringSetPosition(x, y);
+    Gfx_StringDraw(buf, 12);
 }

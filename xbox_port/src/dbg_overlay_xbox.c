@@ -258,6 +258,10 @@ void DbgOverlay_XboxRender(void)
         extern void Xbox_RaBrowser_Render(void);
         Xbox_RaBrowser_Render();
     }
+    {
+        extern void Xbox_FpsCounterRender(void);
+        Xbox_FpsCounterRender();
+    }
 
     /* Drop lines whose full lifetime has elapsed; compact the rest to the front
      * (they age oldest-first, so this preserves order). */

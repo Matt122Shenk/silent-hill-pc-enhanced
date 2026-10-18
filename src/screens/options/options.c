@@ -386,6 +386,8 @@ static const s_PcOpt PCOPT_X3[] = {
  * (xa_seek_model.c) scaled 0.5x / 1x / 2x. Dark_Harry is the PC's AFK easter
  * egg (on by default there); it is listed so it can be switched off. */
 static const int         VAL_LINEGAP_X[] = { 0, 150, 300, 600 };
+static const int         VAL_FPSDISP_X[] = { 0, 1, 2, 3, 4 };
+static const char* const LBL_FPSDISP_X[] = { "Off", "Top_L", "Top_R", "Bottom_L", "Bottom_R" };
 static const char* const LBL_LINEGAP_X[] = { "Off", "Short", "Normal", "Long" };
 static const s_PcOpt PCOPT_X4[] = {
     { "Text_Size",       NULL, "text_size",       NULL, 0, NULL, NULL, 1, PCK_SLIDER, &g_PcConfig.textSize,      NULL, 100.0f, 150.0f, 5.0f },
@@ -395,6 +397,7 @@ static const s_PcOpt PCOPT_X4[] = {
     { "Attract_Demos",   &g_PcConfig.attractDemos,      "attract_demos",       VAL_ONOFF,   2, LBL_ONOFF,   NULL,            1, PCK_INT      },
     { "Low_HP_Glow",     &g_PcConfig.lowHealthGlow,     "low_health_glow",     VAL_ONOFF,   2, LBL_ONOFF,   NULL,            1, PCK_INT      },
     { "Dark_Harry",      &g_PcConfig.darkHarry,         "dark_harry",          VAL_ONOFF,   2, LBL_ONOFF,   NULL,            1, PCK_INT      },
+    { "FPS_Display",     &g_PcConfig.fpsDisplay,        "fps_display",         VAL_FPSDISP_X, 5, LBL_FPSDISP_X, NULL,        1, PCK_INT      },
     { "Prev_Page",       NULL,                          NULL,                  NULL,        0, NULL,        NULL,            0, PCK_PREV     },
     { "Next_Page",       NULL,                          NULL,                  NULL,        0, NULL,        NULL,            0, PCK_NEXT     },
     { "Back",            NULL,                          NULL,                  NULL,        0, NULL,        NULL,            0, PCK_BACK     },

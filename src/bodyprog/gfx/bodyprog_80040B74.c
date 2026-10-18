@@ -1116,8 +1116,20 @@ void Ipd_ActiveChunksClear(s_MapTerrain* map, s32 arg1) // 0x80042300
                  * them (the engine already tolerates NULL here: that is
                  * exactly the state the failed callocs left it in). */
                 enum { XBOX_OWNED_SLOT_CAP = 24 };
-                if (i >= XBOX_OWNED_SLOT_CAP)
+                static s32 s_xbSlotOwnedSize[XBOX_OWNED_SLOT_CAP];
+                /* Only the map's active count (arg1) is ever loaded into:
+                 * activeChunkCount is set to it right after this clear, and
+                 * every load/draw loop stops there (preloadChunks is pinned
+                 * off). Allocating all 24 parked ~0.7-1.7 MB nothing could
+                 * use; a slot past the count gives its buffer back. */
+                if (i >= XBOX_OWNED_SLOT_CAP || i >= arg1)
                 {
+                    if (i < XBOX_OWNED_SLOT_CAP && s_pcSlotOwnedBuf[i] != NULL)
+                    {
+                        free(s_pcSlotOwnedBuf[i]);
+                        s_pcSlotOwnedBuf[i]  = NULL;
+                        s_xbSlotOwnedSize[i] = 0;
+                    }
                     curChunk->ipdHdr = NULL;
                     continue;
                 }
@@ -1128,7 +1140,6 @@ void Ipd_ActiveChunksClear(s_MapTerrain* map, s32 arg1) // 0x80042300
                  * each slot had as a shared slice before. Slots are re-sized
                  * when a map needs more; nothing is live during this clear. */
                 {
-                    static s32 s_xbSlotOwnedSize[XBOX_OWNED_SLOT_CAP];
                     s32 want = (i == 0) ? map->chunkBufferSize : indivSize;
                     if (want <= 0)
                     {

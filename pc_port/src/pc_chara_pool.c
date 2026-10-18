@@ -60,7 +60,15 @@ typedef struct
 static PcPoolChara   s_pool[Chara_Count];
 /* One posed-skeleton coord array per TYPE (56-bone model cap + root), same
  * contract as g_SysWork.npcBoneCoordBuffer consumption in fs_chara_anim.c. */
-static GsCOORDINATE2 s_poolBoneCoords[Chara_Count][57];
+#ifdef SH_XBOX_PORT
+/* The global chara pool is pinned off on Xbox (xbox_compat_globals.c), so the
+ * per-character bone rows are never used: one row (~4.5 KB) instead of
+ * Chara_Count (~205 KB); PoolLoad refuses any id past it. */
+#define POOL_BONE_ROWS 1
+#else
+#define POOL_BONE_ROWS Chara_Count
+#endif
+static GsCOORDINATE2 s_poolBoneCoords[POOL_BONE_ROWS][57];
 static int           s_poolReady;
 
 /* Debug/pool spawns carry no savegame identity: Savegame_EnemyStateUpdate
@@ -229,6 +237,11 @@ static int PoolChara_Load(s32 id)
         saved = *tbl;
         *tbl  = want;
 
+        if (id >= POOL_BONE_ROWS)
+        {
+            *tbl = saved;
+            return 0;
+        }
         Fs_CharaAnimDataAlloc(PC_CHARA_ANIM_SLOT(id), id, (s_AnmHeader*)p->anmBuf, s_poolBoneCoords[id]);
 
         /* Drain synchronously by pumping the queue directly. Reads are

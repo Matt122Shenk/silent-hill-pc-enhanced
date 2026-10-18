@@ -17,7 +17,15 @@
  * at 0x1EBE00) and the loaded file may exceed the remaining space.
  * On PSX this wraps around; on PC it would corrupt adjacent memory.
  * Extra 1MB prevents stack/heap corruption from these overflows. */
+#ifdef SH_XBOX_PORT
+/* The guard is protecting against a real overflow, not padding, but 1 MB of it
+ * is a lot of a 64 MB console's free RAM. The known overrun is a file read into
+ * FS_BUFFER_16 (0x1EBE00, 82 KB short of the 2 MB boundary); 256 KB covers
+ * three times that gap (the N64 port runs on 128 KB). */
+#define PSX_RAM_SIZE (2 * 1024 * 1024 + 256 * 1024)
+#else
 #define PSX_RAM_SIZE (3 * 1024 * 1024)
+#endif
 uint8_t g_PsxRam[PSX_RAM_SIZE];
 
 /* PSX Scratchpad RAM emulation.

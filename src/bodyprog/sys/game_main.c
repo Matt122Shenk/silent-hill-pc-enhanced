@@ -148,12 +148,15 @@ static s32 g_PrevVBlanks = 0;
  * sized well under it — the old 1.2MB budget was throttling the draw set to ~19
  * chunks. 16MB fits ~400 chunks; normal play still uses <2MB. */
 #ifdef SH_XBOX_PORT
-/* Xbox: 2MB. TWO arenas are calloc'd (double-buffered), so PC's 16MB costs 32MB
+/* Xbox: 1MB. TWO arenas are calloc'd (double-buffered), so PC's 16MB costs 32MB
  * of a 64MB console — it took free RAM at boot from ~33MB to 4.4MB, which left
  * the texture cache 0 of 96 slots and rendered the whole game untextured white.
  * The enlargement is for whole-map mode only (wholeMapExteriors, pinned off
- * here); the Xbox's measured usage is ~29KB/frame against this arena. */
-#define PC_PKTBUF_SIZE (2 * 1024 * 1024)
+ * here); the Xbox's measured usage is ~29KB/frame, and no hardware log ever
+ * reached the half-arena high-water line at 2MB. 1MB keeps a ~35x margin and
+ * hands 2MB back to the texture cache. The canary below still reports an
+ * overrun, and the high-water line now fires at a quarter of the arena. */
+#define PC_PKTBUF_SIZE (1 * 1024 * 1024)
 #else
 #define PC_PKTBUF_SIZE (16 * 1024 * 1024)
 #endif
@@ -2764,7 +2767,11 @@ void MainLoop(void) // 0x80032EE0
 
                 /* One line when the arena first passes half, so a log shows the
                  * headroom even on a session that never actually overruns. */
+#ifdef SH_XBOX_PORT
+                if (!s_pktPeakLogged && s_pktPeak > (PC_PKTBUF_SIZE / 4))
+#else
                 if (!s_pktPeakLogged && s_pktPeak > (PC_PKTBUF_SIZE / 2))
+#endif
                 {
                     s_pktPeakLogged = 1;
                     SH_LOG("[PKTARENA] high-water %ld of %d bytes (map %d)",

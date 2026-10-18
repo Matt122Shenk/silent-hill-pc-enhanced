@@ -781,8 +781,30 @@ static void MainMenu_AchievementHintDraw(void)
      * hint has to read it rather than assume a key. Scheme 0 (classic): the
      * title screen has no camera mode to disagree about. */
     mapBtn = g_GameWorkPtr->config.controllerConfig.map;
+#ifdef SH_XBOX_PORT
+    /* The PC bind tables name keyboard keys and SDL pad buttons; on Xbox the
+     * pad layer maps each PSX bit to one fixed button (pad_xbox.c), so name
+     * that one. Same bit layout PcConfig_BindName switches on. */
+    {
+        static const char* const XB_NAMES[16] = {
+            "Back", "L3", "R3", "Start", "Up", "Right", "Down", "Left",
+            "LT", "RT", "White", "Black", "Y", "B", "A", "X"
+        };
+        key = "";
+        pad = "";
+        for (i = 0; i < 16; i++)
+        {
+            if (mapBtn == (1u << i))
+            {
+                pad = XB_NAMES[i];
+                break;
+            }
+        }
+    }
+#else
     key    = PcConfig_BindName(mapBtn, 0, 0, 0);
     pad    = PcConfig_BindName(mapBtn, 1, 0, 0);
+#endif
 
     if (Pc_ControllerAttached() && pad[0] != '\0' && key[0] != '\0')
     {

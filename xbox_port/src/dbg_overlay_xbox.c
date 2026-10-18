@@ -227,6 +227,13 @@ void DbgOverlay_XboxRender(void)
     uint32_t now = (uint32_t)KeTickCount;
     int      i, w;
 
+    /* RetroAchievements list (Map button on the title screen), under the toasts
+     * so an unlock or a status line still reads on top of it. */
+    {
+        extern void Xbox_RaBrowser_Render(void);
+        Xbox_RaBrowser_Render();
+    }
+
     /* Drop lines whose full lifetime has elapsed; compact the rest to the front
      * (they age oldest-first, so this preserves order). */
     w = 0;

@@ -113,9 +113,6 @@ void  Pc_QuickOptions_PreloadGL(void)             { }
 void  Pc_QuickOptions_InvalidateRows(void)        { }
 int   Pc_QuickOptions_ShowsMinimapRows(void)      { return 0; }
 
-int   Pc_RaBrowser_IsOpen(void)                   { return 0; }
-void  Pc_RaBrowser_Open(void)                     { }
-void  Pc_RaBrowser_Update(int c, int u, int d, int f) { (void)c; (void)u; (void)d; (void)f; }
 void  Pc_RaToast_Preload(void)                    { }
 
 int   Pc_RandoSettings_IsOpen(void)               { return 0; }

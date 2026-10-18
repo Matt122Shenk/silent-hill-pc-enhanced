@@ -915,6 +915,67 @@ static void Ra_RefreshStatus(void)
  * real RC_CLIENT_EVENT_ACHIEVEMENT_TRIGGERED and the menu self-test so they render
  * identically. Badge fetch is a BLOCKING one-shot (a brief hitch, fine on a rare
  * unlock or a deliberate menu press). */
+/* Why RetroAchievements is not available right now (PC 34166e074), for the
+ * achievement list (ra_browser_xbox.c) and the Options status row. Empty while
+ * everything is fine. */
+static const char* s_unavailable = "RetroAchievements is turned off";
+
+const char* Pc_Ra_UnavailableReason(void)
+{
+    if (s_active)
+        return "";
+    return s_unavailable;
+}
+
+/* One row of the achievement list. Filled from rc_client's CORE list,
+ * pseudo-achievements left out (same predicate as the unlock card). */
+typedef struct {
+    char     title[48];
+    char     desc[96];
+    unsigned points;
+    int      unlocked;
+} XbRaAch;
+
+static int Ra_IsPseudoAchievement(const char* title, unsigned points);
+
+int Xbox_Ra_Snapshot(XbRaAch* out, int max)
+{
+    rc_client_achievement_list_t* list;
+    uint32_t b, a;
+    int      n = 0;
+
+    if (!out || max <= 0 || !s_client || !s_active)
+        return 0;
+    list = rc_client_create_achievement_list(s_client, RC_CLIENT_ACHIEVEMENT_CATEGORY_CORE,
+                                             RC_CLIENT_ACHIEVEMENT_LIST_GROUPING_LOCK_STATE);
+    if (!list)
+        return 0;
+    for (b = 0; b < list->num_buckets && n < max; b++)
+    {
+        for (a = 0; a < list->buckets[b].num_achievements && n < max; a++)
+        {
+            const rc_client_achievement_t* ach = list->buckets[b].achievements[a];
+            XbRaAch* d;
+            if (!ach || Ra_IsPseudoAchievement(ach->title, ach->points))
+                continue;
+            d = &out[n++];
+            memset(d, 0, sizeof(*d));
+            if (ach->title)
+                strncpy(d->title, ach->title, sizeof(d->title) - 1);
+            if (ach->description)
+                strncpy(d->desc, ach->description, sizeof(d->desc) - 1);
+            d->points   = ach->points;
+            /* `state` is the live verdict, `unlocked` the account bitfield
+             * (set for a hardcore unlock earned elsewhere); softcore build,
+             * so either counts. */
+            d->unlocked = (ach->state == RC_CLIENT_ACHIEVEMENT_STATE_UNLOCKED) ||
+                          (ach->unlocked != RC_CLIENT_ACHIEVEMENT_UNLOCKED_NONE);
+        }
+    }
+    rc_client_destroy_achievement_list(list);
+    return n;
+}
+
 static void Ra_ShowUnlock(const char* title, unsigned points, const char* badge_name)
 {
     extern void DbgOverlay_XboxUnlock(const char* title, unsigned points);
@@ -1025,6 +1086,7 @@ static void RC_CCONV Ra_LoadGameCallback(int result, const char* error_message,
          * normal outcome, not an alarm. */
         SH_DBG("[RA] achievement set unavailable: %s",
                error_message ? error_message : "unknown");
+        s_unavailable = "No RetroAchievements set for this disc";
         return;
     }
 
@@ -1067,6 +1129,7 @@ static void RC_CCONV Ra_LoginCallback(int result, const char* error_message,
                error_message ? error_message : "unknown");
         snprintf(t, sizeof(t), "RA login failed: %s", error_message ? error_message : "check user/password");
         Ra_Toast(t);
+        s_unavailable = "Sign-in failed (check ra_username / ra_token)";
         return;
     }
 
@@ -1093,6 +1156,7 @@ static void RC_CCONV Ra_LoginCallback(int result, const char* error_message,
     if (!g_CdBinPath[0] || g_CdBinPath[0] == 'N') /* "NOT FOUND..." */
     {
         SH_DBG("[RA] no BIN resolved (g_CdBinPath='%s') - cannot identify the game", g_CdBinPath);
+        s_unavailable = "Could not identify the disc image";
         return;
     }
 
@@ -1100,10 +1164,12 @@ static void RC_CCONV Ra_LoginCallback(int result, const char* error_message,
     if (!rc_hash_generate_from_file(hash, RC_CONSOLE_PLAYSTATION, g_CdBinPath))
     {
         SH_DBG("[RA] could not hash disc image '%s'", g_CdBinPath);
+        s_unavailable = "Could not identify the disc image";
         return;
     }
 
     SH_DBG("[RA] disc hash %s", hash);
+    s_unavailable = "Loading the achievement set";
     rc_client_begin_load_game(client, hash, Ra_LoadGameCallback, NULL);
 }
 
@@ -1128,6 +1194,7 @@ void Pc_Ra_Init(void)
     {
         SH_DBG("[RA] enabled but not signed in - set ra_username and ra_token "
                "(or ra_password) in silenthill.cfg");
+        s_unavailable = "Not signed in (ra_username + ra_password in silenthill.cfg)";
         return;
     }
 
@@ -1136,6 +1203,7 @@ void Pc_Ra_Init(void)
     if (Net_XboxBringUp() < 0)
     {
         SH_DBG("[RA] network bring-up failed - RA disabled this session");
+        s_unavailable = "No network connection";
         return;
     }
 
@@ -1159,6 +1227,7 @@ void Pc_Ra_Init(void)
     if (!s_client)
     {
         SH_DBG("[RA] client creation failed - disabled");
+        s_unavailable = "RetroAchievements could not start";
         return;
     }
 
@@ -1185,6 +1254,7 @@ void Pc_Ra_Init(void)
     /* Prefer the stored token (never sends the password). Fall back to a password
      * login, which fetches and caches a token inside rc_client for the session;
      * the user can copy a token into the config later to skip the password. */
+    s_unavailable = "Signing in";
     if (g_PcConfig.raToken[0])
         rc_client_begin_login_with_token(s_client, g_PcConfig.raUsername,
                                          g_PcConfig.raToken, Ra_LoginCallback, NULL);

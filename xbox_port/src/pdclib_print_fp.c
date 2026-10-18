@@ -47,6 +47,7 @@
 
 #define E_lower    (1u<<15)
 #define E_unsigned (1u<<16)
+#define E_fpzero   (1u<<17) /* '0' flag seen alongside a precision (floats keep it) */
 
 /* This macro delivers a given character to either a memory buffer or a stream,
    depending on the contents of 'status' (struct _PDCLIB_status_t).
@@ -415,6 +416,8 @@ static void fpformat( char conv, struct _PDCLIB_status_t * status )
     int prec = status->prec;
     char body[128];
 
+    if ( status->flags & E_fpzero )
+        status->flags |= E_zero;
     if ( status->flags & E_ldouble )
         v = (double)va_arg( status->arg, long double );
     else
@@ -579,7 +582,10 @@ const char * _PDCLIB_print( const char * spec, struct _PDCLIB_status_t * status 
             }
             spec = endptr;
         }
-        /* Having a precision cancels out any zero flag. */
+        /* Having a precision cancels out any zero flag -- for integers. C99
+           keeps it for the floating conversions, so fpformat restores it. */
+        if ( status->flags & E_zero )
+            status->flags |= E_fpzero;
         status->flags &= ~E_zero;
     }
 

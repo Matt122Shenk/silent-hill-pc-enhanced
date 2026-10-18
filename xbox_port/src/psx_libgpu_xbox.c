@@ -210,9 +210,14 @@ int VSync(int mode)
      * ran before this VSync, so on top of world + toast text) and before the
      * present flush inside GpuNv2a_FrameEnd. No-op unless a badge is armed. */
     {
-        extern float g_cfg_brightness;
-        extern void  GpuNv2a_BrightnessDim(float brightness);
-        GpuNv2a_BrightnessDim(g_cfg_brightness);
+        /* PC output grade (Brightness screen rows + Dark Harry's fade), scoped
+         * like PC's image_adjust_scope: world frames and the Brightness screen
+         * itself, never menus or movies. */
+        extern float g_cfg_brightness, g_cfg_contrast;
+        extern int   Xbox_ImageAdjustInScope(void);
+        extern void  GpuNv2a_ImageAdjust(float brightness, float contrast);
+        if (Xbox_ImageAdjustInScope())
+            GpuNv2a_ImageAdjust(g_cfg_brightness, g_cfg_contrast);
     }
     RaBadge_RenderDirect();
     GpuNv2a_FrameEnd();             /* present the rendered frame (swap at vblank) */

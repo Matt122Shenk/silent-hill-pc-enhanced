@@ -3998,6 +3998,22 @@ void Options_ScreenPosMenu_ConfigDraw(void) // 0x801E5CBC
 static s32 g_PcBrtRow = 0;
 
 #define PC_BRT_ROWS 4
+#ifdef SH_XBOX_PORT
+/* The Xbox grade has no saturation stage (gpu_nv2a.c GpuNv2a_ImageAdjust: a
+ * blend-only grade cannot see a pixel's luminance), so that row is not shown;
+ * the others keep their PC row numbers. */
+static const s32 PC_BRT_VIS[] = { 0, 1, 3 };
+#define PC_BRT_VIS_N 3
+
+static s32 Pc_BrtVisIndex(s32 row)
+{
+    s32 i;
+    for (i = 0; i < PC_BRT_VIS_N; i++)
+        if (PC_BRT_VIS[i] == row)
+            return i;
+    return 0;
+}
+#endif
 /* Top row's y in percent, 8 per row after it. 52 put CLASSIC under the
  * reference bar on a 224-line frame (bottom ~15% of the picture). */
 #define PC_BRT_ROW_Y0 40.0f
@@ -4076,12 +4092,20 @@ void Options_BrightnessMenu_Control(void) // 0x801E6018
 
                 if (g_Controller0->pulsedBtnFlags & ControllerFlag_LStickUp)
                 {
+#ifdef SH_XBOX_PORT
+                    g_PcBrtRow = PC_BRT_VIS[(Pc_BrtVisIndex(g_PcBrtRow) + PC_BRT_VIS_N - 1) % PC_BRT_VIS_N];
+#else
                     g_PcBrtRow = (g_PcBrtRow + PC_BRT_ROWS - 1) % PC_BRT_ROWS;
+#endif
                     Sd_PlaySfx(Sfx_MenuMove, 0, Q8(0.25f));
                 }
                 if (g_Controller0->pulsedBtnFlags & ControllerFlag_LStickDown)
                 {
+#ifdef SH_XBOX_PORT
+                    g_PcBrtRow = PC_BRT_VIS[(Pc_BrtVisIndex(g_PcBrtRow) + 1) % PC_BRT_VIS_N];
+#else
                     g_PcBrtRow = (g_PcBrtRow + 1) % PC_BRT_ROWS;
+#endif
                     Sd_PlaySfx(Sfx_MenuMove, 0, Q8(0.25f));
                 }
                 if (g_Controller0->pulsedBtnFlags & ControllerFlag_LStickLeft)
@@ -4209,15 +4233,24 @@ void Options_BrightnessMenu_ConfigDraw(void) // 0x801E6238
     vals[1] = &g_cfg_contrast;
     vals[2] = &g_cfg_saturation;
 
+#ifdef SH_XBOX_PORT
+    s32 vi;
+    for (vi = 0; vi < PC_BRT_VIS_N; vi++)
+    {
+        const float y = PC_BRT_ROW_Y0 + (float)vi * 8.0f;
+        i = PC_BRT_VIS[vi];
+#else
     for (i = 0; i < PC_BRT_ROWS; i++)
     {
+        const float y = PC_BRT_ROW_Y0 + (float)i * 8.0f;
+#endif
         if (i == 3)
         {
             /* 0-7, not a percentage: this is the console control's own scale,
              * and the reference lines behind the panel already move with it the
              * way they did in the original screen. */
             Gfx_StringSetColor(i == g_PcBrtRow ? StringColorId_Gold : StringColorId_White);
-            Gfx_StringSetPosition(SCREEN_POSITION_X(22.0f), SCREEN_POSITION_Y(PC_BRT_ROW_Y0 + (float)i * 8.0f));
+            Gfx_StringSetPosition(SCREEN_POSITION_X(22.0f), SCREEN_POSITION_Y(y));
             Gfx_StringDraw(NAMES[i], 20);
             Gfx_StringDrawInt(3, (s32)g_GameWork.config.brightness);
             continue;
@@ -4227,7 +4260,7 @@ void Options_BrightnessMenu_ConfigDraw(void) // 0x801E6238
          * Selection shown by gold vs white — no bracket glyph (the menu font
          * renders '[' as a curly quote). */
         Gfx_StringSetColor(i == g_PcBrtRow ? StringColorId_Gold : StringColorId_White);
-        Gfx_StringSetPosition(SCREEN_POSITION_X(22.0f), SCREEN_POSITION_Y(PC_BRT_ROW_Y0 + (float)i * 8.0f));
+        Gfx_StringSetPosition(SCREEN_POSITION_X(22.0f), SCREEN_POSITION_Y(y));
         Gfx_StringDraw(NAMES[i], 20);
         Gfx_StringDrawInt(3, (s32)((*vals[i] * 100.0f) + 0.5f));
     }

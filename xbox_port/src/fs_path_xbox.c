@@ -37,10 +37,15 @@ static const char* XboxFs_Resolve(const char* in, char* out, size_t cap)
     if (in == NULL)
         return NULL;
 
+    /* "\..." is an NT object path (\Device\...) and stays absolute; a leading
+     * '/' is a POSIX root, which on this console can only mean the game's own
+     * folder. */
     if (!(((in[0] >= 'A' && in[0] <= 'Z') || (in[0] >= 'a' && in[0] <= 'z')) && in[1] == ':') &&
-        in[0] != '\\' && in[0] != '/')
+        in[0] != '\\')
     {
         const char* home = Cd_XboxMountHome() ? "Q:\\" : "D:\\";
+        while (s[0] == '/')
+            s++;
         while (s[0] == '.' && (s[1] == '/' || s[1] == '\\'))
             s += 2;
         while (*home && d + 1 < cap)

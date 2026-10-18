@@ -14,6 +14,19 @@
 #include "bodyprog/screen/screen_data.h"
 #include "pc_config.h"
 
+/* PC's GR_ImageAdjustActive with DbgOverlay_Render's scene-frame rule: the
+ * grade applies to frames that render the 3D world (InGame / MapEvent) and to
+ * the Brightness screen (g_cfg_calibBar), so its preview responds; never the
+ * menus, paper map, save screen or FMVs. image_adjust_scope=0 grades all. */
+int Xbox_ImageAdjustInScope(void)
+{
+    extern int g_cfg_calibBar;
+
+    return !g_PcConfig.imageAdjustScope || g_cfg_calibBar ||
+           g_GameWork.gameState == GameState_InGame ||
+           g_GameWork.gameState == GameState_MapEvent;
+}
+
 void Pc_LowHealthGlowUpdate(void)
 {
     #define GLOW_HP_MAX   20

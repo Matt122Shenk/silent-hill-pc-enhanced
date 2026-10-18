@@ -131,6 +131,14 @@ void XboxConfig_ApplyOverrides(void)
     g_PcConfig.audioOutput = 0;
     g_PcConfig.adsr        = 1;
 
+    /* Output grade (Brightness screen), as main_pc.c applies it at boot. */
+    {
+        extern float g_cfg_brightness, g_cfg_contrast, g_cfg_saturation;
+        g_cfg_brightness = g_PcConfig.brightness;
+        g_cfg_contrast   = g_PcConfig.contrast;
+        g_cfg_saturation = 1.0f;   /* no blend-only form on Xbox (gpu_nv2a.c) */
+    }
+
     /* Voice + movie master volumes, as main_pc.c applies them at boot. */
     {
         extern float g_PcXaVolume, g_PcFmvVolume;

@@ -872,29 +872,44 @@ void GpuNv2a_BindWhite(void)
     GpuNv2a_BindTexture(s_whiteTex, WHITE_TEX_DIM, WHITE_TEX_DIM);
 }
 
-/* Output brightness below 1.0 (g_cfg_brightness, the PC renderer's final
- * multiply): one black quad over the content rect at alpha 1-b. The only
- * writer on Xbox is the Dark Harry easter egg, whose "light going out" fade
- * drives it; above 1.0 there is nothing to do (the game's own Brightness
- * screen covers the usual adjustment). Called after the OT walk and before the
- * present, so it darkens exactly the finished game picture. */
-void GpuNv2a_BrightnessDim(float brightness)
+/* The PC renderer's output grade (PsyX_render.cpp post shader):
+ *     col = (col - 0.5) * contrast + 0.5;  col *= brightness;
+ * done here with no framebuffer read at all -- each step is one full-content
+ * quad of a constant colour under a fixed-function blend:
+ *     multiply by m < 1 :  dst * m                (ZERO, SRC_COLOR)
+ *     multiply by m > 1 :  dst + dst * (m - 1)    (DST_COLOR, ONE)
+ *     add k             :  dst + k                (ONE, ONE, add)
+ *     subtract k        :  dst - k                (ONE, ONE, reverse-subtract)
+ * Contrast above 1 subtracts BEFORE it multiplies, so both clamps land where
+ * the shader's would (a negative clamps at 0 first, a highlight at 1 last).
+ * Saturation needs each pixel's luminance and has no blend-only form; the Xbox
+ * Brightness screen does not offer it. */
+static void Nv2a_BlendRaw(uint32_t sfactor, uint32_t dfactor, uint32_t equation)
+{
+    uint32_t* p;
+    GpuNv2a_FlushBatch();
+    p = pb_begin();
+    p = pb_push1(p, NV097_SET_BLEND_ENABLE, 1);
+    p = pb_push1(p, NV097_SET_BLEND_FUNC_SFACTOR, sfactor);
+    p = pb_push1(p, NV097_SET_BLEND_FUNC_DFACTOR, dfactor);
+    p = pb_push1(p, NV097_SET_BLEND_EQUATION, equation);
+    pb_end(p);
+}
+
+static void Nv2a_ContentQuad(float c)
 {
     ShVertex v[6];
-    float    a, x0, x1, y1;
+    float    x0 = (float)g_Nv2aContentX;
+    float    x1 = x0 + (float)g_Nv2aContentW;
+    float    y1 = (float)g_Nv2aContentH;
     int      i;
 
-    if (!(brightness < 0.999f))
-        return;
-    a = 1.0f - (brightness < 0.0f ? 0.0f : brightness);
-
-    x0 = (float)g_Nv2aContentX;
-    x1 = x0 + (float)g_Nv2aContentW;
-    y1 = (float)g_Nv2aContentH;
-
+    if (c < 0.0f) c = 0.0f;
+    if (c > 1.0f) c = 1.0f;
     memset(v, 0, sizeof(v));
     for (i = 0; i < 6; i++) {
-        v[i].col[3] = a;
+        v[i].col[0] = v[i].col[1] = v[i].col[2] = c;
+        v[i].col[3] = 1.0f;
         v[i].pos[3] = 1.0f;
     }
     v[0].pos[0] = x0; v[0].pos[1] = 0.0f;
@@ -903,11 +918,62 @@ void GpuNv2a_BrightnessDim(float brightness)
     v[3] = v[1];
     v[4].pos[0] = x1; v[4].pos[1] = y1;
     v[5] = v[2];
+    GpuNv2a_EmitTris(v, 6);
+}
 
-    GpuNv2a_SetBlendMode(1);   /* src-alpha / one-minus-src-alpha */
+static void Nv2a_Multiply(float m)
+{
+    if (m < 0.999f) {
+        Nv2a_BlendRaw(NV097_SET_BLEND_FUNC_SFACTOR_V_ZERO, NV097_SET_BLEND_FUNC_DFACTOR_V_SRC_COLOR,
+                      NV097_SET_BLEND_EQUATION_V_FUNC_ADD);
+        Nv2a_ContentQuad(m);
+    } else if (m > 1.001f) {
+        Nv2a_BlendRaw(NV097_SET_BLEND_FUNC_SFACTOR_V_DST_COLOR, NV097_SET_BLEND_FUNC_DFACTOR_V_ONE,
+                      NV097_SET_BLEND_EQUATION_V_FUNC_ADD);
+        Nv2a_ContentQuad(m - 1.0f);
+    }
+}
+
+static void Nv2a_Offset(float k)
+{
+    if (k > 0.002f) {
+        Nv2a_BlendRaw(NV097_SET_BLEND_FUNC_SFACTOR_V_ONE, NV097_SET_BLEND_FUNC_DFACTOR_V_ONE,
+                      NV097_SET_BLEND_EQUATION_V_FUNC_ADD);
+        Nv2a_ContentQuad(k);
+    } else if (k < -0.002f) {
+        Nv2a_BlendRaw(NV097_SET_BLEND_FUNC_SFACTOR_V_ONE, NV097_SET_BLEND_FUNC_DFACTOR_V_ONE,
+                      NV097_SET_BLEND_EQUATION_V_FUNC_REVERSE_SUBTRACT);
+        Nv2a_ContentQuad(-k);
+    }
+}
+
+/* Called after the OT walk and before the present, so it grades exactly the
+ * finished game picture (the RA badge is drawn after it, ungraded). Neutral
+ * values cost nothing. */
+void GpuNv2a_ImageAdjust(float brightness, float contrast)
+{
+    const int contrastOn   = (contrast < 0.999f || contrast > 1.001f);
+    const int brightnessOn = (brightness < 0.999f || brightness > 1.001f);
+
+    if (!contrastOn && !brightnessOn)
+        return;
+
     GpuNv2a_SetScissor(0, 0, 0, 0);
     GpuNv2a_BindWhite();
-    GpuNv2a_EmitTris(v, 6);
+
+    if (contrastOn) {
+        if (contrast > 1.0f) {
+            Nv2a_Offset(-0.5f * (contrast - 1.0f) / contrast);
+            Nv2a_Multiply(contrast);
+        } else {
+            Nv2a_Multiply(contrast < 0.0f ? 0.0f : contrast);
+            Nv2a_Offset(0.5f * (1.0f - contrast));
+        }
+    }
+    if (brightnessOn)
+        Nv2a_Multiply(brightness < 0.0f ? 0.0f : brightness);
+
+    GpuNv2a_SetBlendMode(0);
 }
 
 /* GPU-DMA-able contiguous, write-combined memory for decoded textures. */

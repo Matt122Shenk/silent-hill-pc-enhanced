@@ -19,6 +19,7 @@
  * PsyX_SPUAL.cpp; the voice-attribute semantics mirror PsyX_SPUAL_SetVoiceAttr.
  */
 #include <string.h>
+#include <stdlib.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <psyq/libspu.h>   /* the SAME header the game's libsd compiles against —
@@ -105,6 +106,7 @@ typedef struct {
      * replacement of unknown rate (a whole-bank VAB mod, which only the
      * game's pitch can pace). */
     double         ovrScale;
+    short*         ovrOwned;    /* heap copy of a replacement longer than VOICE_PCM_CAP */
 } Voice;
 
 static Voice s_v[SPU_VOICES];
@@ -633,6 +635,7 @@ void SpuInit(void)
         s_v[i].loopStart = -1;
         s_v[i].loopEnd   = -1;
         s_v[i].ovrScale  = 1.0;
+        s_v[i].ovrOwned  = NULL;
         s_v[i].volL      = 0x3FFF;
         s_v[i].volR      = 0x3FFF;
         s_v[i].pitch     = 4096;
@@ -760,17 +763,26 @@ void SpuSetKey(int on_off, unsigned int voice_bit)
 
             v->pcm      = s_voicePcm[i];
             v->ovrScale = 1.0;
+            free(v->ovrOwned);
+            v->ovrOwned = NULL;
             if (g_PsyX_SfxOverride != NULL &&
                 g_PsyX_SfxOverride((int)v->addr, &modPcm, &modCount, &modRate) &&
                 modPcm != NULL && modCount > 0) {
-                /* A replacement that fits is copied, so the voice never reads
-                 * registry memory a bank reload frees; a longer one plays in
-                 * place, the same trade PsyCross's software SPU makes. */
-                if (modCount <= VOICE_PCM_CAP) {
-                    memcpy(v->pcm, modPcm, (size_t)modCount * sizeof(short));
-                } else {
-                    v->pcm = (short*)modPcm;
+                /* Always a COPY: pc_sfx_override.c frees a slot's PCM when the
+                 * next bank loads into it (every weapon switch, area load)
+                 * without asking whether a voice still plays it, and this heap
+                 * hands big freed blocks back to the system, so playing in
+                 * place could fault the mixer mid-sample. A long replacement
+                 * gets its own heap copy, released at this voice's next key-on;
+                 * if that allocation fails it is cut to the voice buffer. */
+                if (modCount > VOICE_PCM_CAP) {
+                    v->ovrOwned = (short*)malloc((size_t)modCount * sizeof(short));
+                    if (v->ovrOwned != NULL)
+                        v->pcm = v->ovrOwned;
+                    else
+                        modCount = VOICE_PCM_CAP;
                 }
+                memcpy(v->pcm, modPcm, (size_t)modCount * sizeof(short));
                 v->pcmLen = modCount;
                 ls = le = -1;
                 if (modRate > 0 && v->pitch > 0)

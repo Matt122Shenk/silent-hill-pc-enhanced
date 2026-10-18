@@ -839,8 +839,11 @@ static int ProcessPoly(P_TAG* tag)
             PutVertUV(&v[0], p3->x0, p3->y0, p3->r0, p3->g0, p3->b0, p3->u0, p3->v0);
             PutVertUV(&v[1], p3->x1, p3->y1, p3->r1, p3->g1, p3->b1, p3->u1, p3->v1);
             PutVertUV(&v[2], p3->x2, p3->y2, p3->r2, p3->g2, p3->b2, p3->u2, p3->v2);
-            /* GT3 fog pads: v0 borrows v1's (p1); v2 = p2 (PsyCross parity). */
-            ApplyFog(&v[0], p3->p1);
+            /* GT3 fog pads: v0's own slot is the command code, so the game now
+             * writes v0's fog into pad2 marked with bit 15 (character and wide
+             * drawers); an unmarked pad2 is a path that does not carry it, and
+             * v0 falls back to v1's value. v1/v2 = p1/p2 (PsyCross parity). */
+            ApplyFog(&v[0], (p3->pad2 & 0x8000u) ? (int)(p3->pad2 & 0x7F) : (int)p3->p1);
             ApplyFog(&v[1], p3->p1);
             ApplyFog(&v[2], p3->p2);
             if (g_PsxUsePgxp && !s_itemDepthOn)

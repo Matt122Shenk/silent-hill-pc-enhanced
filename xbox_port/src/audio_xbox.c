@@ -67,7 +67,14 @@ typedef struct {
     int            volL, volR;  /* per-voice volume, Q14 (0..0x3FFF) */
     unsigned short pitch;        /* raw pitch (4096 = native) */
     double         step;        /* decoded samples advanced per output frame */
-    double         pos;         /* fractional play position in pcm[] */
+    /* The mixer's play cursor: integer sample + 16-bit fraction, advanced by
+     * step16 (= step in 16.16, refreshed wherever step changes). A double
+     * cursor cost three double->int truncations per voice per output sample,
+     * and with no SSE2 on the Pentium III every one is an x87 control-word
+     * swap -- millions a second with the town's voice count. */
+    int            posInt;
+    unsigned int   posFrac16;
+    unsigned int   step16;
     int            pcmLen;      /* decoded sample count */
     int            loopStart;   /* loop region [loopStart,loopEnd); -1 = no loop */
     int            loopEnd;
@@ -83,7 +90,7 @@ typedef struct {
     EnvPhase       envPhase;
     int            envLevel;    /* 0..0x7FFF */
     int            envCounter;  /* cycles accumulator */
-    double         envTickAcc;  /* fractional 44100Hz-tick accumulator */
+    int            envTick160;  /* 44100Hz envelope clock: 147/160 tick per 48k frame */
     unsigned short adsr1, adsr2;
 
     /* Positional (azimuth) 3D audio. The game computes the emitter azimuth
@@ -389,6 +396,21 @@ static void RevRecomputeWet(void)
     s_wet = s_reverbOn ? w : 0.0f;
 }
 
+/* Frames since any voice last sent to the reverb bus. The network is then
+ * idle -- its state has decayed to nothing -- so it is zeroed once and skipped
+ * until a send arrives. Same output as stepping it, without ~140 float ops a
+ * sample through every quiet stretch (menus, silent rooms, the gaps between
+ * BGM phrases). 2 s is well past the ~1.2 s the combs take to fall 60 dB. */
+#define REV_IDLE_FRAMES (2 * OUT_HZ)
+static int s_revQuietFrames = 0;
+
+static void RevClear(void)
+{
+    memset(s_combBuf, 0, sizeof(s_combBuf));
+    memset(s_combLP,  0, sizeof(s_combLP));
+    memset(s_apBuf,   0, sizeof(s_apBuf));
+}
+
 static float RevProcess(int ch, float in)   /* one sample, one channel */
 {
     int   i, spread = ch ? 25 : 0;   /* stereo decorrelation on the right */
@@ -434,8 +456,6 @@ void Audio_RenderInto6(short* out, short* rear, short* cenLfe, int frames)
         return;
     }
 
-    const double envRate = (double)SRC_HZ / (double)OUT_HZ;
-
     for (f = 0; f < frames; f++) {
         int   L = 0, R = 0, C = 0;
         int   haflerL = 0, haflerR = 0;   /* pre-XA front, for the rear feed */
@@ -445,12 +465,11 @@ void Audio_RenderInto6(short* out, short* rear, short* cenLfe, int frames)
         for (i = 0; i < SPU_VOICES; i++) {
             Voice* v = &s_v[i];
             int    idx, s0, s1, s;
-            double frac;
 
             if (!v->active)
                 continue;
 
-            idx = (int)v->pos;
+            idx = v->posInt;
             if (idx < 0 || idx >= v->pcmLen) { v->active = 0; continue; }
 
             /* Linear interpolation between the two nearest samples (was
@@ -459,16 +478,17 @@ void Audio_RenderInto6(short* out, short* rear, short* cenLfe, int frames)
             if (v->looping && idx + 1 >= v->loopEnd) s1 = v->pcm[v->loopStart];
             else if (idx + 1 < v->pcmLen)            s1 = v->pcm[idx + 1];
             else                                     s1 = s0;
-            frac = v->pos - (double)idx;
-            s = s0 + (int)((s1 - s0) * frac);
+            /* frac in Q14 keeps (s1-s0)*frac inside 32 bits for any s16 pair. */
+            s = s0 + (((s1 - s0) * (int)(v->posFrac16 >> 2)) >> 14);
 
             /* ADSR: scale by the envelope level (Q15), advanced at 44100Hz. */
             if (v->hasEnv) {
-                int ticks;
-                v->envTickAcc += envRate;
-                ticks = (int)v->envTickAcc;
-                v->envTickAcc -= ticks;
-                if (ticks) EnvelopeAdvance(v, ticks);
+                /* SRC/OUT = 44100/48000 = 147/160 exactly: at most one tick. */
+                v->envTick160 += 147;
+                if (v->envTick160 >= 160) {
+                    v->envTick160 -= 160;
+                    EnvelopeAdvance(v, 1);
+                }
                 if (v->envPhase == ENV_OFF) { v->active = 0; continue; }
                 s = (s * v->envLevel) >> 15;
             }
@@ -505,11 +525,13 @@ void Audio_RenderInto6(short* out, short* rear, short* cenLfe, int frames)
                 if (v->reverb) { revInL += (float)dl; revInR += (float)dr; }
             }
 
-            v->pos += v->step;
+            v->posFrac16 += v->step16;
+            v->posInt    += (int)(v->posFrac16 >> 16);
+            v->posFrac16 &= 0xFFFFu;
             if (v->looping) {
-                if (v->pos >= (double)v->loopEnd)
-                    v->pos -= (double)(v->loopEnd - v->loopStart);
-            } else if ((int)v->pos >= v->pcmLen) {
+                if (v->posInt >= v->loopEnd)
+                    v->posInt -= v->loopEnd - v->loopStart;
+            } else if (v->posInt >= v->pcmLen) {
                 v->active = 0;
             }
         }
@@ -544,7 +566,11 @@ void Audio_RenderInto6(short* out, short* rear, short* cenLfe, int frames)
          * the wet so fades/pause-duck carry it. Always step the network (even at
          * wet 0) so the delay lines keep flushing and a later note has no stale
          * tail. This wash is what restores the "missing layers" of SH BGM. */
-        {
+        if (revInL != 0.0f || revInR != 0.0f)
+            s_revQuietFrames = 0;
+        else if (s_revQuietFrames <= REV_IDLE_FRAMES && ++s_revQuietFrames > REV_IDLE_FRAMES)
+            RevClear();
+        if (s_revQuietFrames <= REV_IDLE_FRAMES) {
             float wl = RevProcess(0, revInL);
             float wr = RevProcess(1, revInR);
             if (s_wet > 0.0f) {
@@ -716,6 +742,7 @@ void SpuSetVoiceAttr(SpuVoiceAttr* a)
         if (a->mask & SPU_VOICE_PITCH) {
             v->pitch = a->pitch;
             v->step  = ((double)SRC_HZ / (double)OUT_HZ) * ((double)a->pitch / 4096.0) * v->ovrScale;
+            v->step16 = (unsigned int)(v->step * 65536.0 + 0.5);
         }
         /* Capture the ADSR registers the sequencer programs (key_on mask 0x6019F,
          * adsr_set, rr_off). A voice with a programmed envelope runs the ADSR. */
@@ -792,16 +819,18 @@ void SpuSetKey(int on_off, unsigned int voice_bit)
             }
             if (v->ovrScale != oldScale && oldScale > 0.0)
                 v->step = v->step / oldScale * v->ovrScale;
+            v->step16    = (unsigned int)(v->step * 65536.0 + 0.5);
             v->loopStart = ls;
             v->loopEnd   = le;
             v->looping   = (le > 0 && ls >= 0 && le <= v->pcmLen);
-            v->pos       = 0.0;
+            v->posInt    = 0;
+            v->posFrac16 = 0;
             v->active    = (v->pcmLen > 0);
             if (v->hasEnv) {                 /* start the ADSR from silence (attack) */
                 v->envPhase   = ENV_ATTACK;
                 v->envLevel   = 0;
                 v->envCounter = 0;
-                v->envTickAcc = 0.0;
+                v->envTick160 = 0;
             }
 
             /* Positional 3D: claim the azimuth armed for this key-on (sd_call.c

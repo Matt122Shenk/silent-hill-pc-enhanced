@@ -2185,7 +2185,14 @@ void Gfx_FogOverlayQuadDraw(s16 arg0, s16 arg1, s16 arg2, s16 arg3, s32 arg4, s3
         SetPriority(packet, 0, 0);
         AddPrim(tag, packet);
 
-        poly           = (POLY_G4*)(packet + 0xC);
+        /* The 0xC/0x30/60/72 offsets below were PSX packet sizes (4-byte
+         * tag). This port's packet header is 8 bytes (addr + len/pgxp), so
+         * POLY_G4 is 40 bytes and the hardcoded layout made the DR_MODE
+         * header land on the quad's x3/y3 word and the closing priority
+         * node land on the DR_MODE's second code word. Size everything from
+         * sizeof instead; sizeof(DR_MODE) also covers a priority node,
+         * which is header-only. */
+        poly           = (POLY_G4*)(packet + sizeof(DR_MODE));
         GsOUT_PACKET_P = (PACKET*)poly;
 
         *(u32*)&poly->r0 =
@@ -2205,17 +2212,17 @@ void Gfx_FogOverlayQuadDraw(s16 arg0, s16 arg1, s16 arg2, s16 arg3, s32 arg4, s3
         setSemiTrans(poly, true);
         AddPrim(tag, poly);
 
-        mode           = (DR_MODE*)(packet + 0x30);
+        mode           = (DR_MODE*)((PACKET*)poly + sizeof(POLY_G4));
         GsOUT_PACKET_P = (PACKET*)mode;
         SetDrawMode(mode, 0, 1, 32, NULL);
         AddPrim(tag, mode);
 
-        packet2        = packet + 60;
+        packet2        = (PACKET*)mode + sizeof(DR_MODE);
         GsOUT_PACKET_P = packet2;
         SetPriority(packet2, 1, 1);
         AddPrim(tag, packet2);
 
-        GsOUT_PACKET_P = packet + 72;
+        GsOUT_PACKET_P = packet2 + sizeof(DR_MODE);
     }
 }
 

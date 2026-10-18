@@ -976,7 +976,13 @@ int Xbox_Ra_Snapshot(XbRaAch* out, int max)
     return n;
 }
 
-static void Ra_ShowUnlock(const char* title, unsigned points, const char* badge_name)
+/* Present one queued card (called by dbg_overlay_xbox.c when the previous
+ * card has finished): chime, card text, badge. Doing the sound and the
+ * blocking badge fetch HERE, one card at a time, is what lets several unlocks
+ * from a single frame (the results screen fires rank + ending + clear
+ * together) each be seen and heard, with one fetch per card instead of a
+ * burst of back-to-back downloads inside the event handler. */
+void Ra_XboxPresentCard(const char* title, unsigned points, const char* badge_name)
 {
     extern void DbgOverlay_XboxUnlock(const char* title, unsigned points);
     extern int  RaBadge_Fetch(const char*);
@@ -992,6 +998,12 @@ static void Ra_ShowUnlock(const char* title, unsigned points, const char* badge_
            (badge_name && badge_name[0]) ? badge_name : "-");
     if (badge_name && badge_name[0])
         RaBadge_Fetch(badge_name);
+}
+
+static void Ra_ShowUnlock(const char* title, unsigned points, const char* badge_name)
+{
+    extern void DbgOverlay_XboxUnlockEnqueue(const char* title, unsigned points, const char* badge);
+    DbgOverlay_XboxUnlockEnqueue(title, points, badge_name);
 }
 
 /* RetroAchievements injects 0-point "Warning: Unknown Emulator" / "Unsupported

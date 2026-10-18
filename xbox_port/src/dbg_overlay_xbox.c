@@ -109,6 +109,31 @@ static uint32_t s_unlockPushMs;
 static int      s_unlockActive = 0;
 static int      s_unlockTextX  = 44;         /* left x of the text, computed per card */
 
+/* Cards waiting behind the one on screen. Four, like the PC toast queue; a
+ * fifth unlock in the same burst replaces the newest waiting one. */
+#define UNLOCK_QUEUE_MAX 4
+typedef struct {
+    char     title[TOAST_LINE_LEN];
+    char     badge[32];
+    unsigned points;
+} UnlockCard;
+static UnlockCard s_unlockQ[UNLOCK_QUEUE_MAX];
+static int        s_unlockQCount = 0;
+
+void DbgOverlay_XboxUnlockEnqueue(const char* title, unsigned points, const char* badge)
+{
+    UnlockCard* c;
+
+    if (s_unlockQCount >= UNLOCK_QUEUE_MAX)
+        s_unlockQCount = UNLOCK_QUEUE_MAX - 1;
+    c = &s_unlockQ[s_unlockQCount++];
+    memset(c, 0, sizeof(*c));
+    strncpy(c->title, (title && title[0]) ? title : "Achievement", sizeof(c->title) - 1);
+    if (badge)
+        strncpy(c->badge, badge, sizeof(c->badge) - 1);
+    c->points = points;
+}
+
 /* Badge quad placement (640x480 space), computed with the card so the image lines
  * up with the centered text. Read by ra_badge_xbox.c's RaBadge_RenderDirect. The
  * defaults keep an un-armed badge harmless. */
@@ -250,6 +275,16 @@ void DbgOverlay_XboxRender(void)
         }
     }
     s_count = w;
+
+    /* Next queued unlock card once the current one has gone. */
+    if (!s_unlockActive && s_unlockQCount > 0)
+    {
+        extern void Ra_XboxPresentCard(const char* title, unsigned points, const char* badge);
+        UnlockCard  c = s_unlockQ[0];
+        memmove(&s_unlockQ[0], &s_unlockQ[1], sizeof(UnlockCard) * (size_t)(s_unlockQCount - 1));
+        s_unlockQCount--;
+        Ra_XboxPresentCard(c.title, c.points, c.badge);
+    }
 
     if (s_count == 0 && !s_unlockActive)
         return; /* nothing live — cheap no-op (also the safe early-boot path) */

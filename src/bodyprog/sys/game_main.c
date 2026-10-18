@@ -3442,7 +3442,16 @@ void MainLoop(void) // 0x80032EE0
             }
 
             dtRaw    = MIN(dtTrue, PC_DT_STEP_15FPS);
+#ifdef SH_XBOX_PORT
+            /* The Xbox runs AT or BELOW 30fps, so the 30fps cap here turned
+             * every slow town frame into slow motion -- and silently undid the
+             * vCount /15 floor above, which this block overwrites. The 15fps
+             * step is the PSX's own floor (see the cap comment above); the
+             * cutscene debt below then only banks time lost past it. */
+            dtCapped = dtRaw;
+#else
             dtCapped = MIN(dtRaw, PC_DT_STEP_30FPS);
+#endif
 
             /* The ~22s escape-run movie in the Good+ ending (ME_03300) otherwise
              * banked the 2s debt maximum and fast-forwarded the scene after it. */

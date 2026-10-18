@@ -128,7 +128,7 @@ static s32 g_PcOptionsMenu_Page       = 0; /* 0 = Graphics, 1 = System, 2 = Cont
  * which is the right behaviour for a pointer that is already there. */
 s32 g_PcOptions_HighlightSnap = 0;
 
-enum { PCK_INT, PCK_RES, PCK_FILTER, PCK_WINMODE, PCK_VSYNC, PCK_SLIDER, PCK_MAP, PCK_FLMODE, PCK_CAMSTYLE, PCK_PLAYAS, PCK_NEXT, PCK_PREV, PCK_BACK, PCK_EXITMENU, PCK_RASTATUS, PCK_QSAVE, PCK_QLOAD };
+enum { PCK_INT, PCK_RES, PCK_FILTER, PCK_WINMODE, PCK_VSYNC, PCK_SLIDER, PCK_MAP, PCK_FLMODE, PCK_CAMSTYLE, PCK_PLAYAS, PCK_CHEAT, PCK_NEXT, PCK_PREV, PCK_BACK, PCK_EXITMENU, PCK_RASTATUS, PCK_QSAVE, PCK_QLOAD };
 
 /* PC-options row origin. The heading sits at y=20 and the rows used to start at 56,
  * leaving a full empty row beneath it while the pages ran off the BOTTOM of the
@@ -396,7 +396,27 @@ static const s_PcOpt PCOPT_X4[] = {
     { "Low_HP_Glow",     &g_PcConfig.lowHealthGlow,     "low_health_glow",     VAL_ONOFF,   2, LBL_ONOFF,   NULL,            1, PCK_INT      },
     { "Dark_Harry",      &g_PcConfig.darkHarry,         "dark_harry",          VAL_ONOFF,   2, LBL_ONOFF,   NULL,            1, PCK_INT      },
     { "Prev_Page",       NULL,                          NULL,                  NULL,        0, NULL,        NULL,            0, PCK_PREV     },
+    { "Next_Page",       NULL,                          NULL,                  NULL,        0, NULL,        NULL,            0, PCK_NEXT     },
     { "Back",            NULL,                          NULL,                  NULL,        0, NULL,        NULL,            0, PCK_BACK     },
+};
+
+/* Page 5: the PC quick menu's Cheats rows. PCK_CHEAT rows hand everything to
+ * pc_cheats.c (nVals = its row index), so they drive the same globals the PC
+ * menu and console do. Nothing here persists: a cheat lasts for the session.
+ * Left out on purpose: Unlimited enemies (the console cannot afford the extra
+ * characters), Play as (page 3 has it) and Free camera (PC mouse controls). */
+static const s_PcOpt PCOPT_X5[] = {
+    { "God_Mode",             NULL, NULL, NULL, 0, NULL, NULL, 1, PCK_CHEAT },
+    { "Noclip",               NULL, NULL, NULL, 1, NULL, NULL, 1, PCK_CHEAT },
+    { "Enemies_Ignore_Harry", NULL, NULL, NULL, 2, NULL, NULL, 1, PCK_CHEAT },
+    { "Infinite_Ammo",        NULL, NULL, NULL, 4, NULL, NULL, 1, PCK_CHEAT },
+    { "Big_Head_Mode",        NULL, NULL, NULL, 5, NULL, NULL, 1, PCK_CHEAT },
+    { "Handgun_Bullets_+15",  NULL, NULL, NULL, 6, NULL, NULL, 1, PCK_CHEAT },
+    { "Hunting_Rifle_+30",    NULL, NULL, NULL, 7, NULL, NULL, 1, PCK_CHEAT },
+    { "Shotgun_+30",          NULL, NULL, NULL, 8, NULL, NULL, 1, PCK_CHEAT },
+    { "Kill_Nearby_Enemies",  NULL, NULL, NULL, 9, NULL, NULL, 1, PCK_CHEAT },
+    { "Prev_Page",            NULL, NULL, NULL, 0, NULL, NULL, 0, PCK_PREV  },
+    { "Back",                 NULL, NULL, NULL, 0, NULL, NULL, 0, PCK_BACK  },
 };
 #endif
 
@@ -441,9 +461,13 @@ const s_PcOpt* PcOpt_PageByIndex(int page, int* count)
 static const s_PcOpt* PcOpt_Page(int* count)
 {
 #ifdef SH_XBOX_PORT
-    /* Four pages. PCOPT_X ends in NEXT, X2 and X3 have PREV+NEXT, PCOPT_X4 ends
-     * in PREV, so the page index only ever reaches 0..3. */
-    if (g_PcOptionsMenu_Page >= 3) {
+    /* Five pages. PCOPT_X ends in NEXT, X2..X4 have PREV+NEXT, PCOPT_X5 ends
+     * in PREV, so the page index only ever reaches 0..4. */
+    if (g_PcOptionsMenu_Page >= 4) {
+        *count = (int)(sizeof(PCOPT_X5) / sizeof(PCOPT_X5[0]));
+        return PCOPT_X5;
+    }
+    if (g_PcOptionsMenu_Page == 3) {
         *count = (int)(sizeof(PCOPT_X4) / sizeof(PCOPT_X4[0]));
         return PCOPT_X4;
     }
@@ -502,6 +526,12 @@ static const char* PcOpt_ValueLabel(const s_PcOpt* e, char* buf, int bufsz)
         extern int         Pc_PlayAs_Current(void);
         return Pc_PlayAs_Label(Pc_PlayAs_Current());
     }
+#ifdef SH_XBOX_PORT
+    if (e->kind == PCK_CHEAT) {
+        extern const char* Pc_Cheats_Label(int page, int idx, char* buf, int bufsz);
+        return Pc_Cheats_Label(0 /* PC_CHEATS_PAGE_CHEATS */, e->nVals, buf, bufsz);
+    }
+#endif
     if (e->kind == PCK_MAP) {
         return g_PcConfig.mapName[0] ? g_PcConfig.mapName : "map0_s00";
     }
@@ -556,6 +586,13 @@ static void PcOpt_Adjust(const s_PcOpt* e, int dir)
         Pc_PlayAs_Cycle(dir);   /* persists itself via PcConfig_SaveKeyValue */
         return;
     }
+#ifdef SH_XBOX_PORT
+    if (e->kind == PCK_CHEAT) {
+        extern void Pc_Cheats_Adjust(int page, int idx, int dir);
+        Pc_Cheats_Adjust(0 /* PC_CHEATS_PAGE_CHEATS */, e->nVals, dir);   /* plays its own sound */
+        return;
+    }
+#endif
     if (e->kind == PCK_RES) {
         int i, idx = 0;
         for (i = 0; i < PC_RES_COUNT; i++)
@@ -1576,6 +1613,16 @@ void Options_PcOptionsMenu_Control(void)
 
         /* Every value row (INT/RES/FILTER/WINMODE/VSYNC/SLIDER) adjusts on
          * left/right; only the action rows (NEXT/PREV/BACK) are excluded. */
+#ifdef SH_XBOX_PORT
+        if (sel->kind == PCK_CHEAT) {
+            /* Rising edge, and either direction or confirm fires the row once:
+             * a toggle flips, an action (ammo, kill nearby) runs. */
+            if (g_Controller0->clickedBtnFlags &
+                (ControllerFlag_LStickRight | ControllerFlag_LStickLeft | g_GameWorkPtr->config.controllerConfig.enter))
+                PcOpt_Adjust(sel, (g_Controller0->clickedBtnFlags & ControllerFlag_LStickLeft) ? -1 : +1);
+        }
+        else
+#endif
         if (sel->kind == PCK_PLAYAS) {
             /* Rising edge ONLY. pulsedBtnFlags auto-repeats, and every cycle here
              * is a SYNCHRONOUS model + skin reload off the disc image — a held

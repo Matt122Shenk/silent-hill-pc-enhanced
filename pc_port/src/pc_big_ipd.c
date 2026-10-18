@@ -35,6 +35,7 @@
 
 #include "pc_big_ipd.h"
 #include "pc_big_lm.h" /* Pc_LooseFOpen — same loose-file open semantics */
+#include "pc_config.h"
 #include "sh_log.h"
 
 /* One entry per distinct destination buffer. PC_MAX_IPD_CHUNKS (256) owned
@@ -194,7 +195,10 @@ void Pc_BigIpd_EnsureCapacity(void** pDest, s32 fileIdx)
     size_t        have;
     PcBigIpdSlot* e;
 
-    if (pDest == NULL || *pDest == NULL)
+    /* Loose files off (the default): nothing on disk can replace this chunk,
+     * so skip the two failed file opens BigIpd_ProbeSize would make for every
+     * chunk the streamer reads (pc_big_tmd.c has the same exit). */
+    if (pDest == NULL || *pDest == NULL || !g_PcConfig.allowLooseFiles)
     {
         return;
     }

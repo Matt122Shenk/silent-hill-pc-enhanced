@@ -11,6 +11,9 @@
 #include "bodyprog/math/math.h"
 #include "bodyprog/sound/sound_system.h"
 #include "main/fsqueue.h"
+#ifdef SH_PC_PORT
+#include "sh_log.h"
+#endif
 
 s_800C4818 D_800C4818;
 s32 __pad_bss_800C483C;
@@ -25,11 +28,18 @@ extern s_WorldEnvWork g_WorldEnvWork; /* flare-occlusion facing test */
  * ring ("donut") normal. Opting these prims out keeps the rest of the scene
  * PGXP-correct. No-op when PGXP is off, self-clears after one prim. */
 extern void PsyX_SetNextPrimAffine(void);
+/* Keep the reflective octagon out of the per-pixel flashlight (Classic look at
+ * all times): under PGXP the bright reflection albedo blows out white otherwise. */
+extern void PsyX_SetNextPrimNoFlashlight(void);
 /* Propagate a projected vertex's PGXP + view-space shadow along a plain CPU
  * word copy (dst = src). The reflection band reuses g4[0]'s/the apex's screen
  * words this way; without propagation those verts carry zero view-Z, so the
  * per-pixel flashlight reconstructs a garbage normal and blows the water out. */
 extern void Shadow_Copy(void* dst, const void* src);
+/* The chest lens flare (func_8008D990) is a SEPARATE effect from the water
+ * reflection prims and must never be gated on PGXP/flashlight state. */
+extern int g_PsxUsePgxp;
+extern int g_PsyX_UsePerPixelFlashlight;
 #endif
 
 // ========================================
@@ -247,9 +257,17 @@ s32 func_8008D850(void) // 0x8008D850
             g_WorldEnvWork.field_60.vy + ((s32)g_WorldEnvWork.field_58.vy << 2),
             g_WorldEnvWork.field_60.vz + ((s32)g_WorldEnvWork.field_58.vz << 2));
         deltaZ  = m0.t[2] - m1.t[2]; /* > 0 = beam points toward camera */
+        /* The probe step is (field_58 << 2) in Q12, but deltaZ comes from
+         * Vw_WorldScreenMatrixAtPositionGet whose t[] is Q8 (inputs go through
+         * Q12_TO_Q8), so stepLen must be Q8 too: (<<2)>>4 net = >>2. The old
+         * <<2 left stepLen 16x too large, making the full-intensity knee below
+         * unreachable - the flare lived permanently on the linear cos ramp
+         * capped at half intensity, and its ramp target tracked every
+         * chest-bone wobble instead of pinning at full like the PSX binary
+         * seed-pixel test: the reported flicker/wander. */
         stepLen = SquareRoot0(((s32)g_WorldEnvWork.field_58.vx * g_WorldEnvWork.field_58.vx) +
                               ((s32)g_WorldEnvWork.field_58.vy * g_WorldEnvWork.field_58.vy) +
-                              ((s32)g_WorldEnvWork.field_58.vz * g_WorldEnvWork.field_58.vz)) << 2;
+                              ((s32)g_WorldEnvWork.field_58.vz * g_WorldEnvWork.field_58.vz)) >> 2;
         if (deltaZ <= 0 || stepLen == 0)
         {
             return 0;
@@ -257,13 +275,24 @@ s32 func_8008D850(void) // 0x8008D850
         /* PSX rendered the full halo+star whenever the chest light faced the
          * camera (the 1x1 seed pixel survived the readback), i.e. an
          * effectively binary "frontal -> full" response. Without framebuffer
-         * readback we approximate with the beam-vs-camera-Z cosine, but
-         * saturate it hard so the flare reads at full strength across nearly
-         * the whole frontal hemisphere (cos >= ~0.12, ~82 deg) and only fades
-         * within the last few degrees before edge-on. The earlier *3 knee
-         * left the flare scaled well below full at ordinary viewing angles,
-         * so the halo and ray star almost vanished vs hardware. */
-        deltaZ *= 8;
+         * readback we approximate with the beam-vs-camera-Z cosine.
+         *
+         * The probe offset is 4.0 world units, which is 1024 in the Q8 space
+         * t[] lives in, and stepLen is that same 1024 -- so deltaZ / stepLen is
+         * exactly cos(beam, camera), with no knee needed.
+         *
+         * A `deltaZ *= 8` used to sit here. It was added (eae7e5582) to
+         * compensate for stepLen being 16x too large, which starved the factor
+         * everywhere; 69b58b39b then fixed that unit mismatch at the source but
+         * left the compensation behind, so the factor saturated to full across
+         * cos >= 0.125 -- ~83 of the 90 degrees of the frontal hemisphere. That
+         * pinned field_A at its ceiling permanently: the halo sat at its
+         * maximum 33px/RGB45, and the ray star at RGB 144 instead of the ~11
+         * hardware shows at oblique angles. Measured against a DuckStation
+         * capture at the same 9x scale, our saturated-pixel area was 83x the
+         * reference. The raw cosine restores the smooth fade, and full strength
+         * with the ray star now only arrives as the light turns to face the
+         * camera, which is what hardware does. */
         if (deltaZ >= stepLen)
         {
             return Q12(1.0f);
@@ -700,17 +729,25 @@ void func_8008E5B4(void) // 0x8008E5B4
     s32              temp_v0;
     s_func_8008E5B4* packet;
 
-#ifdef SH_XBOX_PORT
-    /* This composites the scrolling tpage-45 caustic into an OFFSCREEN VRAM
-     * scratch (D_800AFDA4 = RECT 832,224 = tpage 13) via a private DrawOTag, and
-     * the water surface then samples tpage 13. The NV2A renders to a real
-     * surface, not into the emulated VRAM array, so there is no offscreen
-     * render-to-VRAM here: the generation quads leak straight onto the screen as
-     * the small animated grey square, permanently, for as long as water is in
-     * view. (At 720p it is squarely visible — VRAM x=832 falls inside a
-     * 1280-wide framebuffer.) Skip it, exactly as the PC port did before it grew
-     * an offscreen FBO path (46daf37f8): the VISIBLE reflection is
-     * func_8008E794, which samples tpage 45 directly and is unaffected. */
+#ifdef SH_PC_PORT
+    /* The water surface reads this tile back as a 4bpp texture through
+     * another palette, so each colour word must be bit-exact GPU output;
+     * the GL offscreen round trip was not. Rasterize the two 1:1 layers in
+     * software (PsyX_VramDrawTexturedRect) in the order DrawOTag drew them:
+     * the opaque base, then the additive copy; dtd is on (main.c). */
+    if (g_DeltaTime != Q12(0.0f))
+    {
+        D_800AFDAC++;
+    }
+
+    PsyX_VramDrawTexturedRect(D_800AFDA4.x, D_800AFDA4.y, D_800AFDA4.w, D_800AFDA4.h,
+                              45, 14, 0, (D_800AFDAC >> 1) & 0x1F, 0, 1);
+    PsyX_VramDrawTexturedRect(D_800AFDA4.x, D_800AFDA4.y, D_800AFDA4.w, D_800AFDA4.h,
+                              45, 14, ((D_800AFDAC + 1) >> 2) & 0x1F, 8, 1, 1);
+
+    (void)drawEnv;
+    (void)temp_v0;
+    (void)packet;
     return;
 #endif
 
@@ -885,6 +922,10 @@ void func_8008EA68(SVECTOR* arg0, VECTOR3* posXz, q19_12 posY) // 0x8008EA68
     GsOT_TAG*        spD4;
     GsOT_TAG*        ot;
 
+    /* PC: the per-pixel flashlight's untextured-albedo fix (u_untextured in
+     * PsyCross GPU_LIT_TAIL) bounds the beam's add by this octagon's own dark
+     * vertex colors, so it no longer saturates white under PGXP + per-pixel —
+     * the earlier hard skip here is gone and the octagon draws in all modes. */
     ot         = g_OrderingTable0[g_ActiveBufferIdx].org;
     sp50.flg   = false;
     sp50.coord = GsIDMATRIX;
@@ -999,12 +1040,16 @@ void func_8008EA68(SVECTOR* arg0, VECTOR3* posXz, q19_12 posY) // 0x8008EA68
         Shadow_Copy(&poly->g4[1].x3, &poly->g4[0].x3);
 
         PsyX_SetNextPrimAffine();
+        PsyX_SetNextPrimNoFlashlight();
         AddPrim(spD0, &poly->g4[0]);
         PsyX_SetNextPrimAffine();
+        PsyX_SetNextPrimNoFlashlight();
         AddPrim(spD0, &poly->g3[0]);
         PsyX_SetNextPrimAffine();
+        PsyX_SetNextPrimNoFlashlight();
         AddPrim(spD4, &poly->g4[1]);
         PsyX_SetNextPrimAffine();
+        PsyX_SetNextPrimNoFlashlight();
         AddPrim(spD4, &poly->g3[1]);
 #else
         AddPrim(spD0, &poly->g4[0]);

@@ -2048,7 +2048,7 @@ void func_800D947C(void) // 0x800D947C
      * sharing the backing is safe. Also restores the ceremony particles the
      * SH_F3D48_ENTRY_CORRUPT guard had to drop (flame UV cycling / missing
      * floors / misplaced Harry+Cybil run textures / results-screen meshes). */
-    D_800F3D48 = &D_800F2448;
+    D_800F3D48 = D_800F2448;
 #else
     D_800F3D48 = (s_800F3D48*)FS_BUFFER_27;
 #endif
@@ -2087,12 +2087,18 @@ void func_800D952C(void) // 0x800D952C
     s_800F3D58* ptr0;
     s_800F3D48* ptr1;
 
-    D_800F3D48 = &D_800F2448;
+    D_800F3D48 = D_800F2448;
     D_800F2438 = 80;
 
     ptr0 = &D_800F3D58;
 
-    memset(&D_800F2448, 0xA5, 0x1900);
+#ifdef SH_PC_PORT
+    /* The declaration has to stay big enough for the write, or a toolchain that
+     * checks object sizes turns this into an abort. Fail the build instead. */
+    _Static_assert(sizeof(D_800F2448) >= 0x1900,
+                   "D_800F2448 must cover the 0x1900 pool memset");
+#endif
+    memset(D_800F2448, 0xA5, 0x1900);
 
     ptr1 = D_800F3D48;
 
@@ -3363,8 +3369,19 @@ bool func_800DBCA4(MATRIX* mat, VECTOR3* outVec) // 0x800DBCA4
 
 void func_800DBD94(s_800F3DAC* arg0, GsOT_TAG* ot) // 0x800DBD94
 {
+#ifdef SH_PC_PORT
+    /* func_800DBA08 projects arg0[0] AND arg0[1] (it does arg0++): the PSX
+     * stack had sp10/sp18 adjacent at sp+0x10/sp+0x18. As separate locals the
+     * PC compiler places sp18 BELOW sp10, so the second RotTransPers projected
+     * whatever host stack slot sat above sp10 (an OT pointer) as an SVECTOR ->
+     * exploded/missing Incubus lightning quads. Force real adjacency. */
+    SVECTOR       spVec[2];
+#define sp10 spVec[0]
+#define sp18 spVec[1]
+#else
     SVECTOR       sp10;
     SVECTOR       sp18;
+#endif
     VECTOR3       sp20;
     s32           sp30;
     s32           sp34;
@@ -3511,7 +3528,24 @@ void func_800DBD94(s_800F3DAC* arg0, GsOT_TAG* ot) // 0x800DBD94
         if ((u16)var_s6 > 320 && (u32)(var_s6 >> 16) > 224 &&
             (u16)var_s5 > 320 && (u32)(var_s5 >> 16) > 224)
         {
-            // @hack Some optimized out code?
+            /* NOT a lost off-screen cull -- verified against retail
+             * VIN/MAP7_S03.BIN (sha1 f6524a4f78b9862a030b931d9f954346ed228231,
+             * = configs/USA/maps/map7_s03.yaml, link base 0x800C9578).
+             *
+             * The four-way test above decodes exactly as written here
+             * (0x800DC24C andi 0xFFFF / sltiu 0x141 / sra 16 / sltiu 0xE1), and
+             * the ENTIRE body of the taken branch is one instruction:
+             *   0x800DC280: 8FA30030   lw $v1, 0x30($sp)
+             * which falls through to 0x800DC284, the branch's own skip target.
+             * $v1 is dead on both successors (redefined at 0x800DC2C4
+             * `addiu $v1,$zero,0x40` before any read on the emit path, never
+             * read on the *var_s3 == 0 path). So RETAIL EMITS the quad for
+             * fully off-screen segments.
+             *
+             * Turning this into a `continue` would diverge from the original and
+             * chop up bolts the PSX draws. Two independent disassembly passes
+             * have now reached that conclusion; this note exists so the next
+             * reader does not spend a third. */
             temp_v1 = sp30;
             temp_v1++;
             temp_v1--;
@@ -3556,6 +3590,10 @@ void func_800DBD94(s_800F3DAC* arg0, GsOT_TAG* ot) // 0x800DBD94
     packet         = poly;
     GsOUT_PACKET_P = packet;
 }
+#ifdef SH_PC_PORT
+#undef sp10
+#undef sp18
+#endif
 
 void func_800DC3EC(s_800F3DAC* arg0) // 0x800DC3EC
 {

@@ -486,13 +486,14 @@ int   g_PsxWholeMapFar     = 0;
 int   g_PsxWholeMapLastSz  = 0;
 int   g_PsxWholeMapChunkSz = 0;
 
-/* Fixed-angle camera FIX_ANG top-clip correction (PsyX_render.cpp comment:
- * "defaults are the PSX +-112/+-96" / "g_PsxWorldVShift = 20.0f"). These are
- * permanent tuned constants (no g_PcConfig field overrides them - only the
- * PC-only debug console's live `vshift`/`bartop`/`barbot` commands can, and
- * those are excluded on Xbox), so the compiled-in PC default IS the shipped
- * behavior on Xbox too, not a placeholder. */
-float g_PsxWorldVShift    = 20.0f;
+/* Live vertical-shift knob ON TOP of the console anchor (Pc_WorldAnchorOfy,
+ * game_main.c: GsInit3D's +8 puts the GTE centre at the console's (160,120)).
+ * The 20 this used to be was a FIX_ANG band-aid for two errors the PC port has
+ * since root-caused -- that missing 8-row anchor and GsIDMATRIX2's fabricated
+ * 3/4 world-Y squash -- and both are fixed in the shared code now. Keeping 20
+ * would stack it on the anchor (ofy 28). 0 is PsyCross's default too. The
+ * letterbox bar rows below are unchanged PSX values. */
+float g_PsxWorldVShift    = 0.0f;
 int   g_PsxFixedCamActive = 0; /* driven live by vc_main.c */
 int   g_PsxCutsceneActive = 0; /* driven live by game_main.c */
 int   g_PsxUIOrthoPass    = 0; /* driven live by game_main.c */

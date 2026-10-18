@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <Import Project="$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props" Condition="Exists('$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props')" />
   <PropertyGroup>
@@ -48,6 +48,9 @@
     <Reference Include="System.Xml.Linq" />
     <Reference Include="System.Data.DataSetExtensions" />
     <Reference Include="Microsoft.CSharp" />
+    <!-- Microsoft.VisualBasic.FileIO.FileSystem.DeleteFile is the only in-box way
+         to send a file to the Recycle Bin (DdsConverter's delete-source path). -->
+    <Reference Include="Microsoft.VisualBasic" />
     <Reference Include="System.Data" />
     <Reference Include="System.Deployment" />
     <Reference Include="System.Drawing" />
@@ -60,6 +63,8 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="DisplayModes.cs" />
+    <Compile Include="DllWarningDialog.cs" />
+    <Compile Include="PeImports.cs" />
     <Compile Include="Form1.cs">
       <SubType>Form</SubType>
     </Compile>
@@ -68,14 +73,69 @@
     </Compile>
     <Compile Include="ConfigManager.cs" />
     <Compile Include="DiscProbe.cs" />
+    <Compile Include="FfmpegCheck.cs" />
     <Compile Include="BinExtractor.cs" />
     <Compile Include="TimConverter.cs" />
     <Compile Include="ClutComposer.cs" />
+    <Compile Include="AtlasPrep.cs" />
+    <Compile Include="GeometryPrep.cs" />
+    <Compile Include="IlmObjConverter.cs" />
+    <Compile Include="AnmFile.cs" />
+    <Compile Include="TmdFile.cs" />
+    <Compile Include="TmdObjConverter.cs" />
+    <Compile Include="TmdPageDialog.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="UsHdFontDialog.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="PgxpFogDialog.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="ResidentTexturesDialog.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="ConverterActions.cs" />
+    <Compile Include="DdsConverter.cs" />
+    <Compile Include="ModelViewerForm.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="VabFile.cs" />
+    <Compile Include="VabDuplicates.cs" />
+    <Compile Include="DuplicateSoundsDialog.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="MsgTable.cs" />
+    <Compile Include="DiscText.cs" />
+    <Compile Include="JpnMsgMap.cs" />
+    <Compile Include="RuCharsets.cs" />
+    <Compile Include="XaSubtitles.cs" />
+    <Compile Include="XaTable.cs" />
+    <Compile Include="XaToolForm.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="SfxTable.cs" />
+    <Compile Include="VagEncoder.cs" />
+    <Compile Include="AudioToolForm.cs">
+      <SubType>Form</SubType>
+    </Compile>
     <Compile Include="ControlsForm.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="RetroAchievementsForm.cs">
       <SubType>Form</SubType>
     </Compile>
     <Compile Include="Program.cs" />
     <Compile Include="UpdateChecker.cs" />
+    <Compile Include="FlagIcon.cs" />
+    <Compile Include="LanguageDialog.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="Loc.cs" />
+    <Compile Include="Loc.Strings.cs" />
+    <Compile Include="Loc.Strings.ModManager.cs" />
+    <Compile Include="Loc.Strings.Dialogs.cs" />
+    <Compile Include="Loc.Strings.Tools.cs" />
     <Compile Include="LauncherSettings.cs" />
     <Compile Include="ChangelogViewer.cs" />
     <Compile Include="BuildSettingsForm.cs">
@@ -86,6 +146,9 @@
     </Compile>
     <Compile Include="ModManager.cs" />
     <Compile Include="ModManagerForm.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="HighPolyDialog.cs">
       <SubType>Form</SubType>
     </Compile>
     <Compile Include="ProgressDialog.cs">
@@ -117,6 +180,13 @@
          LICENSE-7zip.txt beside the launcher. -->
     <EmbeddedResource Include="7za.exe">
       <LogicalName>SilentHillPC_Launcher.7za.exe</LogicalName>
+    </EmbeddedResource>
+    <!-- Microsoft DirectXTex texconv (MIT). Embedded so DdsConverter can
+         materialize it to a temp path and run it as a separate process for
+         PNG<->BC7 .dds conversion — no managed-DLL load surface. Lives in
+         pc_port/tools/ (referenced by relative path, flattened by LogicalName). -->
+    <EmbeddedResource Include="..\..\tools\texconv.exe">
+      <LogicalName>SilentHillPC_Launcher.texconv.exe</LogicalName>
     </EmbeddedResource>
     <EmbeddedResource Include="Properties\Resources.resx">
       <Generator>ResXFileCodeGenerator</Generator>

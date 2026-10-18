@@ -93,6 +93,13 @@ namespace SilentHillPC_Launcher
             new Release("PAL 99-06-07 (SLES-01514)",             0x337E4A60, 0xB8FC, 2310, DIRS_PAL,   FILE_TYPES,       FLAG_ENCRYPTED_1ST),
         };
 
+        // The first four file-table entries carry the same names on every build
+        // ("2ZANKO80", "2ZANKO_E", "BASE", "BODYPROG"), so they anchor a scan for
+        // the table in an exe whose CRC we don't recognize — a rebuilt/fan-patched
+        // disc shifts the table away from the baked TocOffset. Same anchor the game
+        // uses in Pc_RemapFileTableFromDisc (main_pc.c).
+        private static readonly string[] TOC_SIGNATURE = { "2ZANKO80", "2ZANKO_E", "BASE    ", "BODYPROG" };
+
         public sealed class ExtractResult
         {
             public bool Ok;
@@ -101,6 +108,7 @@ namespace SilentHillPC_Launcher
             public int Files;
             public int Textures;         // TIMs converted to PNG (0 unless convertTimToPng)
             public int TexturesDeleted;  // original TIMs removed after conversion (0 unless deleteTimAfterConvert)
+            public bool Cancelled;       // stopped between files: Files counts what is complete on disk
             public readonly List<string> Warnings = new List<string>();
         }
 
@@ -365,9 +373,133 @@ namespace SilentHillPC_Launcher
         /// <paramref name="convertTimToPng"/> is set, every extracted TIM also gets a
         /// same-named .png beside it; if <paramref name="deleteTimAfterConvert"/> is also
         /// set, the original .TIM is removed once its .png is written. <paramref name="report"/>
-        /// receives (done, total, name).
+        /// receives (done, total, name). <paramref name="cancelled"/> is polled between files —
+        /// each file is written in one call, so stopping never leaves a truncated one — and sets
+        /// <see cref="ExtractResult.Cancelled"/>; whatever was already written stays put, since
+        /// the output folder is the user's own and may not be ours to delete.
         /// </summary>
-        public static ExtractResult Extract(string binPath, string outDir, bool convertTimToPng, bool deleteTimAfterConvert, Action<int, int, string> report)
+        /// <summary>Disc-absolute start sectors of the nine XA voice files, indexed 1..9
+        /// like the game's g_FileXaLoc (0 and 10 are sentinels), read from the disc's
+        /// own file table so a fan disc that rearranged the CD resolves the way the
+        /// game does. Returns null when the image or its table cannot be read, or the
+        /// release ships no XA container.</summary>
+        /// <summary>One entry of the game's file table, as the disc lays it out.</summary>
+        public sealed class DiscFile
+        {
+            public string FullPath;   // "VIN/MAP0_S00.BIN", "XA/05_02152"
+            public int    Lba;        // disc-absolute start sector
+            public int    Bytes;      // size in bytes (256-byte units on disc; 0 = unknown)
+        }
+
+        /// <summary>The game's whole file table (the exe's TOC), or null with an error.
+        /// A fan-patched exe is located by the table's signature the way the game does.</summary>
+        public static List<DiscFile> ReadFileTable(string binPath, out string error)
+        {
+            error = null;
+            try
+            {
+                using (var f = new FileStream(binPath, FileMode.Open, FileAccess.Read, FileShare.Read))
+                {
+                    Release rel;
+                    var entries = ReadTable(f, binPath, out rel, out error);
+                    if (entries == null) return null;
+                    var list = new List<DiscFile>(entries.Count);
+                    foreach (var e in entries)
+                        list.Add(new DiscFile { FullPath = e.FullPath, Lba = e.Lba, Bytes = e.Size * 256 });
+                    return list;
+                }
+            }
+            catch (Exception ex)
+            {
+                error = ex.Message;
+                return null;
+            }
+        }
+
+        /// <summary>The raw bytes of a file-table entry (2048 data bytes per raw sector,
+        /// no decryption), or null.</summary>
+        public static byte[] ReadDiscFile(string binPath, DiscFile file)
+        {
+            if (file == null || file.Bytes <= 0) return null;
+            try
+            {
+                using (var f = new FileStream(binPath, FileMode.Open, FileAccess.Read, FileShare.Read))
+                {
+                    var reader = new ArchiveReader(f, file.Lba, file.Bytes, 24, 2048);
+                    return reader.Read(0, file.Bytes);
+                }
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private static List<TableEntry> ReadTable(FileStream f, string binPath, out Release rel, out string error)
+        {
+            error = null;
+            rel = null;
+            IsoFile exeRec = FindRootFile(f, IsExeName);
+            if (exeRec == null) { error = "No PSX boot executable found in the disc image."; return null; }
+            var exeReader = new ArchiveReader(f, exeRec.ExtentLba, exeRec.DataLen, 24, 2048);
+            byte[] exe = exeReader.Read(0, exeRec.DataLen);
+            uint crc = Crc32(exe, 4096);
+            rel = Detect(crc);
+            if (rel == null)
+            {
+                var probed = DiscProbe.Probe(binPath);
+                Release baseRel = (probed == null) ? null : RegionFallback(probed.Region);
+                int toc = (baseRel == null) ? -1 : FindTocBySignature(exe);
+                if (toc < 0) { error = "Unrecognized disc executable; the file table could not be located."; return null; }
+                rel = new Release(baseRel.Id + " [modified exe]", crc, toc, baseRel.FileCount,
+                                  baseRel.Dirs, baseRel.Types, baseRel.Flags);
+            }
+            var entries = new List<TableEntry>(rel.FileCount);
+            int pos = rel.TocOffset;
+            for (int i = 0; i < rel.FileCount; i++)
+            {
+                if (pos + 12 > exe.Length) break;
+                uint meta = LE32(exe, pos), file1 = LE32(exe, pos + 4), file2 = LE32(exe, pos + 8);
+                pos += 12;
+                TableEntry e;
+                if (!DecodeEntry(meta, file1, file2, rel, out e)) continue;
+                entries.Add(e);
+            }
+            return entries;
+        }
+
+        public static int[] ReadXaFileSectors(string binPath, out string error)
+        {
+            error = null;
+            try
+            {
+                using (var f = new FileStream(binPath, FileMode.Open, FileAccess.Read, FileShare.Read))
+                {
+                    Release rel;
+                    var entries = ReadTable(f, binPath, out rel, out error);
+                    if (entries == null) return null;
+                    if ((rel.Flags & FLAG_NO_XA) != 0) { error = "This release has no XA voice container."; return null; }
+
+                    var xa = new List<TableEntry>();
+                    foreach (var e in entries)
+                        if (e.FullPath.StartsWith("XA/", StringComparison.Ordinal)) xa.Add(e);
+                    if (xa.Count == 0) { error = "No XA entries in the disc's file table."; return null; }
+                    // The game's index order is ascending disc position.
+                    xa.Sort((a, b) => a.Lba.CompareTo(b.Lba));
+                    var sectors = new int[11];
+                    for (int i = 0; i < xa.Count && i < 9; i++) sectors[i + 1] = xa[i].Lba;
+                    return sectors;
+                }
+            }
+            catch (Exception ex)
+            {
+                error = ex.Message;
+                return null;
+            }
+        }
+
+        public static ExtractResult Extract(string binPath, string outDir, bool convertTimToPng, bool deleteTimAfterConvert,
+                                            Action<int, int, string> report, Func<bool> cancelled = null)
         {
             var res = new ExtractResult();
             try
@@ -384,8 +516,28 @@ namespace SilentHillPC_Launcher
                     var exeReader = new ArchiveReader(f, exeRec.ExtentLba, exeRec.DataLen, 24, 2048);
                     byte[] exe = exeReader.Read(0, exeRec.DataLen);
 
-                    Release rel = Detect(Crc32(exe, 4096));
-                    if (rel == null) { res.Error = string.Format("Unrecognized executable checksum ({0:X8}) — not a supported Silent Hill disc.", Crc32(exe, 4096)); return res; }
+                    uint crc = Crc32(exe, 4096);
+                    Release rel = Detect(crc);
+                    if (rel == null)
+                    {
+                        // Fan-patched or rebuilt disc: the exe matches no known build, but its
+                        // dirs/types/oddities are still the region's. Take those from the boot
+                        // serial and locate the table by its first four entries — a rebuild
+                        // shifts it, so the baked TocOffset can't be trusted.
+                        var probed = DiscProbe.Probe(binPath);
+                        Release baseRel = (probed == null) ? null : RegionFallback(probed.Region);
+                        int toc = (baseRel == null) ? -1 : FindTocBySignature(exe);
+                        if (toc < 0)
+                        {
+                            res.Error = string.Format("Unrecognized executable checksum ({0:X8}) — not a supported Silent Hill disc.", crc);
+                            return res;
+                        }
+                        rel = new Release(baseRel.Id + " [modified exe]", crc, toc, baseRel.FileCount,
+                                          baseRel.Dirs, baseRel.Types, baseRel.Flags);
+                        res.Warnings.Add(string.Format(
+                            "Unrecognized exe (CRC {0:X8}) — file table located by signature at 0x{1:X}, using {2} defaults.",
+                            crc, toc, probed.Region));
+                    }
                     res.ReleaseId = rel.Id;
 
                     // Parse the table into SILENT. (all non-XA) and HILL. (XA) lists.
@@ -411,12 +563,14 @@ namespace SilentHillPC_Launcher
                     int done = 0;
 
                     var silentReader = new ArchiveReader(f, silentRec.ExtentLba, silentRec.DataLen, 24, 2048);
-                    ExtractList(silent, outDir, silentReader, 2048, rel.Flags, convertTimToPng, deleteTimAfterConvert, res, ref done, total, report);
+                    ExtractList(silent, outDir, silentReader, 2048, rel.Flags, convertTimToPng, deleteTimAfterConvert, res, ref done, total, report, cancelled);
+
+                    if (res.Cancelled) { res.Ok = true; return res; }
 
                     if ((rel.Flags & FLAG_NO_XA) == 0 && hillRec != null && hill.Count > 0)
                     {
                         var hillReader = new ArchiveReader(f, hillRec.ExtentLba, hillRec.DataLen, 16, 2336);
-                        ExtractList(hill, outDir, hillReader, 2336, rel.Flags, false, false, res, ref done, total, report);
+                        ExtractList(hill, outDir, hillReader, 2336, rel.Flags, false, false, res, ref done, total, report, cancelled);
                     }
                     else if (hill.Count > 0)
                     {
@@ -439,15 +593,68 @@ namespace SilentHillPC_Launcher
             return null;
         }
 
+        // Retail release whose directory/type/flag layout a patched disc of this
+        // region still follows (DiscProbe.Disc.Region key -> release).
+        private static Release RegionFallback(string region)
+        {
+            switch (region)
+            {
+                case "USA": return Detect(0xCF9CD8E5); // NTSC 1.1 99-02-10
+                case "PAL": return Detect(0x337E4A60); // PAL 99-06-07
+                case "JAP": return Detect(0xEB733CAA); // NTSC-J Rev 1/2 99-06-02
+            }
+            return null;
+        }
+
+        // Four 6-bit chars packed low-to-high, as the file table stores names.
+        private static uint EncodeName4(string s, int start)
+        {
+            uint v = 0;
+            for (int i = 0; i < 4; i++) v |= (uint)((s[start + i] - 32) & 63) << (6 * i);
+            return v;
+        }
+
+        /// <summary>
+        /// Byte offset of the file table in <paramref name="exe"/>, found by matching
+        /// TOC_SIGNATURE against the first four entries' name fields, or -1.
+        /// Non-ALT_STRUCT layout only (all three retail regions).
+        /// </summary>
+        private static int FindTocBySignature(byte[] exe)
+        {
+            var n0123 = new uint[4];
+            var n4567 = new uint[4];
+            for (int k = 0; k < 4; k++)
+            {
+                n0123[k] = EncodeName4(TOC_SIGNATURE[k], 0);
+                n4567[k] = EncodeName4(TOC_SIGNATURE[k], 4);
+            }
+
+            for (int off = 0x800; off + 4 * 12 <= exe.Length; off += 4)
+            {
+                bool hit = true;
+                for (int k = 0; k < 4 && hit; k++)
+                {
+                    int p = off + k * 12;
+                    hit = ((LE32(exe, p + 4) >> 4) & 0xFFFFFF) == n0123[k]
+                       && (LE32(exe, p + 8) & 0xFFFFFF) == n4567[k];
+                }
+                if (hit) return off;
+            }
+            return -1;
+        }
+
         private static void ExtractList(List<TableEntry> entries, string outDir, ArchiveReader reader,
                                         int sectorSize, uint flags, bool convertTimToPng, bool deleteTimAfterConvert,
-                                        ExtractResult res, ref int done, int total, Action<int, int, string> report)
+                                        ExtractResult res, ref int done, int total, Action<int, int, string> report,
+                                        Func<bool> cancelled)
         {
             if (entries.Count == 0) return;
             int baseLba = entries[0].Lba;
 
             for (int index = 0; index < entries.Count; index++)
             {
+                if (cancelled != null && cancelled()) { res.Cancelled = true; return; }
+
                 TableEntry e = entries[index];
                 long logicalOff = (long)(e.Lba - baseLba) * sectorSize;
 

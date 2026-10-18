@@ -11,6 +11,10 @@ typedef unsigned char      Uint8;
 typedef unsigned short     Uint16;
 typedef unsigned int       Uint32;
 typedef unsigned long long Uint64;
+typedef signed char        Sint8;
+typedef signed short       Sint16;
+typedef signed int         Sint32;
+typedef signed long long   Sint64;
 
 typedef enum { SDL_FALSE = 0, SDL_TRUE = 1 } SDL_bool;
 

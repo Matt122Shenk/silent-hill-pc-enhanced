@@ -5,6 +5,7 @@
 #ifdef SH_PC_PORT
 #include <stdio.h>
 #include "sh_log.h"
+#include "pc_cheats.h"
 #endif
 
 #include "bodyprog/bodyprog.h"
@@ -357,6 +358,9 @@ void Anim_PlaybackOnce(s_Model* model, s_AnmHeader* anmHdr, GsCOORDINATE2* boneC
     if ((model->anim.flags & AnimFlag_Unlocked) || (model->anim.flags & AnimFlag_Visible))
     {
         Anim_BoneUpdate(anmHdr, boneCoords, newKeyframeIdx, newKeyframeIdx + 1, alpha);
+#ifdef SH_PC_PORT
+        Pc_BigHead_Apply(model->charaId, boneCoords);
+#endif
     }
 
     // Update frame data.
@@ -462,6 +466,9 @@ void Anim_PlaybackLoop(s_Model* model, s_AnmHeader* anmHdr, GsCOORDINATE2* boneC
     if ((model->anim.flags & AnimFlag_Unlocked) || (model->anim.flags & AnimFlag_Visible))
     {
         Anim_BoneUpdate(anmHdr, boneCoords, newKeyframeIdx0, newKeyframeIdx1, alpha);
+#ifdef SH_PC_PORT
+        Pc_BigHead_Apply(model->charaId, boneCoords);
+#endif
     }
 
     // Update frame data.
@@ -527,6 +534,9 @@ void Anim_BlendLinear(s_Model* model, s_AnmHeader* anmHdr, GsCOORDINATE2* boneCo
     if ((model->anim.flags & AnimFlag_Unlocked) || (model->anim.flags & AnimFlag_Visible))
     {
         Anim_BoneUpdate(anmHdr, boneCoords, startKeyframeIdx, endKeyframeIdx, alpha);
+#ifdef SH_PC_PORT
+        Pc_BigHead_Apply(model->charaId, boneCoords);
+#endif
     }
 
     // Update alpha.
@@ -603,6 +613,9 @@ void Anim_BlendEaseOut(s_Model* model, s_AnmHeader* anmHdr, GsCOORDINATE2* boneC
     if ((model->anim.flags & AnimFlag_Unlocked) || (model->anim.flags & AnimFlag_Visible))
     {
         Anim_BoneUpdate(anmHdr, boneCoords, startKeyframeIdx, endKeyframeIdx, alpha);
+#ifdef SH_PC_PORT
+        Pc_BigHead_Apply(model->charaId, boneCoords);
+#endif
     }
 
     // Update active keyframe.

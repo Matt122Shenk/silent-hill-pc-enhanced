@@ -2,9 +2,14 @@
 
 #ifdef SH_PC_PORT
 #include "sh_log.h"
-/* Door out-fade rate, 1/seconds in Q12. Q12(1.6f) ~= 0.63 s. See the fade-first
- * block in SysState_LoadArea_Update. */
+#ifdef SH_PC_PORT
+#include <time.h>
+/* Transition timing probe; see the [TXNTIME] log in SysState_LoadArea_Update. */
+int g_PcTxnStartMs = 0;
+int g_PcTxnFadeEndMs = 0;
+/* Door out-fade rate, 1/seconds in Q12. Q12(1.6f) ~= 0.63 s. Console TXNFADE. */
 s32 g_PcTxnFadeTimestep = Q12(1.6f);
+#endif
 #include <stdio.h>
 #endif
 
@@ -19,6 +24,10 @@ extern s_WorldEnvWork g_WorldEnvWork;
 #include "bodyprog/events/bodyprog_data_800A99B4.h"
 #include "bodyprog/events/events_main.h"
 #include "bodyprog/events/npc_main.h"
+#ifdef SH_PC_PORT
+#include "pc_pick.h"
+#include "pc_dark_harry.h"
+#endif
 #include "bodyprog/events/radio.h"
 #include "bodyprog/demo.h"
 #include "bodyprog/gfx/map_effects.h"
@@ -187,14 +196,11 @@ void GameState_InGame_Update(void) // 0x80038BD4
          * carries EventParamUnkState_0 (101 of the 513 ReadMessage map events do,
          * inconsistently -- in map0_s01 the pinball machine has it clear and the
          * radio has it set) or when no enemy is alive, so most flavor-text
-         * objects never held the frame: the world kept running under the text and
-         * vcMoveAndSetCamera kept easing the fixed camera, which reads as the view
-         * sliding to a slightly different angle and sitting there for as long as
-         * the message is up. Retail holds a frozen frame behind every examine, so
-         * neutralise the restore at its source rather than editing the PSX
-         * handler. Safe to clobber: g_DeltaTimeCpy is file-static, its only
-         * readers on a ReadMessage frame are those two restores, and it is rebuilt
-         * from the frame clock every tick a few lines above. Zero is
+         * objects never held the frame. Retail holds a frozen frame behind every
+         * examine, so neutralise the restore at its source rather than editing
+         * the PSX handler. Safe to clobber: g_DeltaTimeCpy is file-static, its
+         * only readers on a ReadMessage frame are those two restores, and it is
+         * rebuilt from the frame clock every tick a few lines above. Zero is
          * framerate-independent by construction, and the message box runs on
          * g_DeltaTimeRaw (map_msg_display.c), so roll-out, page timers and
          * dismissal are unaffected.
@@ -246,6 +252,18 @@ void GameState_InGame_Update(void) // 0x80038BD4
 
             if (g_MapEventSysState != SysState_Invalid)
             {
+#ifdef SH_PC_PORT
+                /* Second door path -- see the transition out-fade note in
+                 * SysState_Gameplay_Update. SysWork_StateSetNext sets sysState
+                 * immediately, so this site and that one are mutually exclusive
+                 * halves of the same transition, not a primary plus a fallback. */
+                if (g_MapEventSysState == SysState_LoadRoom ||
+                    g_MapEventSysState == SysState_LoadOverlay)
+                {
+                    extern int g_PsxFeedbackStoreAllowed;
+                    g_PsxFeedbackStoreAllowed = 2;
+                }
+#endif
                 SysWork_StateSetNext(g_MapEventSysState);
             }
         }
@@ -278,6 +296,19 @@ void GameState_InGame_Update(void) // 0x80038BD4
          * PSX game. The fallback third-person chase cam was a placeholder
          * before the road system worked. Now removed — original cameras active.
          * Debug camera (numpad *) still works independently. */
+        /* Alternate cameras (TPS/OTS/FPS, and the numpad free cam) replace the
+         * view matrix that vcMoveAndSetCamera just published, so they MUST run
+         * before any map hook that bakes screen coordinates. func_44 does exactly
+         * that: map4_s03's TV bank pulls GsWSMATRIX through
+         * Vw_WorldScreenMatrixAtPositionGet and RotTransPers's the screen quads on
+         * the spot, so with the camera applied afterwards the screens kept the
+         * classic camera's projection and stayed glued to the view while the rest
+         * of the room orbited. (Was below func_44; also the reason the free cam
+         * never moved those effects.) */
+        {
+            extern void DebugCamera_Update(void);
+            DebugCamera_Update();
+        }
 #endif
 
         if (g_MapOverlayHdr.func_44 != NULL)
@@ -286,15 +317,6 @@ void GameState_InGame_Update(void) // 0x80038BD4
         }
 
         Demo_DemoRandSeedRestore();
-
-#ifdef SH_PC_PORT
-        /* Debug camera toggle (numpad *). Without this call the toggle
-         * never fires and the free cam becomes unreachable. */
-        {
-            extern void DebugCamera_Update(void);
-            DebugCamera_Update();
-        }
-#endif
 
         player = &g_SysWork.playerWork.player;
         Player_Update(player, FS_BUFFER_0, g_SysWork.playerBoneCoords);
@@ -344,6 +366,10 @@ void GameState_InGame_Update(void) // 0x80038BD4
              * back negative — fixed at the lookup itself (PC_FOG_VTX_RAMP
              * in bodyprog_80055028.c), so the full fog+lighting pipeline
              * is safe for characters. */
+            Pc_Pick_CharaPreDraw(&g_SysWork.playerWork.player, -1, g_SysWork.playerBoneCoords);
+            /* Dark Harry easter egg (pc_dark_harry.c): drawn here with the
+             * other world characters. No-op unless he is present. */
+            Pc_DarkHarry_Draw();
             func_8003DA9C(Chara_Harry, g_SysWork.playerBoneCoords, 1, g_SysWork.playerWork.player.timer_C6, 0);
 #else
             func_8003DA9C(Chara_Harry, g_SysWork.playerBoneCoords, 1, g_SysWork.playerWork.player.timer_C6, 0);
@@ -358,7 +384,39 @@ void GameState_InGame_Update(void) // 0x80038BD4
         Game_NpcUpdate();
         func_8005E89C();
         Ipd_CloseRangeChunksInit();
+#ifdef SH_PC_PORT
+        /* Last point in the gameplay update, so every map/event caller has had
+         * its chance to write a positional sfx this frame. */
+        { extern void Pc_3dAudio_SustainPositionalLoops(void); Pc_3dAudio_SustainPositionalLoops(); }
+#endif
         Gfx_InGameDraw(1);
+#ifdef SH_PC_PORT
+        /* The world is in the OT for this frame, so the fog-colored clear behind
+         * it is correct. Without the world, that clear is the whole image. */
+        { extern int g_PcWorldDrawnThisFrame; g_PcWorldDrawnThisFrame = 1; }
+        /* ...and it must be framed Hor+, decided HERE rather than in MainLoop's
+         * gate. That gate runs before this submission, so its 2D-background hold
+         * (300ms past the last 2D frame) was still set on the first frames the
+         * world came back after the inventory: the picture -- and the minimap
+         * with it -- rendered 4:3 for ~2 frames before snapping (measured from a
+         * user recording: the minimap jumps to the pillarbox x-offset for exactly
+         * frames 141-142 of the exit). Submitting the world and choosing its
+         * framing in the same place cannot lag. The non-transient gates still
+         * win: the map screen and the paper-map/pickup protect flag. */
+        {
+            extern int g_PcHorPlusEnabled, g_PcMapScreenActive, g_PsxSkipFramebufferStore;
+            extern int g_PcWorldHorPlus;
+            /* Same exemption as MainLoop's gate: the ending raises the protect
+             * flag for its palettes while drawing a 3D cutscene. */
+            const int cutsceneLive = ((g_SysWork.sysFlags & SysFlag_CutsceneActive) ||
+                                      g_SysWork.cutsceneBorderState != CutsceneBorderState_None) ? 1 : 0;
+            if (!g_PcMapScreenActive && !(g_PsxSkipFramebufferStore && !cutsceneLive))
+                g_PcHorPlusEnabled = 1;
+            /* Record what the world is actually being drawn with, for HUD
+             * elements that lay out before this point in the frame. */
+            g_PcWorldHorPlus = g_PcHorPlusEnabled;
+        }
+#endif
         Demo_DemoRandSeedAdvance();
     }
 }
@@ -368,6 +426,34 @@ void SysState_Gameplay_Update(void) // 0x80038BD4
     s_SubCharacter* player;
 
     player = &g_SysWork.playerWork.player;
+
+#ifdef SH_PC_PORT
+    /* Randomizer settings panel (opened by tapping Map): while it is up, freeze
+     * the world and hand it input. Returning here skips Event_Update + every
+     * transition below, so nothing ticks and no state change fires. */
+    {
+        extern int  Pc_RandoSettings_IsOpen(void);
+        extern void Pc_RandoSettings_Update(int, int, int, int, int, int);
+        if (Pc_RandoSettings_IsOpen())
+        {
+            const s_ControllerConfig* cc = &g_GameWorkPtr->config.controllerConfig;
+            /* Same as the quick menu: the panel handles the mouse itself, so
+             * pad bits a mouse bind is producing must not act a second time. */
+            extern unsigned int Pc_MouseCursor_BoundPadBits(void);
+            const unsigned int  mouseBits = Pc_MouseCursor_BoundPadBits();
+            Pc_RandoSettings_Update(
+                (g_Controller0->pulsedBtnFlags  & ~mouseBits & ControllerFlag_LStickUp)    != 0,
+                (g_Controller0->pulsedBtnFlags  & ~mouseBits & ControllerFlag_LStickDown)  != 0,
+                (g_Controller0->pulsedBtnFlags  & ~mouseBits & ControllerFlag_LStickLeft)  != 0,
+                (g_Controller0->pulsedBtnFlags  & ~mouseBits & ControllerFlag_LStickRight) != 0,
+                (g_Controller0->clickedBtnFlags & ~mouseBits & (cc->enter | cc->action))   != 0,
+                (g_Controller0->clickedBtnFlags & ~mouseBits & (cc->cancel | cc->map))     != 0);
+            g_Controller0->clickedBtnFlags = 0;
+            g_Controller0->pulsedBtnFlags  = 0;
+            return;
+        }
+    }
+#endif
 
     Event_Update(player->attackReceived != NO_VALUE);
     Game_MapRoomIdxUpdate();
@@ -411,23 +497,74 @@ void SysState_Gameplay_Update(void) // 0x80038BD4
         Game_FlashlightToggle();
     }
 
+#ifdef SH_PC_PORT
+    /* Randomizer: the Map button opens the settings panel on a quick TAP and the
+     * real map on a HOLD (the map screen self-gates on HAS_MAP, so "no map yet"
+     * just bounces). Poll every frame for the hold timer, then swallow the Map
+     * edge so the vanilla map branch below never also fires. */
+    {
+        extern int Pc_Rando_Active(void);
+        extern int Pc_RandoSettings_MapButtonArbiter(int, int);
+        if (Pc_Rando_Active())
+        {
+            u16 mapBtn     = g_GameWorkPtr->config.controllerConfig.map;
+            int mapClicked = (g_Controller0->clickedBtnFlags & mapBtn) != 0;
+            int mapHeld    = (g_Controller0->heldBtnFlags & mapBtn) != 0;
+            if (Pc_RandoSettings_MapButtonArbiter(mapClicked, mapHeld) == 2 /* RANDO_MAP_WANT_MAP */)
+            {
+                SysWork_StateSetNext(SysState_MapScreen);
+                g_SysWork.isMgsStringSet = false;
+            }
+            g_Controller0->clickedBtnFlags &= ~(e_ControllerFlags)mapBtn;
+        }
+    }
+#endif
+
     if (g_MapEventSysState != SysState_Invalid)
     {
 #ifdef SH_PC_PORT
         SH_DBG("[GP-STATE-TXN] Gameplay -> sysState=%d (param=%d)",
                (int)g_MapEventSysState, (int)g_MapEventParam);
+
+        /* Door/area transition out-fade. PSX left the last gameplay frame in the
+         * other framebuffer and Screen_BackgroundMotionBlur decayed THAT image
+         * for the whole load -- the slow darkening under the door-open SFX.
+         * PsyCross blanks both display-buffer rects on every present the blur is
+         * not drawing (GR_ClearAllFeedbackRects), and the blur only arms the
+         * store from its own first frame, so the transition started from an empty
+         * rect and cut straight to black. This tick is the last one that still
+         * renders the world -- SysState_LoadArea_Update sets BgmStatusFlag_Pause
+         * on the NEXT tick -- so arm the store for this frame's present. Same
+         * entry-tick idiom as the pause freeze below. */
+        if (g_MapEventSysState == SysState_LoadRoom ||
+            g_MapEventSysState == SysState_LoadOverlay)
+        {
+            extern int g_PsxFeedbackStoreAllowed;
+            g_PsxFeedbackStoreAllowed = 2;
+            g_PcTxnStartMs = (int)(clock() * 1000 / CLOCKS_PER_SEC);
+        }
 #endif
         SysWork_StateSetNext(g_MapEventSysState);
     }
     else if (g_Controller0->clickedBtnFlags & g_GameWorkPtr->config.controllerConfig.pause)
     {
 #ifdef SH_PC_PORT
-        /* Arm the freeze on the entry tick so PsyCross captures THIS
-         * frame (the last gameplay render) and the first paused frame
-         * already presents it — no one-frame background flash. */
+        /* Do NOT arm the freeze here. This tick still renders the world, and
+         * PsyX_BeginScene runs at DRAW time (from DrawOTag) -- i.e. AFTER this
+         * update -- so arming now made BeginScene blit the previous capture and
+         * then draw the world over it, leaving the captured frame showing
+         * through wherever the world draws nothing: the one-frame grey sky on
+         * every pause. It also forced the flashlight shadow map off for that
+         * rendered frame.
+         *
+         * The arm was never needed for the capture: GR_CaptureLastFrame runs at
+         * EndScene on any frame that did not present, so this frame is captured
+         * either way. The flag only drives PRESENT, and the first frame that
+         * should present is the next one -- SysState_GamePaused_Update arms it
+         * itself. Clearing a pending release is still right. */
         {
-            extern int g_PsxPresentLastFrame;
-            g_PsxPresentLastFrame = 1;
+            extern int g_PcFreezeReleasePending;
+            g_PcFreezeReleasePending = 0;
         }
 #endif
         SysWork_StateSetNext(SysState_GamePaused);
@@ -513,7 +650,11 @@ void SysState_GamePaused_Update(void) // 0x800391E8
     }
 
     func_80091380();
+#ifndef SH_PC_PORT
+    /* PSX keeps the clear-time clock running while paused; PC-port QoL: freeze it
+     * so a pause doesn't inflate the ending results time. */
     Game_TimerUpdate();
+#endif
 
     if (g_SysWork.sysStateSteps[0] == 0)
     {
@@ -551,6 +692,9 @@ void SysState_GamePaused_Update(void) // 0x800391E8
 
         SD_Call(4);
 #ifdef SH_PC_PORT
+        /* Releasing on this tick showed one bare fog-colored frame: the world
+         * draw is still gated off by the BgmStatusFlag_Pause set above. Hand the
+         * release to MainLoop, which waits for a tick that drew. */
         {
             extern int g_PcFreezeReleasePending;
             g_PcFreezeReleasePending = 1;
@@ -681,6 +825,23 @@ void SysState_StatusMenu_Update(void) // 0x80039568
 {
     e_GameState gameState;
 
+#ifdef SH_PC_PORT
+    /* Cover the screen before handing over, the way SysState_MapScreen_Update
+     * does (ScreenFade_Start + a zero timestep = an instant cut, then the state
+     * switch on a later tick). Everything below runs in ONE tick, so without
+     * this the world got drawn once more with nothing over it -- and because the
+     * alternate-camera solve lives on the gameplay path, that frame came out on
+     * the classic camera. That is the one-frame snap opening the inventory on
+     * FPS/TPS/OTS. Costs one tick, already black, so nothing is visible. */
+    if (g_SysWork.sysStateSteps[0] == 0)
+    {
+        ScreenFade_Start(true, false, false);
+        g_ScreenFadeTimestep = Q12(0.0f);
+        g_SysWork.sysStateSteps[0]++;
+        return;
+    }
+#endif
+
     gameState = g_GameWork.gameState;
 
     g_GameWork.gameState = GameState_LoadStatusScreen;
@@ -751,6 +912,9 @@ void SysState_MapScreen_Update(void) // 0x800396D4
             Gfx_MapMsg_Draw(MapMsgIdx_NoMap) > MapMsgState_Idle)
         {
 #ifdef SH_PC_PORT
+            /* See the pause exit: this tick's world draw is already gated off by
+             * the BgmStatusFlag_Pause set above, so releasing here would expose
+             * the raw fog-colored clear for a frame. */
             {
                 extern int g_PcFreezeReleasePending;
                 g_PcFreezeReleasePending = 1;
@@ -896,6 +1060,76 @@ void SysState_LoadArea_Update(void) // 0x80039C40
         return;
     }
     fflush(g_ShDebugLog);
+
+    /* Everything below runs to completion inside THIS single tick, and its
+     * blocking parts (GameBoot_MapLoad -> GameFs_PlayerMapAnimLoad ->
+     * Fs_QueueWaitForEmpty) only spin on VSync: they never return to MainLoop's
+     * Screen_FadeUpdate / GsSwapDispBuff / PsyX_EndScene, so not one frame is
+     * presented for the whole multi-second stall and the window keeps showing
+     * the last gameplay frame. Retail's door fade is Screen_BackgroundMotionBlur's
+     * framebuffer feedback, which advances one step per PRESENTED frame, so on
+     * this path it gets a single frame -- "barely fades, then freezes". Run a
+     * real fade to black to completion FIRST, over its own presented frames, and
+     * enter the blocking work only once the screen is already black. Same shape
+     * SysState_Fmv_Update uses: fade out, wait for ScreenFade_IsFinished(), then
+     * block. The far side is untouched -- GameBoot_GameStartup case 11 still
+     * holds 60 vblanks and fires the door-shut SFX, and GameState_InGame_Update
+     * step 0 still fades in. */
+    if (g_SysWork.sysStateSteps[0] == 0)
+    {
+        g_SysWork.sysStateSteps[0] = 1;
+        g_SysWork.sysStateSteps[1] = 0;
+        g_SysWork.sfxPairIdx_2283  = g_MapEventData->sfxPairIdx_8_19;
+
+        /* Retail plays the door-open SFX under the fade, not after it. */
+        SD_Call(SFX_PAIRS[g_SysWork.sfxPairIdx_2283].sfx_0);
+
+        /* Attract demos consume one recorded input entry per frame, so extra
+         * frames desync the recording -- they keep today's presentation and must
+         * not get a fade nothing waits for. A scripted scene that already handed
+         * over on black must not be re-faded, or the world pops back into view.
+         * reset=false so an in-flight fade continues from its current level
+         * instead of snapping, and the colour bit carries over so a scene's
+         * white fade does not turn black. */
+        if (!(g_SysWork.sysFlags & SysFlag_DemoActive) && !ScreenFade_IsFinished())
+        {
+            ScreenFade_Start(false, false, IS_SCREEN_FADE_WHITE(g_Screen_FadeStatus) != 0);
+            /* Timestep is 1/seconds. Retail's out-fade lasted as long as the CD
+             * read, so there is no constant to match -- this is chosen to read as
+             * a deliberate fade without dominating a transition whose load is now
+             * fast. Console: TXNFADE <seconds>. */
+            g_ScreenFadeTimestep = g_PcTxnFadeTimestep;
+        }
+    }
+
+    /* Budget is accumulated REAL TIME, not a frame count: Screen_FadeUpdate steps
+     * by timestep*dt, so the fade lands in ~1.25 s at 30, 60 and 240 fps alike,
+     * whereas a frame count would only be right while MainLoop happens to pin
+     * this state to 60 Hz. It exists purely so a door can never hang --
+     * ScreenFade_IsFinished() is false in ScreenFadeState_None, which a fade
+     * hijacked mid-transition can leave behind. g_DeltaTimeRaw is substituted
+     * when a deliberate freeze has zeroed it, so the budget always advances. */
+    if (!ScreenFade_IsFinished() && !(g_SysWork.sysFlags & SysFlag_DemoActive) &&
+        g_SysWork.sysStateSteps[1] < Q12(3.0f))
+    {
+        g_SysWork.sysStateSteps[1] += (g_DeltaTimeRaw > Q12(0.0f)) ? g_DeltaTimeRaw : TIMESTEP_60_FPS;
+        g_PcTxnFadeEndMs = (int)(clock() * 1000 / CLOCKS_PER_SEC);
+
+        /* Hold the world still under the fade the way retail's decaying frozen
+         * frame does. The fade runs off g_DeltaTimeRaw and is unaffected, and
+         * BgmStatusFlag_Pause is deliberately NOT set so the world still renders
+         * beneath the fade tile. */
+        g_DeltaTime = Q12(0.0f);
+        return;
+    }
+#endif
+
+#ifdef SH_PC_PORT
+    /* Transition timing probe: brackets the blocking work so the black hold can
+     * be attributed to the fade, the queue drain, or the 60-vblank load-screen
+     * hold rather than guessed at. */
+    SH_DBG("[TXNTIME] fade done, blocking work begins (fade took %d ms)",
+           g_PcTxnFadeEndMs - g_PcTxnStartMs);
 #endif
 
 #ifdef SH_XBOX_PORT

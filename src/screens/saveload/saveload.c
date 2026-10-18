@@ -11,6 +11,10 @@
 #include "bodyprog/game_boot/game_boot.h"
 #include "screens/saveload.h"
 
+#ifdef SH_PC_PORT
+#include "lang_text.h" /* Pc_LangMenuText/Width - centre the drawn string, not the English one */
+#endif
+
 #define SAVE_FLASH_TIMER_MAX 40
 #define SLOT_COLUMN_OFFSET   150
 #define SLOT_ROW_OFFSET      20
@@ -181,6 +185,12 @@ static s16 D_801E756C[MEMCARD_SLOT_COUNT_MAX];
  * through the displayed saves in the slot.
  */
 static s16 g_SaveScreen_HiddenSaves[MEMCARD_SLOT_COUNT_MAX];
+
+#ifdef SH_PC_PORT
+/* Set for the frame in which the mouse pointer moved the save-list selection,
+ * read by the auto-scroll in SaveScreen_ElementDraw. See the comment there. */
+static s32 g_PcSaveHoverPinScroll = 0;
+#endif
 
 /** @brief Dead code.
  * The only usage it is given is to check it is in `SaveScreen_SavesSlotDraw`
@@ -380,8 +390,20 @@ void SaveScreen_SaveLocationDraw(s_SaveScreenElement* saveEntry, s32 saveIdx, s3
             Gfx_StringSetColor(colorId);
         }
 
+#ifdef SH_PC_PORT
+        /* X_OFFSETS holds the pixel width of each ENGLISH name (X_OFFSETS[0] is
+         * exactly the 82px of "Anywhere"), which centres it only while English
+         * is what gets drawn. Measure the string that will actually be drawn —
+         * identical arithmetic on a US disc, and correctly centred once a
+         * translation, or the disc's own Japanese, is in play. */
+        Gfx_StringSetPosition(((slotIdx * OFFSET_X) + MARGIN_X) -
+                                  (Pc_LangMenuTextWidth(
+                                       Pc_LangMenuText(g_Savegame_SaveLocationNames[nameIdx])) / 2),
+                              (selectedSaveIdx * OFFSET_Y) + MARGIN_Y);
+#else
         Gfx_StringSetPosition(((slotIdx * OFFSET_X) + MARGIN_X) - (X_OFFSETS[nameIdx] / 2),
                               (selectedSaveIdx * OFFSET_Y) + MARGIN_Y);
+#endif
         Gfx_StringDraw(g_Savegame_SaveLocationNames[nameIdx], 50);
     }
 
@@ -466,6 +488,28 @@ void SaveScreen_SavesSlotDraw(s_SaveScreenElement* saveEntry, s32 saveIdx, s32 s
             }
         }
 
+#ifdef SH_PC_PORT
+        /* While the pointer owns the list, it owns the scroll offset too.
+         *
+         * This block DERIVES the offset from the selection, keeping the selected
+         * entry inside rows 1..3 of the 5 visible. That is fine for a d-pad,
+         * where selecting and scrolling are the same gesture, but it makes
+         * "highlight whatever is under the cursor" impossible: highlighting the
+         * top or bottom visible row scrolls, which slides a different entry
+         * under the stationary cursor, which highlights, and the list rockets to
+         * the end on the smallest movement.
+         *
+         * So SaveScreen_LogicUpdate sets the flag whenever the pointer is over
+         * the list, and sets g_SaveScreen_HiddenSaves itself for the explicit
+         * scroll gestures (drag the list, drag the bar, wheel). Hover then only
+         * highlights. Any pad/keyboard input clears the flag and this derived
+         * behaviour resumes unchanged. */
+        if (g_PcSaveHoverPinScroll)
+        {
+            /* leave g_SaveScreen_HiddenSaves[slotIdx] untouched */
+        }
+        else
+#endif
         if (g_Savegame_ElementCount1[slotIdx] < 6 || g_SlotElementSelectedIdx[slotIdx] == 0)
         {
             g_SaveScreen_HiddenSaves[slotIdx] = 0;
@@ -721,7 +765,14 @@ void SaveScreen_MemCardStateDraw(s32 g_SaveScreen_SaveScreenState, s32 memCardSt
             }
 
             D_801E7554 = strIdx;
+#ifdef SH_PC_PORT
+            /* Same as the save-name centring above: X_OFFSETS measures the
+             * ENGLISH dialog, so measure what is actually drawn instead. */
+            Gfx_StringSetPosition(160 - (Pc_LangMenuTextWidth(
+                                             Pc_LangMenuText(DIALOG_STRS[strIdx])) / 2), 186);
+#else
             Gfx_StringSetPosition(160 - (X_OFFSETS[strIdx] >> 1), 186);
+#endif
             Gfx_StringDraw(DIALOG_STRS[strIdx], DEFAULT_MAP_MESSAGE_LENGTH);
 
             // Finished saving.
@@ -763,7 +814,14 @@ void SaveScreen_WriteOptionsStepDraw(s32 stringIdx, bool optionSelected) // 0x80
             g_SaveScreen_OverwriteActive = 1;
 
         case 1:
+#ifdef SH_PC_PORT
+            /* Same as the save-name centring above: X_OFFSETS measures the
+             * ENGLISH dialog, so measure what is actually drawn instead. */
+            Gfx_StringSetPosition(160 - (Pc_LangMenuTextWidth(
+                                             Pc_LangMenuText(DIALOG_STRS[stringIdx])) / 2), 178);
+#else
             Gfx_StringSetPosition(160 - (X_OFFSETS[stringIdx] / 2), 178);
+#endif
             Gfx_StringDraw(DIALOG_STRS[stringIdx], DEFAULT_MAP_MESSAGE_LENGTH);
             Gfx_StringSetPosition(104, 196);
             Gfx_StringDraw("\x07Yes__________No", DEFAULT_MAP_MESSAGE_LENGTH);
@@ -1075,7 +1133,27 @@ void SaveScreen_NavigationDraw(s32 slotIdx, s32 saveCount, s32 selectedSaveIdx, 
     // Draw scroll bar thumb.
     if (saveCount != 0)
     {
+#ifdef SH_PC_PORT
+        /* Track the WINDOW, not the selection. Retail derives the scroll offset
+         * from the selection, so "where the selection is" and "where the view
+         * is" were the same thing and either could drive the thumb. The pointer
+         * path decouples them (it scrolls the view without moving the
+         * selection), so the thumb has to follow the view or it reports the
+         * wrong place while dragging. Scaled over maxHidden so the thumb reaches
+         * the bottom of the track exactly when the list is fully scrolled — the
+         * drag in SaveScreen_LogicUpdate inverts this same mapping. */
+        {
+            s32 maxHidden = (saveCount > 5) ? (saveCount - 5) : 0;
+            s32 hidden    = g_SaveScreen_HiddenSaves[slotIdx];
+
+            if (hidden < 0)         hidden = 0;
+            if (hidden > maxHidden) hidden = maxHidden;
+
+            thumbOffsetY = (maxHidden > 0) ? (((hidden * 79) / maxHidden) + 8) : 8;
+        }
+#else
         thumbOffsetY       = ((selectedSaveIdx * 79) / saveCount) + 8;
+#endif
         thumbOffsetBottomY = THUMB_Y_OFFESTS[saveCount - 1];
 
         // Inner and outer rectangles.
@@ -1761,6 +1839,30 @@ void SaveScreen_LogicUpdate(void) // 0x801E649C
     {
         int mx, my;
 
+        /* A mouse button that is ALSO bound to a PSX button (key_cross = Mouse1
+         * is the common one) arrived on this screen twice: once here, where the
+         * pointer logic decides what a click MEANS, and once as a raw Cross
+         * press that the switch below reads as "load the selected save". So
+         * pressing the scroll bar, or starting a drag anywhere, loaded whatever
+         * row happened to be selected before the pointer code could say
+         * otherwise. Drop the bits the mouse is producing this frame; every
+         * injection below is added afterwards, and pad or keyboard presses of
+         * the same buttons are unaffected. */
+        {
+            extern unsigned int Pc_MouseCursor_BoundPadBits(void);
+            const u32 pcMouseBits = Pc_MouseCursor_BoundPadBits();
+
+            g_Controller0->clickedBtnFlags &= ~pcMouseBits;
+            g_Controller0->pulsedBtnFlags  &= ~pcMouseBits;
+            g_Controller0->heldBtnFlags    &= ~pcMouseBits;
+        }
+
+        /* Re-armed every frame: only a hover that actually moves the selection
+         * (below) pins the scroll, so pad/keyboard navigation still scrolls
+         * normally. Consumed later in the frame by SaveScreen_ScreenDraw ->
+         * SaveScreen_SavesSlotDraw. */
+        g_PcSaveHoverPinScroll = 0;
+
         if (Pc_MouseCursor_UiPos(&mx, &my))
         {
             if (gameStateSteps == 0 && g_MemCard_TotalElementsCount > 0)
@@ -1784,28 +1886,206 @@ void SaveScreen_LogicUpdate(void) // 0x801E649C
                     SD_Call(Sfx_MenuMove);
                 }
 
-                if (visRow >= 0 && hitSlot == g_SelectedSaveSlotIdx)
-                {
-                    s32 target = g_SaveScreen_HiddenSaves[hitSlot] + visRow;
+                /* ---- Pointer ownership of the list ----------------------
+                 * The stock screen DERIVES the scroll offset from the selection
+                 * every frame (SaveScreen_SavesSlotDraw), so "highlight the row
+                 * under the cursor" and "do not scroll" are in direct conflict:
+                 * highlighting the top/bottom visible row scrolls, which slides
+                 * a different entry under the stationary cursor, which
+                 * highlights, and the list runs away.
+                 *
+                 * So while the pointer is driving, it OWNS the scroll: the
+                 * derived recompute is pinned off and this code sets
+                 * g_SaveScreen_HiddenSaves directly. Hover then only ever
+                 * highlights, and scrolling is an explicit act - drag the list,
+                 * drag the bar, or wheel. Any pad/keyboard input hands the list
+                 * straight back to the stock behaviour.
+                 *
+                 * Bar geometry comes from what SaveScreen_NavigationDraw builds:
+                 * SCROLL_BAR_TRACK_QUADS (local x 0..8, y 0..96) at
+                 * x = slot*SLOT_COLUMN_OFFSET - 139, y - SCROLL_BAR_OFFSET_Y, in
+                 * centre-origin prim space with draw offset (160, 112) => x
+                 * 21..29 (slot 0) / 171..179 (slot 1), y 52..148. Counts use
+                 * ElementCount1, which is what the bar itself is drawn with
+                 * (line 551) - ElementCount0 is a different total and produced a
+                 * wrong thumb mapping. */
+                #define SAVE_BAR_X(slot)  (((slot) * SLOT_COLUMN_OFFSET) - 139 + 160)
+                /* 112 (prim draw offset Y) - 60 (SCROLL_BAR_OFFSET_Y, which
+                 * SaveScreen_NavigationDraw #undefs before we get here). */
+                #define SAVE_BAR_TOP_Y    (112 - 60)
+                #define SAVE_BAR_TRAVEL   79
+                #define SAVE_BAR_GRAB     4
+                #define SAVE_VIS_ROWS     5
+                #define SAVE_DRAG_SLOP    3   /* px of travel that still counts as a click */
 
-                    if (target >= 0 && target < g_Savegame_ElementCount0[hitSlot])
+                static s32 s_barDrag    = -1; /* slot whose bar is held, else -1 */
+                static s32 s_listDrag   = -1; /* slot whose list is held, else -1 */
+                static s32 s_pressX     = 0;
+                static s32 s_pressY     = 0;
+                static s32 s_pressMoved = 0;
+                static s32 s_pressValid = 0;  /* press landed on a loadable row */
+
+                s32 listCount = g_Savegame_ElementCount1[hitSlot];
+                s32 maxHidden = (listCount > SAVE_VIS_ROWS) ? (listCount - SAVE_VIS_ROWS) : 0;
+                s32 barX      = SAVE_BAR_X(hitSlot);
+                s32 onBar     = (mx >= barX - SAVE_BAR_GRAB && mx <= barX + 8 + SAVE_BAR_GRAB &&
+                                 my >= SAVE_BAR_TOP_Y && my <= SAVE_BAR_TOP_Y + 96);
+
+                /* Pad/keyboard reclaims the list from the pointer. */
+                if (g_Controller0->pulsedBtnFlags & (ControllerFlag_LStickUp | ControllerFlag_LStickDown))
+                {
+                    g_PcSaveHoverPinScroll = 0;
+                    s_barDrag  = -1;
+                    s_listDrag = -1;
+                }
+                else if (g_SaveScreen_HiddenSaves[hitSlot] != NO_VALUE)
+                {
+                    /* Pointer is over the list: hold the view still. */
+                    g_PcSaveHoverPinScroll = 1;
+                }
+
+                /* --- press: grab the bar, or arm a list drag / load --- */
+                if (Pc_MouseCursor_LeftClicked() && s_barDrag < 0 && s_listDrag < 0)
+                {
+                    s_pressX     = mx;
+                    s_pressY     = my;
+                    s_pressMoved = 0;
+
+                    if (onBar && listCount > 0)
                     {
-                        if (Pc_MouseCursor_Moved() && g_SlotElementSelectedIdx[hitSlot] != target)
-                        {
-                            g_SlotElementSelectedIdx[hitSlot] = target;
-                            SD_Call(Sfx_MenuMove);
-                        }
-                        if (Pc_MouseCursor_LeftClicked() && g_SlotElementSelectedIdx[hitSlot] == target)
-                        {
-                            g_Controller0->clickedBtnFlags |= g_GameWorkPtr->config.controllerConfig.enter;
-                        }
+                        s_barDrag    = hitSlot;
+                        s_pressValid = 0;
+                    }
+                    else if (visRow >= 0 && hitSlot == g_SelectedSaveSlotIdx)
+                    {
+                        s32 target = g_SaveScreen_HiddenSaves[hitSlot] + visRow;
+
+                        s_listDrag   = hitSlot;
+                        s_pressValid = (target >= 0 && target < g_Savegame_ElementCount0[hitSlot]);
                     }
                 }
 
-                if (wheel != 0)
+                /* --- bar drag: thumb follows the pointer (absolute) --- */
+                if (s_barDrag >= 0 && Pc_MouseCursor_LeftHeld())
                 {
-                    g_Controller0->pulsedBtnFlags |= (wheel > 0) ? ControllerFlag_LStickUp
-                                                                 : ControllerFlag_LStickDown;
+                    s32 cnt = g_Savegame_ElementCount1[s_barDrag];
+                    s32 mh  = (cnt > SAVE_VIS_ROWS) ? (cnt - SAVE_VIS_ROWS) : 0;
+
+                    if (mh > 0)
+                    {
+                        /* Inverse of the thumb mapping in SaveScreen_NavigationDraw
+                         * (thumbY = hidden*79/maxHidden + 8). Keep the two in step. */
+                        s32 h = ((my - SAVE_BAR_TOP_Y - 8) * mh) / SAVE_BAR_TRAVEL;
+
+                        if (h < 0)  h = 0;
+                        if (h > mh) h = mh;
+
+                        if (g_SaveScreen_HiddenSaves[s_barDrag] != h)
+                        {
+                            g_SaveScreen_HiddenSaves[s_barDrag] = (s16)h;
+                            SD_Call(Sfx_MenuMove);
+                        }
+                    }
+                }
+                /* --- list drag: pull the content with the pointer (relative) --- */
+                else if (s_listDrag >= 0 && Pc_MouseCursor_LeftHeld())
+                {
+                    s32 dx = mx - s_pressX;
+                    s32 dy = my - s_pressY;
+
+                    if (dx < 0) dx = -dx;
+                    if (dy < 0) dy = -dy;
+                    if (dx > SAVE_DRAG_SLOP || dy > SAVE_DRAG_SLOP)
+                        s_pressMoved = 1;
+
+                    if (s_pressMoved && maxHidden > 0)
+                    {
+                        s32 rows = (s_pressY - my) / 20; /* one row per row-height */
+
+                        if (rows != 0)
+                        {
+                            s32 h = g_SaveScreen_HiddenSaves[hitSlot] + rows;
+
+                            if (h < 0)         h = 0;
+                            if (h > maxHidden) h = maxHidden;
+
+                            if (g_SaveScreen_HiddenSaves[hitSlot] != h)
+                            {
+                                g_SaveScreen_HiddenSaves[hitSlot] = (s16)h;
+                                SD_Call(Sfx_MenuMove);
+                            }
+                            s_pressY = my; /* consume the travel */
+                        }
+                    }
+                }
+                /* --- release --- */
+                else if (s_barDrag >= 0 || s_listDrag >= 0)
+                {
+                    /* A quick click that never travelled loads; a drag does not.
+                     * The stock code injected Enter on the press EDGE, so any
+                     * drag beginning on a row loaded that save the instant you
+                     * pressed. */
+                    if (s_listDrag >= 0 && !s_pressMoved && s_pressValid)
+                        g_Controller0->clickedBtnFlags |= g_GameWorkPtr->config.controllerConfig.enter;
+
+                    s_barDrag    = -1;
+                    s_listDrag   = -1;
+                    s_pressMoved = 0;
+                    s_pressValid = 0;
+                }
+
+                /* Keep the selection inside the visible window whenever the
+                 * pointer scrolled the view. SaveScreen_NavigationDraw places the
+                 * selection highlight at (selected - hidden) * SLOT_ROW_OFFSET,
+                 * so once those two decouple the quad is drawn outside the list —
+                 * the stray highlight that appeared down in the info panel while
+                 * dragging. Clamping also keeps the info panel showing a save the
+                 * player can actually see. */
+                if ((s_barDrag >= 0 || s_listDrag >= 0 || wheel != 0) && listCount > 0)
+                {
+                    s32 lo  = g_SaveScreen_HiddenSaves[hitSlot];
+                    s32 hi  = lo + (SAVE_VIS_ROWS - 1);
+                    s32 sel = g_SlotElementSelectedIdx[hitSlot];
+
+                    if (hi > listCount - 1) hi = listCount - 1;
+                    if (lo < 0)             lo = 0;
+
+                    if (sel < lo) sel = lo;
+                    if (sel > hi) sel = hi;
+
+                    g_SlotElementSelectedIdx[hitSlot] = (u8)sel;
+                }
+
+                /* --- hover: highlight only, never scroll --- */
+                if (s_barDrag < 0 && s_listDrag < 0 &&
+                    visRow >= 0 && hitSlot == g_SelectedSaveSlotIdx)
+                {
+                    s32 target = g_SaveScreen_HiddenSaves[hitSlot] + visRow;
+
+                    if (target >= 0 && target < g_Savegame_ElementCount0[hitSlot] &&
+                        Pc_MouseCursor_Moved() && g_SlotElementSelectedIdx[hitSlot] != target)
+                    {
+                        g_SlotElementSelectedIdx[hitSlot] = target;
+                        SD_Call(Sfx_MenuMove);
+                    }
+                }
+
+                if (wheel != 0 && maxHidden > 0)
+                {
+                    /* Scroll the VIEW, not the selection. Injecting LStick moved
+                     * the selection and let the derived scroll drag the list back
+                     * under the cursor, which is what made a wheel notch appear
+                     * to scroll and then snap straight back. */
+                    s32 h = g_SaveScreen_HiddenSaves[hitSlot] - wheel;
+
+                    if (h < 0)         h = 0;
+                    if (h > maxHidden) h = maxHidden;
+
+                    if (g_SaveScreen_HiddenSaves[hitSlot] != h)
+                    {
+                        g_SaveScreen_HiddenSaves[hitSlot] = (s16)h;
+                        SD_Call(Sfx_MenuMove);
+                    }
                 }
                 if (Pc_MouseCursor_RightClicked())
                 {
@@ -2030,7 +2310,7 @@ void SaveScreen_LogicUpdate(void) // 0x801E649C
 #ifdef SH_PC_PORT
                     /* Backing out of the LOAD screen went to the title unconditionally,
                      * because on PSX that screen is only reachable FROM the title. The
-                     * port's quick-load opens it from gameplay, so cancelling
+                     * port's quick-load key opens it from gameplay, so cancelling
                      * teleported the player to a main menu that had never run its own
                      * init -- hence the garbage over the title art (SAVELOAD.TIM still
                      * owns that VRAM) and the wrong SFX bank under OPTION. This is the

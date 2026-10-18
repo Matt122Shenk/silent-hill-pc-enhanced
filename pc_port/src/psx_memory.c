@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 /*
  * psx_memory.c - PSX memory layout emulation for PC port
  *
@@ -20,8 +21,9 @@
 uint8_t g_PsxRam[PSX_RAM_SIZE];
 
 /* PSX Scratchpad RAM emulation.
- * Real PSX has 1KB, but s_GteScratchData is ~1028 bytes.
- * Allocate 4KB to avoid overflow into adjacent globals. */
+ * Real PSX has 1KB; the PC port widens s_GteScratchData/s_GteScratchData2 to
+ * ~2964 bytes (256-slot pools for oversized models) -- 4KB holds it, and the
+ * bodyprog.h _Static_asserts pin sizeof <= 4096. */
 uint8_t g_PsxScratchpad[4096];
 
 void PsxMemory_Init(void)

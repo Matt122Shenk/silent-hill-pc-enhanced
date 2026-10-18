@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 #ifndef PC_MOUSE_CURSOR_H
 #define PC_MOUSE_CURSOR_H
 
@@ -47,6 +48,11 @@ int Pc_MouseCursor_Moved(void);
  * Pc_MouseCursor_MenuRowHover. */
 int Pc_MouseCursor_UiPos(int* outX, int* outY);
 
+/* Normalized 0..1 position inside the presented picture. For overlays that draw
+ * in the post-capture GL hook and think in viewport pixels rather than in the
+ * game's (mode-dependent) text-authoring space. */
+int Pc_MouseCursor_ViewportPos(float* outX, float* outY);
+
 /* Left-button press edge / held state / right-button press edge this frame
  * (0 while disabled or outside the viewport). */
 int Pc_MouseCursor_LeftClicked(void);
@@ -57,6 +63,17 @@ int Pc_MouseCursor_RightClicked(void);
  * adjust the hovered value row / scroll lists. */
 int Pc_MouseCursor_WheelStep(void);
 
+/* Every wheel notch since the last frame, signed (+ = up). WheelStep merges
+ * notches that land inside its 2-frame latch, which makes a fast spin feel
+ * dead in a long list. */
+int Pc_MouseCursor_WheelNotches(void);
+
+/* The pad bits (ControllerFlag_*) the mouse is producing right now through
+ * mouse binds (key_cross = Mouse1 and the like), d-pad bits mirrored onto the
+ * left-stick ones. Panels that handle the mouse themselves drop these from the
+ * pad flags they read, or one click acts twice. */
+unsigned int Pc_MouseCursor_BoundPadBits(void);
+
 /* 1 while a free-cursor puzzle is on screen. control_style.c releases the TPS/OTS
  * mouse capture when this is set, so a cursor puzzle always gets the pointer
  * regardless of the active camera. */
@@ -65,5 +82,15 @@ int Pc_MouseCursor_PuzzleActive(void);
 /* Draw the mouse cursor sprite at the current pointer position. Call during a
  * menu's render (needs the 2D packet buffer + ordering table set up). */
 void Pc_MouseCursor_Draw(void);
+
+/* The arrow sprite as 32x32 RGBA (alpha 0 where the PSX texel is transparent),
+ * decoded from VRAM. For overlays that composite ABOVE the PSX frame and so must
+ * draw the cursor themselves. Returns 0 if BG_ETC is not in VRAM yet. */
+int  Pc_MouseCursor_SpriteRgba(unsigned char* outRgba32x32);
+
+/* Where that sprite goes for a GL overlay: the cursor rect in viewport pixels
+ * (origin bottom-left, y up) for a viewport of vpW x vpH, sized to match the
+ * PSX-drawn cursor. Returns 0 when the cursor is hidden / off-picture. */
+int  Pc_MouseCursor_GlRect(float vpW, float vpH, float* outX, float* outY, float* outW, float* outH);
 
 #endif /* PC_MOUSE_CURSOR_H */

@@ -11,6 +11,163 @@
 #include "lang_text.h"     /* Pc_LangMenuText — port-written menu translations. */
 #include "pc_kanji.h"      /* NTSC-J SJIS glyph atlas. */
 #include "main/fileinfo.h" /* g_GameRegion */
+#include "pc_config.h"     /* g_PcConfig.textSize */
+
+#include <string.h>
+
+/* Retail PAL renders TEN map-message lines where NTSC-U/J render nine
+ * (g_PcMapMsgLineMax, font_region.h); identical to FONT_12X16_LINE_COUNT_MAX on
+ * USA and NTSC-J. Parsing sites only — the positionIdx-4 box anchor keeps the
+ * literal, see the note in font_region.h. */
+#define MAP_MSG_LINE_MAX g_PcMapMsgLineMax
+#else
+#define MAP_MSG_LINE_MAX FONT_12X16_LINE_COUNT_MAX
+#endif
+
+#ifdef SH_PC_PORT
+/* Page continuation state (see text_draw.h). Offsets are into `s_PageMsg`, so a
+ * message re-examined later starts from the top: the pointer is re-latched below
+ * whenever a different message is drawn, and Gfx_MapMsg_Draw resets on setup. */
+static const char* s_PageMsg;
+static s32         s_PageOff;  /* where the page being drawn starts */
+static s32         s_PageNext; /* where the next page starts; 0 = none pending */
+/* A continuation page starts AFTER the codes that set these, and the caller
+ * re-sets the colour to white every frame, so both have to be carried over. */
+static s16         s_PageColorId;
+static s32         s_PageAlign;
+
+/** Text index 2D layer.
+ * If modifying `Gfx_StringSetPosition`, when setting it to
+ * a value lower than 6, text will not be affected by the fade effect.
+ */
+static s32 g_Strings2dLayerIdx = 6;
+
+/* Text Size (g_PcConfig.textSize) for the message being drawn: Q12 factor and
+ * the 240-line Y it grows from. 1.0 leaves every glyph on the original path. */
+static s32         s_MsgScale = Q12(1.0f);
+static s32         s_MsgAnchorY;
+
+/* One scaled message glyph. The layout is still computed at 1x; each glyph is
+ * then mapped about (0, s_MsgAnchorY), which scales its size, the advance and
+ * the line spacing together. A SPRT draws texels 1:1 and cannot be resized, so
+ * the low-res path draws a POLY_FT4 as well, from the same packet cursor its
+ * SPRTs would have used. Its UVs match the high-res FT4 the game already emits. */
+static void Pc_MsgGlyphQuad(GsOT* ot, PACKET** lowResPacket, s32 x, s32 y,
+                            u32 u, u32 v, u32 clut, u32 page, u32 color)
+{
+    bool      hiRes = g_SysWork.enableHighResGlyphs;
+    POLY_FT4* poly  = (POLY_FT4*)(hiRes ? GsOUT_PACKET_P : *lowResPacket);
+    s32       yMul  = hiRes ? 2 : 1;
+    s32       ay    = s_MsgAnchorY * yMul;
+    s32       x0    = (x * s_MsgScale) >> 12;
+    s32       y0    = ay + (((y * yMul) - ay) * s_MsgScale >> 12);
+    s32       w     = (FONT_12X16_GLYPH_SIZE_X * s_MsgScale) >> 12;
+    s32       h     = ((hiRes ? g_FontLayout->hiResGlyphBottom : 15) * s_MsgScale) >> 12;
+
+    setPolyFT4(poly);
+    setRGB0(poly, (s8)color, (s8)(color >> 8), (s8)(color >> 16));
+    setXY4(poly, x0, y0, x0, y0 + h, x0 + w, y0, x0 + w, y0 + h);
+
+    *((u32*)&poly->u0) = u + (v << 8) + (clut << 16);
+    *((u32*)&poly->u1) = u + (page << 16) + ((v + 15) << 8);
+    *((u16*)&poly->u2) = (u16)(u + FONT_12X16_GLYPH_SIZE_X + (v << 8));
+    *((u16*)&poly->u3) = (u16)(u + FONT_12X16_GLYPH_SIZE_X + ((v + 15) << 8));
+
+    addPrim(ot, poly);
+    if (hiRes)
+        GsOUT_PACKET_P = (PACKET*)poly + sizeof(POLY_FT4);
+    else
+        *lowResPacket = (PACKET*)poly + sizeof(POLY_FT4);
+}
+
+/* DISABLED, and it must stay disabled until the exemption can name primitives
+ * rather than a bucket. A scaled glyph is a POLY_FT4 (a SPRT draws texels 1:1
+ * and cannot be resized) and the renderer's rule is that a POLY on a world
+ * frame IS world geometry, so enlarged text was filtered like a wall. Naming
+ * the strings bucket fixed that -- but g_Strings2dLayerIdx is bucket 6 of
+ * g_OtTags0, the SAME ordering table the world draws into, so every tree and
+ * snow billboard that sorted into bucket 6 was exempted along with the text
+ * and drawn as screen-space 2D. Stretched diamond billboards in map0_s00.
+ * Worse, the value persists once set, so one scaled message poisoned every
+ * later frame. Blurry large text is the lesser fault by far. */
+static void Pc_MsgMarkUiBucket(void)
+{
+    extern int g_PsxUi2dBucket;
+
+    g_PsxUi2dBucket = -1;
+}
+
+/* Pick the scale for a message block and where it grows from: boxes at the
+ * bottom of the screen grow upward from their last line, the rest downward
+ * from their first. Shrunk as needed so the widest line and the whole block
+ * stay on screen. Lines are centred on x = 0 unless an inset (~T) starts them
+ * at -120, which is the extent that has to fit then. */
+static void Pc_MsgScaleSetup(s32 blockTop, s32 lineCount, s32 longestLineWidth, u8 positionIdx, bool inset)
+{
+    s32 scale   = (s32)((g_PcConfig.textSize * 4096.0f) / 100.0f);
+    s32 height  = lineCount * FONT_12X16_GLYPH_SIZE_Y;
+    int fromBot = (positionIdx == 1 || positionIdx == 3 || positionIdx == 4);
+    s32 halfW   = longestLineWidth >> 1;
+    s32 room;
+
+    if (inset)
+        halfW = (longestLineWidth - 120 > 120) ? (longestLineWidth - 120) : 120;
+
+    s_MsgAnchorY = fromBot ? (blockTop + height) : blockTop;
+
+    if (scale <= Q12(1.0f) || lineCount <= 0)
+    {
+        s_MsgScale = Q12(1.0f);
+        Pc_MsgMarkUiBucket();
+        return;
+    }
+
+    if (halfW > 0 && ((s64)halfW * scale >> 12) > 152)
+        scale = (s32)(((s64)152 << 12) / halfW);
+
+    room = fromBot ? (s_MsgAnchorY + 116) : (116 - s_MsgAnchorY);
+    if (height > 0 && ((s64)height * scale >> 12) > room)
+        scale = (s32)(((s64)room << 12) / height);
+
+    s_MsgScale = (scale > Q12(1.0f)) ? scale : Q12(1.0f);
+    Pc_MsgMarkUiBucket();
+}
+
+void Pc_MapMsgPageReset(void)
+{
+    s_PageMsg  = NULL;
+    s_PageOff  = 0;
+    s_PageNext = 0;
+}
+
+int Pc_MapMsgPagePending(void)
+{
+    return s_PageNext != 0;
+}
+
+void Pc_MapMsgPageAdvance(void)
+{
+    s_PageOff  = s_PageNext;
+    s_PageNext = 0;
+}
+
+/** Byte offset the current page of `msg` starts at. */
+static s32 Pc_MapMsgPageStart(const char* msg)
+{
+    return (msg != NULL && msg == s_PageMsg) ? s_PageOff : 0;
+}
+
+/** Ends the page at `at`, leaving the rest for the next one. Returns the code
+ * the engine already uses for "page over, more follows" (a message ending at a
+ * bare NUL), which is what makes Gfx_MapMsg_Draw turn the page. `at` always
+ * advances past the page start, so the walk cannot stall. */
+static s32 Pc_MapMsgPageBreak(const char* base, const char* at, s16 colorId, s32 align)
+{
+    s_PageNext    = (s32)(at - base);
+    s_PageColorId = colorId;
+    s_PageAlign   = align;
+    return 1;
+}
 #endif
 
 #ifndef PAD_HACK_IGNORE
@@ -57,11 +214,6 @@ static s16 g_StringColorId = StringColorId_White;
 
 // 2 bytes of padding.
 
-/** Text index 2D layer.
- * If modifying `Gfx_StringSetPosition`, when setting it to
- * a value lower than 6, text will not be affected by the fade effect.
- */
-static s32 g_Strings2dLayerIdx = 6;
 
 
 // ========================================
@@ -213,7 +365,7 @@ bool Gfx_StringDraw(char* str, s32 strLength) // 0x8004A8E8
 #ifdef SH_PC_PORT
         /* NTSC-J: SJIS pairs (the select-prompt options like Yes/No route the
          * JP map messages through this drawer) — one 12x16 kanji atlas cell. */
-        else if (g_GameRegion == Region_JPN && Pc_KanjiIsLead(charCode) && strCpy[1] != '\0')
+        else if (Pc_LangSjisActive() && Pc_KanjiIsLead(charCode) && strCpy[1] != '\0')
         {
             unsigned int   kPage;
             int            kU, kV;
@@ -273,7 +425,13 @@ bool Gfx_StringDraw(char* str, s32 strLength) // 0x8004A8E8
          * With the USA layout the emitted prim words are bit-identical to the
          * hardcoded originals kept in the #else. Bytes >= 0x80 are the PAL
          * accents (up to 2 emissions: combining mark + base letter). */
-        else if ((charCode >= GLYPH_TABLE_ASCII_OFFSET && charCode <= 'z') || charCode >= 0x80)
+        /* No 'z' upper bound: 'z' is the last cell of the 84-glyph US strip, but
+         * the 126-cell EUR atlas keeps going — bytes 0x7B-0x7F are its cells
+         * 84-88, which a Cyrillic PAL repaint uses for Ъ Ы Ь Э Ю. Font_MapChar
+         * range-checks against the active layout's glyphCount, so on the US
+         * atlas those bytes still emit nothing and US/NTSC-J rendering is
+         * unchanged; no retail or port string contains 0x7B-0x7F either way. */
+        else if (charCode >= GLYPH_TABLE_ASCII_OFFSET)
         {
             s_GlyphEmit emits[2];
             s32         emitCount;
@@ -450,14 +608,19 @@ s32 Gfx_MapMsg_CalculateWidths(s32 mapMsgIdx) // 0x8004ACF4
     g_MapMsg_WidthIdx  = 1;
     g_MapMsg_AudioLoadBlock = 0;
 
-    for (i = (FONT_12X16_LINE_COUNT_MAX - 1); i >= 0; i--)
+    for (i = (MAP_MSG_LINE_MAX - 1); i >= 0; i--)
     {
         g_MapMsg_Widths[i] = 0;
     }
 
     mapMsg = g_MapOverlayHdr.mapMessages[mapMsgIdx];
 
-    for (j = 0; j < FONT_12X16_LINE_COUNT_MAX; )
+#ifdef SH_PC_PORT
+    /* Measure the page actually on screen, not the whole message. */
+    mapMsg += Pc_MapMsgPageStart((const char*)mapMsg);
+#endif
+
+    for (j = 0; j < MAP_MSG_LINE_MAX; )
     {
         charCode = *mapMsg;
 
@@ -491,8 +654,14 @@ s32 Gfx_MapMsg_CalculateWidths(s32 mapMsgIdx) // 0x8004ACF4
                         break;
 
                     case MAP_MSG_CODE_END:
-                        j = FONT_12X16_LINE_COUNT_MAX;
+                        j = MAP_MSG_LINE_MAX;
                         break;
+
+#ifdef SH_PC_PORT
+                    case MAP_MSG_CODE_PAGE:
+                        j = MAP_MSG_LINE_MAX;
+                        break;
+#endif
 
                     case MAP_MSG_CODE_LINE_POSITION:
                         D_800C38B0.positionIdx = posIdx;
@@ -520,7 +689,7 @@ s32 Gfx_MapMsg_CalculateWidths(s32 mapMsgIdx) // 0x8004ACF4
                 break;
 
             case 0:
-                j = FONT_12X16_LINE_COUNT_MAX;
+                j = MAP_MSG_LINE_MAX;
                 break;
 
             default:
@@ -536,7 +705,7 @@ s32 Gfx_MapMsg_CalculateWidths(s32 mapMsgIdx) // 0x8004ACF4
 
 #ifdef SH_PC_PORT
                 /* NTSC-J: an SJIS pair is one fixed-width kanji cell. */
-                if (g_GameRegion == Region_JPN && Pc_KanjiIsLead((u8)charCode) && mapMsg[1] != '\0')
+                if (Pc_LangSjisActive() && Pc_KanjiIsLead((u8)charCode) && mapMsg[1] != '\0')
                 {
                     g_MapMsg_Widths[g_MapMsg_WidthIdx - 1] += FONT_12X16_GLYPH_SIZE_X;
                     mapMsg += 2;
@@ -566,6 +735,24 @@ s32 Gfx_MapMsg_CalculateWidths(s32 mapMsgIdx) // 0x8004ACF4
     }
 
     // TODO: JAP0 includes extra code and returns a value here.
+#ifdef SH_PC_PORT
+    /* A page that ended on the line bound counted the ~N that opens the line it
+     * never drew, leaving one line more than Gfx_MapMsg_StringDraw renders. That
+     * would push the bottom-anchored boxes up by a line and let the longest-line
+     * scan read the one slot the clear loop above does not cover. Terminated
+     * pages (every USA message, every retail PAL page) already sit at or below
+     * the cap, so this is a no-op for them. */
+    if (g_MapMsg_WidthIdx > MAP_MSG_LINE_MAX)
+    {
+        g_MapMsg_WidthIdx = MAP_MSG_LINE_MAX;
+    }
+
+    /* NTSC-J returns a select code here; the NTSC callers store it and read it
+     * only inside `#if VERSION_REGION_IS(NTSCJ)`. Return a defined value rather
+     * than falling off the end of a non-void function, which -O2 may miscompile.
+     * PC build only — the PSX build keeps the matching decompile's codegen. */
+    return 0;
+#endif
 }
 
 s32 Gfx_MapMsg_StringDraw(char* mapMsg, s32 strLength) // 0x8004AF18
@@ -595,9 +782,41 @@ s32 Gfx_MapMsg_StringDraw(char* mapMsg, s32 strLength) // 0x8004AF18
     DR_TPAGE* tPage;
     POLY_FT4* glyphPoly;
     SPRT*     glyphSprt;
+#ifdef SH_PC_PORT
+    char*     pcPageBase;
+    bool      pcTerminated;
+    bool      pcBudgetMax;
+#endif
 
     packet = NULL;
     result = 0;
+
+#ifdef SH_PC_PORT
+    /* Page continuation (see text_draw.h). A different message means a fresh
+     * document, so drop whatever the previous one had pending. */
+    if (mapMsg != s_PageMsg)
+    {
+        s_PageMsg  = mapMsg;
+        s_PageOff  = 0;
+        s_PageNext = 0;
+    }
+
+    pcPageBase = mapMsg;
+    mapMsg    += s_PageOff;
+
+    if (s_PageOff != 0)
+    {
+        g_StringColorId = s_PageColorId;
+        result          = s_PageAlign;
+    }
+
+    pcTerminated = false;
+    /* msgDisplayLength is clamped to MAP_MESSAGE_DISPLAY_ALL_LENGTH by the
+     * caller, so once the budget IS that clamp the rollout can never reach any
+     * further than it does on this frame — a page that still has text left at
+     * that point has to break here or it never ends. */
+    pcBudgetMax = (strLength >= MAP_MESSAGE_DISPLAY_ALL_LENGTH);
+#endif
 
     ot                  = (GsOT*)&g_OtTags0[g_ActiveBufferIdx][6];
     color               = STRING_COLORS[g_StringColorId];
@@ -662,8 +881,33 @@ s32 Gfx_MapMsg_StringDraw(char* mapMsg, s32 strLength) // 0x8004AF18
     glyphPosX           = g_StringPositionX1;
     glyphPosY           = g_StringPosition.vy;
 
+#ifdef SH_PC_PORT
+    /* The restored alignment mode also needs its origin: line 0 of a
+     * continuation page starts after the ~M/~T that would have set it, so apply
+     * what those handlers apply. */
+    if (s_PageOff != 0)
+    {
+        if (result == MapMsgCode_AlignCenter)
+        {
+            glyphPosX = -(g_MapMsg_Widths[0] >> 1);
+        }
+        else if (result == MapMsgCode_SetByT)
+        {
+            g_StringPositionX1 = -120;
+            glyphPosX          = -120;
+        }
+    }
+
+    {
+        char tabCode[3] = { MAP_MSG_CODE_MARKER, MAP_MSG_CODE_TAB, '\0' };
+
+        Pc_MsgScaleSetup(g_StringPosition.vy, g_MapMsg_WidthIdx, longestLineWidth, (u8)D_800C38B0.positionIdx,
+                         result == MapMsgCode_SetByT || strstr(mapMsg, tabCode) != NULL);
+    }
+#endif
+
     // Parse string.
-    for (lineIdx = 0; lineIdx < FONT_12X16_LINE_COUNT_MAX;)
+    for (lineIdx = 0; lineIdx < MAP_MSG_LINE_MAX;)
     {
         // Convert literal `!` and `&` into `char`s mappable to representative atlas glyphs.
 #ifdef SH_PC_PORT
@@ -798,17 +1042,37 @@ s32 Gfx_MapMsg_StringDraw(char* mapMsg, s32 strLength) // 0x8004AF18
 
                     case MAP_MSG_CODE_DISPLAY_ALL:
                         strLength = MAP_MESSAGE_DISPLAY_ALL_LENGTH;
+#ifdef SH_PC_PORT
+                        /* Re-armed here, so the rollout is at its ceiling
+                         * whatever it was on entry. */
+                        pcBudgetMax = true;
+#endif
                         break;
 
                     case MAP_MSG_CODE_END:
                         result  = NO_VALUE;
-                        lineIdx = FONT_12X16_LINE_COUNT_MAX;
+                        lineIdx = MAP_MSG_LINE_MAX;
+#ifdef SH_PC_PORT
+                        pcTerminated = true;
+#endif
                         break;
 
                     case MAP_MSG_CODE_SELECT:
                         result  = codeArg;
-                        lineIdx = FONT_12X16_LINE_COUNT_MAX;
+                        lineIdx = MAP_MSG_LINE_MAX;
+#ifdef SH_PC_PORT
+                        pcTerminated = true;
+#endif
                         break;
+
+#ifdef SH_PC_PORT
+                    /* Explicit page break: the localizer joined retail pages
+                     * that do not fit one page, so they keep their own
+                     * boundaries (Pc_LangPatchMapMessages). */
+                    case MAP_MSG_CODE_PAGE:
+                        lineIdx = MAP_MSG_LINE_MAX;
+                        break;
+#endif
 
                     case MAP_MSG_CODE_HIGH_RES:
                         g_SysWork.enableHighResGlyphs = true;
@@ -821,7 +1085,10 @@ s32 Gfx_MapMsg_StringDraw(char* mapMsg, s32 strLength) // 0x8004AF18
         // Terminator.
         case '\0':
             result  = 1;
-            lineIdx = FONT_12X16_LINE_COUNT_MAX;
+            lineIdx = MAP_MSG_LINE_MAX;
+#ifdef SH_PC_PORT
+            pcTerminated = true;
+#endif
             break;
 
         // Draw glyph sprite.
@@ -832,7 +1099,7 @@ s32 Gfx_MapMsg_StringDraw(char* mapMsg, s32 strLength) // 0x8004AF18
             /* NTSC-J: an SJIS pair draws one 12x16 kanji cell from the PC
              * atlas — same SPRT/FT4 shape as the Latin glyphs, different
              * uv/page/clut. Absent glyphs advance silently. */
-            if (g_GameRegion == Region_JPN && Pc_KanjiIsLead((u8)charCode) && ((u8*)mapMsg)[1] != '\0')
+            if (Pc_LangSjisActive() && Pc_KanjiIsLead((u8)charCode) && ((u8*)mapMsg)[1] != '\0')
             {
                 unsigned int   kPage;
                 int            kU, kV;
@@ -841,7 +1108,12 @@ s32 Gfx_MapMsg_StringDraw(char* mapMsg, s32 strLength) // 0x8004AF18
                 if (Pc_KanjiCell((u16)(((u32)(u8)charCode << 8) | ((u8*)mapMsg)[1]),
                                  &kPage, &kU, &kV, &kClut))
                 {
-                    if (g_SysWork.enableHighResGlyphs)
+                    if (s_MsgScale != Q12(1.0f))
+                    {
+                        Pc_MsgGlyphQuad(ot, &packet, glyphPosX, glyphPosY,
+                                        (u32)kU, (u32)kV, (u32)kClut, kPage, color);
+                    }
+                    else if (g_SysWork.enableHighResGlyphs)
                     {
                         glyphPoly = (POLY_FT4*)GsOUT_PACKET_P;
 
@@ -886,6 +1158,13 @@ s32 Gfx_MapMsg_StringDraw(char* mapMsg, s32 strLength) // 0x8004AF18
 
                 if (strLength <= 0)
                 {
+#ifdef SH_PC_PORT
+                    if (pcBudgetMax)
+                    {
+                        result = Pc_MapMsgPageBreak(pcPageBase, mapMsg, g_StringColorId, result);
+                    }
+#endif
+
                     if (!g_SysWork.enableHighResGlyphs)
                     {
                         GsOUT_PACKET_P = packet;
@@ -921,7 +1200,12 @@ s32 Gfx_MapMsg_StringDraw(char* mapMsg, s32 strLength) // 0x8004AF18
                     page      = g_FontLayout->tpageBase + (row / g_FontLayout->rowsPerPage);
                     temp_a0   = (idx % FONT_12X16_ATLAS_COLUMN_COUNT) * FONT_12X16_GLYPH_SIZE_X;
 
-                    if (g_SysWork.enableHighResGlyphs)
+                    if (s_MsgScale != Q12(1.0f))
+                    {
+                        Pc_MsgGlyphQuad(ot, &packet, glyphPosX, drawY, (u32)temp_a0, (u32)vTop,
+                                        (u32)g_FontLayout->packedClut, page, color);
+                    }
+                    else if (g_SysWork.enableHighResGlyphs)
                     {
                         glyphPoly = (POLY_FT4*)GsOUT_PACKET_P;
 
@@ -1023,6 +1307,13 @@ s32 Gfx_MapMsg_StringDraw(char* mapMsg, s32 strLength) // 0x8004AF18
             // Stop drawing if length exceeded.
             if (strLength <= 0)
             {
+#ifdef SH_PC_PORT
+                if (pcBudgetMax)
+                {
+                    result = Pc_MapMsgPageBreak(pcPageBase, mapMsg, g_StringColorId, result);
+                }
+#endif
+
                 if (!g_SysWork.enableHighResGlyphs)
                 {
                     GsOUT_PACKET_P = packet;
@@ -1032,6 +1323,17 @@ s32 Gfx_MapMsg_StringDraw(char* mapMsg, s32 strLength) // 0x8004AF18
             }
         }
     }
+
+#ifdef SH_PC_PORT
+    /* Only ~E, ~S and the terminating NUL write `result`; ending the parse on
+     * the line bound instead leaves it 0, which Gfx_MapMsg_Draw reads as "still
+     * rolling out" — the message could then never be dismissed (GitHub #85).
+     * Turn the page instead. */
+    if (!pcTerminated)
+    {
+        result = Pc_MapMsgPageBreak(pcPageBase, mapMsg, g_StringColorId, result);
+    }
+#endif
 
     if (!g_SysWork.enableHighResGlyphs)
     {
@@ -1206,7 +1508,16 @@ void Gfx_StringDrawInt(s32 widthMin, s32 val) // 0x8004B9F8
     while (val >= ATLAS_COLUMN_COUNT)
     {
         str--;
+#ifdef SH_PC_PORT
+        /* MIPS `srl` masks the shift amount to 5 bits, so `>> 32` is a no-op on
+         * PSX. x86-64 GCC constant-folds it to 0 instead, which collapses the
+         * loop to one pass and emits chr(val + '0') for every value >= 10
+         * (22 -> "0F", 27 -> "0K"), and reads OOB past the glyph-width table
+         * once val + '0' exceeds the atlas. */
+        quotient = val / ATLAS_COLUMN_COUNT;
+#else
         quotient = (val / ATLAS_COLUMN_COUNT) >> 32;
+#endif
         *str     = (val - (quotient * ATLAS_COLUMN_COUNT)) + '0';
 
         if (widthMin > 0)

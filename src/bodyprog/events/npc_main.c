@@ -21,10 +21,12 @@
 #include "main/fsqueue.h"
 
 #ifdef SH_PC_PORT
+#include "pc_config.h"
 static s32 Camera_Distance2dGet(const VECTOR3* pos);
 extern int g_DebugAnimKfView;
 extern int g_DebugViewNpcSlot;
 void Pc_KeyframeViewerPoseNpc(s_AnmHeader* anmHdr, GsCOORDINATE2* boneCoords);
+#include "pc_pick.h"
 #endif
 
 void Savegame_EnemyStateUpdate(s_SubCharacter* chara) // 0x80037DC4
@@ -304,10 +306,20 @@ void Game_NpcRoomInitSpawn(bool cond) // 0x80037F24
             curCharaSpawn->flags != 0 &&
             g_SavegamePtr->gameDifficulty >= curCharaSpawn->gameDifficultyMin &&
             func_8008F914(curCharaSpawn->positionX, curCharaSpawn->positionZ) &&
+#ifdef SH_PC_PORT
+            /* The PSX spawn ring (20..22u) sits inside the fog. With the fog
+             * thinned the ring is in plain sight, so spawn anywhere out of the
+             * camera's view instead, nearer or further than the ring. */
+            (Pc_LongViewActive()
+                 ? (!Math_Distance2dCheck(&g_SysWork.playerWork.player.position, pos, Q12(30.0f)) &&
+                    (!cond || (Math_Distance2dCheck(&g_SysWork.playerWork.player.position, pos, Q12(12.0f)) &&
+                               !Pc_WorldPointInView(curCharaSpawn->positionX, curCharaSpawn->positionZ))))
+                 : (!Math_Distance2dCheck(&g_SysWork.playerWork.player.position, pos, Q12(22.0f)) &&
+                    (!cond || Math_Distance2dCheck(&g_SysWork.playerWork.player.position, pos, Q12(20.0f)))))
+            && _slotSpawnCooldown[i] == 0
+#else
             !Math_Distance2dCheck(&g_SysWork.playerWork.player.position, pos, Q12(22.0f)) &&
             (!cond || Math_Distance2dCheck(&g_SysWork.playerWork.player.position, pos, Q12(20.0f)))
-#ifdef SH_PC_PORT
-            && _slotSpawnCooldown[i] == 0
 #endif
             )
         {
@@ -383,10 +395,43 @@ void Game_NpcRoomInitSpawn(bool cond) // 0x80037F24
 #endif
 }
 
-// Hoisted out of Game_NpcUpdate: clang/nxdk has no GCC nested-function extension.
-// The local type and the two helpers Game_NpcUpdate nested are lifted to file
-// scope; the captured locals (field_0[], field_40) are passed in explicitly.
-// Behavior-identical, and still compiles under the PC port's gcc.
+#ifdef SH_PC_PORT
+/* Spawned cutscene actors (charaId >= Chara_Cybil) have no AI update func in a
+ * foreign map, so Game_NpcUpdate's render-only fallback poses keyframe 0 and they
+ * freeze. For the human actors whose standing-idle clip (anim index 1) range is
+ * known, the fallback loops it instead of freezing. Ranges transcribed from the
+ * per-map-overlay *_ANIM_INFOS (those symbols aren't linked into other maps):
+ *   Cybil    (26) cybil.h:88    kf 0..15
+ *   Dahlia   (30) dahlia.h:76   kf 0..15
+ *   Lisa     (32) lisa.h:67     kf 0..9
+ *   Kaufmann (38) kaufmann.h:70 kf 0..5
+ * Non-human render-only ids in the same band (Cat, Alessa, Flauros, Incubator,
+ * Parasite, …) are EXCLUDED — anim 1 there is a walk/attack, not an idle. Cheryl
+ * and the ending/bloody variants use different ANM files / unverified ranges, so
+ * they keep the static pose until their idle range is confirmed. */
+static bool Pc_ActorIdleClipGet(s32 charaId, s16* outStartKf, s16* outEndKf, q19_12* outDur)
+{
+    s16 s, e;
+    switch (charaId)
+    {
+        case Chara_Cybil:    s = 0; e = 15; break;
+        case Chara_Dahlia:   s = 0; e = 15; break;
+        case Chara_Lisa:     s = 0; e = 9;  break;
+        case Chara_Kaufmann: s = 0; e = 5;  break;
+        default: return false;
+    }
+    *outStartKf = s;
+    *outEndKf   = e;
+    *outDur     = Q12(5.0f);
+    return true;
+}
+#endif
+
+// Un-nested from Game_NpcUpdate: Clang has no GCC nested-function extension, so
+// every Apple toolchain rejects the original form. The captured parent locals
+// (field_0[], field_40) are threaded through explicitly, which is why field_40
+// arrives by pointer — func_800382EC writes to it. The typedef moves out with
+// them because both signatures name it.
 typedef struct
 {
     s8      bitIdx_0;
@@ -573,7 +618,17 @@ void Game_NpcUpdate(void) // 0x80038354
 
                 new_var = temp_t3;
 
+#ifdef SH_PC_PORT
+                /* Thinned fog: despawn only out of view, and alive ones further
+                 * out than the 30u spawn reach. 80u frees the slot regardless. */
+                if (Pc_LongViewActive()
+                        ? (new_var > SQUARE(80) ||
+                           (new_var > ((var_t5 == 0 && npc->health < Q12(0.0f)) ? SQUARE(24) : SQUARE(48)) &&
+                            !Pc_WorldPointInView(npc->position.vx, npc->position.vz)))
+                        : (new_var > ((var_t5 == 0 && npc->health < Q12(0.0f)) ? SQUARE(24) : SQUARE(40))))
+#else
                 if (new_var > ((var_t5 == 0 && npc->health < Q12(0.0f)) ? SQUARE(24) : SQUARE(40)))
+#endif
                 {
                     npc->model.charaId = Chara_None;
                     SysWork_NpcFlagClear(k);
@@ -589,9 +644,18 @@ void Game_NpcUpdate(void) // 0x80038354
                     continue;
                 }
 
+#ifdef SH_PC_PORT
+                /* The 15u hide is the fog's edge; past it a thinned fog would
+                 * show monsters blinking out mid-street. */
+                if (!Pc_LongViewActive() &&
+                    ((g_SysWork.field_2388.field_154.effectsInfo_0.field_0.s_field_0.field_0 & 0x2 && temp_t3 > SQUARE(15)) ||
+                     (!(g_SysWork.field_2388.field_154.effectsInfo_0.field_0.s_field_0.field_0 & 0x2) &&
+                      Camera_Distance2dGet(&npc->position) > SQUARE(15))))
+#else
                 if ((g_SysWork.field_2388.field_154.effectsInfo_0.field_0.s_field_0.field_0 & 0x2 && temp_t3 > SQUARE(15)) ||
                     (!(g_SysWork.field_2388.field_154.effectsInfo_0.field_0.s_field_0.field_0 & 0x2) &&
                      Camera_Distance2dGet(&npc->position) > SQUARE(15)))
+#endif
                 {
                     npc->model.anim.flags &= ~AnimFlag_Visible;
                 }
@@ -656,6 +720,10 @@ void Game_NpcUpdate(void) // 0x80038354
                     {
                         /* Keep render-only NPCs alive even while ANM is still loading. */
                         if (animLoaded && (npc->model.anim.flags & AnimFlag_Visible)) {
+#ifdef SH_PC_PORT
+                            Pc_Pick_CharaPreDraw(npc, (int)(npc - g_SysWork.npcs),
+                                                 g_CharaModelAnimsData[animDataInfoIdx].boneCoords);
+#endif
                             func_8003DA9C(npc->model.charaId,
                                           g_CharaModelAnimsData[animDataInfoIdx].boneCoords,
                                           1, npc->timer_C6,
@@ -690,6 +758,27 @@ void Game_NpcUpdate(void) // 0x80038354
                          * keyframe 0 and place the root every frame (same
                          * recipe as the cutscene actors' update funcs). */
                         if (statueHdr != NULL) {
+#ifdef SH_PC_PORT
+                            s16    idleStart, idleEnd;
+                            q19_12 idleDur;
+                            if (Pc_ActorIdleClipGet(npc->model.charaId, &idleStart, &idleEnd, &idleDur)) {
+                                /* Loop the standing-idle clip so spawned human actors
+                                 * breathe instead of freezing at keyframe 0.
+                                 * Anim_PlaybackLoop reads only this stack info and poses
+                                 * bones 1+; the root placement below still applies (it
+                                 * never writes bone 0). model.anim.time is per-npc and was
+                                 * zeroed at spawn; AnimFlag_Unlocked is already set above. */
+                                s_AnimInfo idle;
+                                idle.playbackFunc        = Anim_PlaybackLoop;
+                                idle.status              = 0;
+                                idle.hasVariableDuration = 0;
+                                idle.linkStatus          = 0;
+                                idle.duration.constant   = idleDur;
+                                idle.startKeyframeIdx    = idleStart;
+                                idle.endKeyframeIdx      = idleEnd;
+                                Anim_PlaybackLoop(&npc->model, statueHdr, statueBc, &idle);
+                            } else
+#endif
                             Anim_BoneUpdate(statueHdr, statueBc, 0, 0, Q12(0.0f));
                             Math_RotMatrixZxyNegGte(&npc->rotation, &statueBc->coord);
                             statueBc->coord.t[0] = Q12_TO_Q8(npc->position.vx);
@@ -697,6 +786,10 @@ void Game_NpcUpdate(void) // 0x80038354
                             statueBc->coord.t[2] = Q12_TO_Q8(npc->position.vz);
                             statueBc->flg = 0;
                         }
+#ifdef SH_PC_PORT
+                        Pc_Pick_CharaPreDraw(npc, (int)(npc - g_SysWork.npcs),
+                                             g_CharaModelAnimsData[animDataInfoIdx].boneCoords);
+#endif
                         func_8003DA9C(npc->model.charaId,
                                       g_CharaModelAnimsData[animDataInfoIdx].boneCoords,
                                       1, npc->timer_C6,
@@ -782,7 +875,12 @@ void Game_NpcUpdate(void) // 0x80038354
             }
 #endif
 #ifdef SH_PC_PORT
-            if (g_DebugAnimKfView && g_DebugViewNpcSlot == k)
+            if (Pc_Pick_NpcTick(npc, (int)(npc - g_SysWork.npcs)))
+            {
+                /* Console FREEZE: no AI tick, so the bones keep last frame's
+                 * pose and the enemy neither moves nor attacks. */
+            }
+            else if (g_DebugAnimKfView && g_DebugViewNpcSlot == k)
             {
                 /* Keyframe viewer is inspecting this NPC: pose it from the
                  * inspector (freeze/loop) instead of running its AI + per-frame
@@ -794,6 +892,14 @@ void Game_NpcUpdate(void) // 0x80038354
 #endif
             {
                 g_MapOverlayHdr.charaUpdateFuncs[npc->model.charaId](npc, g_CharaModelAnimsData[animDataInfoIdx].activeAnmHdr, boneCoords);
+#ifdef SH_PC_PORT
+                /* Randomizer enemy-HP scale: the AI update above sets an enemy's
+                 * health on its first tick; latch + multiply once (no-op off). */
+                {
+                    extern void Pc_Rando_ScaleEnemyHealth(void* npc, int slot);
+                    Pc_Rando_ScaleEnemyHealth(npc, (int)(npc - g_SysWork.npcs));
+                }
+#endif
 
                 Collision_FlagsUpdate();
                 func_80037E78(npc);
@@ -802,6 +908,9 @@ void Game_NpcUpdate(void) // 0x80038354
 
             if (npc->model.anim.flags & AnimFlag_Visible)
             {
+#ifdef SH_PC_PORT
+                Pc_Pick_CharaPreDraw(npc, (int)(npc - g_SysWork.npcs), boneCoords);
+#endif
                 func_8003DA9C(npc->model.charaId, boneCoords, 1, npc->timer_C6, (s8)npc->model.paletteIdx);
             }
         }
@@ -869,22 +978,6 @@ void Game_NpcUpdate(void) // 0x80038354
 
     for (l = 0; l < ARRAY_SIZE(D_800BCDA8); l++)
     {
-#ifdef SH_PC_PORT
-        /* One-shot per-slot keyon diagnostic so we can verify the radio
-         * voice actually starts when an enemy first enters range. */
-        static s8 _radioKeyonLogged[2] = { 0, 0 };
-        if (l < 2 && !_radioKeyonLogged[l] &&
-            D_800BCDA8[l].field_0 == NO_VALUE && D_800BCDA8[l].field_1 >= 0) {
-            _radioKeyonLogged[l] = 1;
-        }
-        /* Throttled state-snapshot â€” every ~1s log the actual D_800BCDA8 values
-         * so we can confirm whether field_0 is stuck at non-NO_VALUE. */
-        {
-            static u32 _radStateTickCnt = 0;
-            if (l == 0 && (++_radStateTickCnt % 60) == 0) {
-            }
-        }
-#endif
         if (D_800BCDA8[l].field_0 == NO_VALUE)
         {
             if (D_800BCDA8[l].field_1 >= 0)

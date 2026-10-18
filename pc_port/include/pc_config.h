@@ -1,7 +1,18 @@
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 #ifndef PC_CONFIG_H
 #define PC_CONFIG_H
 
-/* Minimap size percentage bounds (config key: minimap_scale). */
+/* Config schema version, bumped whenever a persisted DEFAULT changes so that
+ * users sitting on the previous default get the new one on update (a value they
+ * deliberately changed is kept). See PcConfig_Load's migration block. Bump this
+ * and add a migration whenever you change a default that is written to config.cfg.
+ *   1: world_vscale default 1.0 -> 1.08 (DuckStation-match vertical FOV).
+ *   2: crt_aspect_trim default 0.98 -> 1.06, so Simple's default shape equals
+ *      Advanced's (hfov 1.00, vfov 1.08) again -- they diverged at vfov 1.08. */
+#define PC_CONFIG_VERSION 3
+
+/* Minimap size range, as a percentage of the built-in MM_SIZE. The top end is a
+ * little larger than the stock panel; the bottom end is a bit over half of it. */
 #define MINIMAP_SCALE_MIN 60.0f
 #define MINIMAP_SCALE_MAX 120.0f
 
@@ -38,16 +49,74 @@ typedef struct {
     int windowWidth;
     int windowHeight;
     int fullscreen;      /* 0 = windowed, 1 = exclusive fullscreen, 2 = borderless (desktop) */
+    int confineCursor;   /* keep the pointer inside the window while focused, fullscreen/borderless only (config key: confine_cursor) */
     int disableCulling;  /* 1 = render all objects regardless of view angle */
+    int drawDistancePct; /* per-poly far cap as a % of vanilla ~61u; 200 = ~122u. Worth raising with fog turned down */
     int preloadChunks;   /* 1 = load all IPD chunks at map init instead of streaming */
     int vsync;           /* 0 = off (uncapped), 1 = on, -1 = adaptive */
     int refreshRate;     /* target refresh rate in hz (0 = display default); fullscreen only */
     int fpsCap;          /* gameplay fps cap: 0 = uncapped, 30 = PSX-accurate, 60 = smooth */
-    int skipIntros;      /* 1 = skip Konami/KCET logos and opening movie, go straight to main menu */
+    int weatherSimHz;      /* rain/snow simulation rate: 60 (default) steps it once per rendered
+                            * frame, 30 locks it to the console's cadence. Only the frame-stepped
+                            * parts differ (snow's random walk, spawn/rest counters, the wind
+                            * ramp); fall speed and wind are delta-scaled either way.
+                            * (config key: weather_sim_hz, console: WEATHERHZ) */
+    int cutsceneLineGapMs; /* min silence (ms) between cutscene voice lines — simulates PSX CD
+                            * seek latency so tightly-timed lines don't run together. Applied as a
+                            * MINIMUM (never shortens an authored gap). 0 = off. Default 300. */
+    /* "Dark Harry" easter egg (pc_dark_harry.c), NOT original-game behaviour.
+     * darkHarry 0 = off entirely. afkSec = seconds of no input before he
+     * appears; distance = how far out, in world units, which wants to be the
+     * fog wall for the intended effect. (config keys: dark_harry,
+     * dark_harry_afk_sec, dark_harry_distance) */
+    int darkHarry;
+    int darkHarryAfkSec;
+    int darkHarryDistance;
+    /* Fixed spot he appears at, in HUNDREDTHS of a world unit (1250 = 12.5).
+     * Both zero = no landmark set, fall back to "ahead of the player at
+     * darkHarryDistance". (config keys: dark_harry_x, dark_harry_z) */
+    int darkHarryX;
+    int darkHarryZ;
+
+    int msgVoiceTailMs;  /* how long an added text-box voice (load/XA/msg_<KEY>.wav) keeps its
+                          * page on screen after the clip ends, in ms. The authored ~J timer was
+                          * written for a silent line and is often shorter than a recording of it.
+                          * 0 = hold for the clip only. Default 1000.
+                          * (config key: msg_voice_tail_ms) */
+    int skipIntros;      /* 0 = normal boot; 1 = skip the warning screen, Konami/KCET logos and
+                          * intro movie, landing on the main menu; 2 = additionally auto-start a
+                          * New Game on NORMAL at the configured `map` and skip the opening movie,
+                          * booting straight into gameplay. Also set to 2 by `-skiptogame`.
+                          * Every existing truthiness test stays correct, so 2 implies 1. */
     int showConsole;     /* EXTERNAL console window only: 1 or 3 = create it, else none.
                           * The ingame console is not config-gated anymore — `~` toggles it
                           * (needs allow_debug_controls). Legacy values 2/3 still parse. */
-    int psxDither;       /* texture filtering mode: 0 = off, 1 = PSX dither, 2 = bilinear */
+    int psxDither;       /* legacy combined key (config: psx_dither). Kept only so an
+                          * existing config still loads: 0 off, 1 dither, 2 bilinear,
+                          * 3 trilinear, 4-7 aniso 2x/4x/8x/16x. Migrated into the two
+                          * independent settings below, which are what the port reads. */
+
+    /* PSX 4x4 ordered dither + 5-bit quantize (config key: dithering). Its own
+     * setting now: it is a look, not a filtering quality, and pairing it with a
+     * smoothing mode is a legitimate combination the old single list could not
+     * express. Default on. */
+    int dithering;
+
+    /* Texture filtering, dither excluded (config key: texture_filter):
+     * 0 = off (point), 1 = bilinear, 2 = trilinear, 3..6 = anisotropic
+     * 2x/4x/8x/16x. */
+    int textureFilter;
+
+    /* How a render resolution below the window is scaled up to it (config key:
+     * scaling): 0 = integer, 1 = nearest, 2 = bilinear, 3 = sharp bilinear.
+     * Default 2, which is what the present always did. Only has an effect when
+     * the two sizes differ, so mostly borderless at a low render resolution. */
+    int scaling;
+    /* Native (PSX) resolution: render each screen at the mode the game itself
+     * sets (320x224 play, 640x448 Konami, 320x448 menus) and scale it to a 4:3
+     * picture in the window. width/height are then only the window size. Off
+     * by default (config key: native_resolution). */
+    int nativeResolution;
     int widescreenMode;  /* 0 = pillarbox (PSX-faithful, default), 1 = Hor+ (extra side content), 2 = stretch */
     int menuPillarbox;   /* 1 = pillarbox 2D screens (menus/load) with 4:3 black bars instead of stretching to fill (config key: menu_pillarbox) */
     int allowLooseFiles; /* 1 = scan gamedata/load/{folder}/{name}.{ext} before CD read (texture mod support) */
@@ -68,6 +137,46 @@ typedef struct {
                            * VRAM wants this high; the cap only exists so whole-map mode cannot try to
                            * upload multi-GB in one load and hang a small GPU. 0 = unlimited
                            * (config key: texpack_budget_mb) */
+    int texpackBudgetUserSet;   /* 1 = texpack_budget_mb came from the config file, so
+                                 * HiresOverride_ClampBudgetToVram may only LOWER it. When 0 the
+                                 * budget is DERIVED from the GPU's reported VRAM instead — the
+                                 * shipped default is a constant and a clamp that only lowers left
+                                 * a 16 GB card pinned at 6 GB with 8 GB free (issue: "stops
+                                 * loading textures after some point"). */
+    int texpackBudgetCeilingMb; /* 0 = none. Hard upper bound from the system-RAM clamp in
+                                 * main_pc.c, which the VRAM derivation must not raise past:
+                                 * on a shared-memory APU, pack textures come out of the same
+                                 * RAM as the game. */
+    int texpackWorkerThread; /* 1 = decode+composite pack rows on a worker thread so a heavy
+                              * source cannot hitch the frame; 0 = on the game thread (A/B).
+                              * Config key: texpack_worker */
+    int texpackLazyMs;    /* Wall-clock milliseconds per frame the demand-driven pack composer
+                           * (texpack_lazy.c) may spend on compose + upload. Pool-slot pack rows
+                           * are no longer composed at TIM load - they compose when a prim first
+                           * SAMPLES them, so an unreached row draws native disc art until the pump
+                           * gets to it (visible HD pop-in). At least one row always runs, so a
+                           * single ~7.6ms row/frame is the floor; x3 for the first 180 frames after
+                           * a map load. Raise it to trade frame spikes for faster pop-in
+                           * (config key: texpack_lazy_ms) */
+    int dumpTextures;     /* 1 = write the game's art to gamedata/dump/ as PNGs named the way the pack
+                           * loader matches them, so a dump is directly usable as a texture pack. Like
+                           * DuckStation, one entry per OBJECT: the piece of the sheet a model draws,
+                           * through the palette row it draws it with, read out of the .ILM/.PLM/.IPD
+                           * as it loads. Sheets no model references (fonts, HUD, 2D screens) fall
+                           * back to the whole upload. Off costs nothing (config key: dump_textures) */
+    int attractDemos;     /* 1 = play the PSX attract-mode gameplay demos after the title screen
+                           * sits idle (the intro FMV still plays every third cycle either way)
+                           * (config key: attract_demos) */
+    int menuFpsUnlock;    /* 0 (default) = every non-gameplay screen takes the PSX one-vblank
+                           * wait, 60fps, because cursor and repeat speeds there are counted
+                           * per frame and ran 4x fast on a 240Hz menu.
+                           * 1 = let the fps cap apply to screens that are not gameplay:
+                           * main menu, options (title and in-game), the map screens and
+                           * cursor puzzles. The inventory stays at 60 on purpose, and
+                           * cutscenes stay clamped by Pc_ScriptOwnsShot regardless.
+                           * Set 0 to put every non-gameplay screen back on the hard
+                           * one-vblank wait. (config key: menu_fps_unlock) */
+    int lowHealthGlow;    /* 1 = pulsing red edge glow while health is low (config key: low_health_glow); off by default */
     int bulletDecals;     /* 1 = bullet-hole decals where player gunfire hits world geometry
                            * (gamedata/decal.png; up to 64 FIFO, cleared on map load)
                            * (config key: bullet_decals) */
@@ -76,12 +185,37 @@ typedef struct {
                            * AI update funcs, so console SPAWN works for every type in any map. Native
                            * maps keep their native slots/variants; 0 = vanilla 3-types-per-map.
                            * (config key: global_chara_pool; docs/Global_Chara_Pool.md) */
-    int wholeMapExteriors; /* EXPERIMENTAL, default 0: texture + draw every loaded exterior chunk (whole
-                            * town resident — combine with fogstr to see it). Costs draw time and shows
-                            * geometry vanilla never rendered at once. Requires preload_chunks and
+    int wholeMapExteriors; /* 0 off, 1 on, 2 auto (default): texture + draw every loaded exterior chunk
+                            * (whole town resident). Auto engages only while fog strength is below 1.0,
+                            * since denser fog hides it anyway. Requires preload_chunks and
                             * resident_textures. (config key: whole_map_exteriors) */
     int usePgxp;         /* 1 = enable PGXP precision/perspective-correct textures (work-in-progress) */
+    int itemDepthProbe;  /* DIAGNOSTIC, default 0: one-shot [ITEMDEPTH] dump per item-screen entry
+                          * (pickup take-screen / inventory carousel / puzzle). Logs, per item
+                          * primitive, its submission index, GTE SZ, IR0, OT bucket, whether
+                          * ApplyGtePerVertexDepth's per-vertex branch fired, the resulting NDC +
+                          * window depth, the raster order, and the REAL queried GL depth state at
+                          * draw time. Read-only: changes no rendering. (config key: item_depth_probe) */
+    int charaPrimProbe;  /* DIAGNOSTIC, default 0 (off): e_CharaId to trace through the character
+                          * draw chain. Emits [CHARAPRIM], per model of that chara, whether the
+                          * model reached the prim builder at all and — if it did — how many of its
+                          * prims survived each reject in func_8005AC50 (OT-depth window, backface,
+                          * screen-bound), plus the projected screen XY/Z of the first prim's
+                          * corners. Answers "is this part submitted, and if so where did it land"
+                          * without guessing. One-shot: dumps CHARA_PRIM_PROBE_FRAMES frames' worth
+                          * then goes quiet. Read-only: changes no rendering.
+                          * (config key: chara_prim_probe; PuppetNurse=16, PuppetDoctor=18) */
+    int psxPolySizeCull; /* 1 = PSX GPU parity: reject triangles whose screen bbox exceeds 1023x511,
+                          * like real hardware — kills the screen-crossing wedge polys when the camera
+                          * sits inside geometry (elevator doors/staircase). 0 = draw them (old behavior).
+                          * (config key: psx_poly_size_cull; console: polysizecull) */
     int msaaSamples;     /* MSAA on the default framebuffer: 0 = off, 2/4/8 = sample count (config key: msaa) */
+    char renderer[16];   /* graphics backend (config key: renderer): "gl" (default, native OpenGL),
+                          * "d3d11", "vulkan", "d3d9", "software", "gles". Everything but "gl" runs the
+                          * same renderer against an OpenGL ES 3.0 context provided by ANGLE, so those
+                          * need libEGL.dll + libGLESv2.dll beside the exe; without them the game logs a
+                          * warning and falls back to "gl". Mostly of interest because overlay/capture
+                          * tools hook DXGI and Vulkan far more reliably than they hook opengl32. */
     int postProcess;     /* full-screen post-process look: 0 = off, 1.. = built-in filter (config key: post_process) */
     int tonemap;         /* tone-map operator: 0=off,1=Reinhard,2=ACES,3=Filmic (config key: tonemap) */
     int flashlightMode;     /* THE flashlight setting (config key: flashlight_mode):
@@ -93,15 +227,29 @@ typedef struct {
                              * derive it the other way (pp+shadows = Modern + Shadows). */
     int perPixelFlashlight; /* DERIVED from flashlightMode (legacy key: per_pixel_flashlight). */
     int flashlightShadows;  /* DERIVED from flashlightMode (legacy key: flashlight_shadows). */
+    float fogStrength;          /* distance-fog density scale, 0..2; 1.1 = PSX-matched. Lower to see further (config key: fog_strength) */
     float flashlightIntensity;  /* per-pixel flashlight cone brightness scale, 0..3 (config key: flashlight_intensity) */
     float flashlightSize;       /* per-pixel flashlight cone coverage multiplier, 0..3 (config key: flashlight_size) */
     float flashlightIntensityFps; /* per-pixel flashlight brightness in FPS mode, 0..3 (config key: flashlight_intensity_fps) */
     float flashlightSizeFps;      /* per-pixel flashlight coverage in FPS mode, 0..3 (config key: flashlight_size_fps) */
     float postProcessIntensity; /* post-process effect mix, 0..1 (config key: post_process_intensity) */
     float tonemapIntensity;     /* tone-map mix, 0..1 (config key: tonemap_intensity) */
+    /* Image adjustments applied to the final frame every time (independent of the
+     * post_process filter). 1.0 = neutral for all three. Driven by the in-game
+     * Brightness screen. (config keys: brightness / contrast / saturation) */
+    float brightness;           /* output brightness multiplier, 0.25..2.0; default 1.0 */
+    float contrast;             /* output contrast around mid-grey, 0.5..2.0; default 1.0 */
+
+    /* What brightness/contrast/saturation are allowed to touch (config key:
+     * image_adjust_scope): 1 = only frames that render the 3D world (default),
+     * 0 = the whole composed frame, menus and FMVs included. */
+    int imageAdjustScope;
+    float saturation;           /* output colour saturation, 0..2.0; default 1.0 */
     float xaVolume;             /* XA cutscene-voice stream volume, 0..1; default 1.0 (config key: xa_volume) */
     float fmvVolume;            /* FMV movie (SDL PCM) volume, 0..1; default 1.0 (config key: fmv_volume) */
+    int   fmvPsxVolume;         /* 1 = attenuate FMV audio to the PSX SsSetSerialVol level (80/128); 0 = raw (config key: fmv_psx_volume) */
     int enableDebugLog;  /* 1 = create + write SilentHill.log; 0 = no log file, SH_DBG no-op (config key: enable_debug_log) */
+    int glVerbose;       /* 1 = log GL/GLSL details and shader info logs even on success, for driver-specific bug reports (config key: gl_verbose). Shader FAILURES are always logged regardless. */
     int allowDebugControls; /* 1 = enable dev/cheat keys (numpad, top-row digits, ~, kill-Harry, etc.); 0 = off (default) */
     int unlimitedEnemies;   /* 1 = raise the per-room concurrent-NPC cap to NPC_COUNT_MAX (config key: unlimited_enemies) */
     int randomizer;         /* 1 = randomizer gamemode: New Game always opens in map2_s04, every door leads
@@ -109,6 +257,9 @@ typedef struct {
                              * map7_s03 boss with a score-picked ending. Forces global_chara_pool on and
                              * overrides `map`. 0 = off, byte-identical vanilla.
                              * (config key: randomizer; docs/Randomizer_Mode.md) */
+    /* Randomizer tunables live in their OWN file (gamedata/randomizer.cfg), owned
+     * by pc_rando_config.c — NOT here — so config.cfg stays clean and the in-game
+     * panel / Lua layer read+write a single dedicated store (s_RandoConfig). */
     int controllerMovement; /* 0 = analog stick, 1 = d-pad, 2 = both (default) */
     int movementOriginal;   /* 1 = PSX lower-body movement state
                              * machine (accel/decel, wall smack, authored sidesteps)
@@ -121,7 +272,9 @@ typedef struct {
     int tpsCameraCollision; /* "Allow thirdperson camera collision": 1 (default) = the TPS/OTS eye is pulled in when level geometry would come between it and Harry; 0 = the eye keeps its ideal orbit position and may pass through walls (config key: tps_camera_collision) */
     int tpsOtsAim;          /* "OTS aiming in Thirdperson": 1 (default) = raising the gun in TPS eases the camera into the Over-the-Shoulder framing (and the shoulder-swap bind works); 0 = TPS keeps its centred camera while aiming (config key: tps_ots_aim) */
     int crosshair;          /* 1 = draw a center crosshair while aiming in TPS/OTS (config key: crosshair) */
-    int crosshairStyle;     /* reticle shape: 0 = cross (+), 1 = dot, 2 = circle, 3 = dashes (config key: crosshair_style) */
+    int crosshairStyle;     /* reticle shape: 0 = cross (+), 1 = dot, 2 = circle, 3 = dashes/gap (config key: crosshair_style) */
+    float crosshairSize;    /* reticle scale in percent, 25..125 (config key: crosshair_size) */
+    float textSize;         /* subtitle/message text scale in percent, 100..150 (config key: text_size) */
     int aimAssist;          /* 1 = OTS/TPS free-aim aim assist (mouse body-coverage + controller auto-aim) (config key: aim_assist) */
     int mouseCursor;        /* 1 = mouse controls cursor puzzles + clickable main menu (config key: mouse_cursor) */
     int altButtonSprint;    /* "Always use button based sprinting": 1 = walk by default, sprint ONLY while the bound run control is held — applies to alt cameras (TPS/OTS/FPS) AND 2D control under any camera; 0 = a near-full stick push also sprints (config key: altcam_button_sprint) */
@@ -136,8 +289,6 @@ typedef struct {
                              * character. Off by default — a swap is a synchronous
                              * reload, so an accidental stick click would hitch
                              * (config key: character_switch_l3) */
-    char playerCharacter[16]; /* play-as skin token ("harry", "lisa", "cybil", ...);
-                               * config key: player_character */
     int hiResTextures;      /* Xbox: 1 = use hi-res replacement textures when they EXIST
                              * on the drive; 0 = always native-res art. Separate from
                              * allow_loose_files, which is the master asset-replacement
@@ -148,25 +299,82 @@ typedef struct {
                              * 0 = keep stepping (config key: bw_quick_save); default 0 */
     int disableDpadMovement; /* 1 = the controller D-pad no longer drives movement, freeing those D-pad inputs to be bound to other actions (config key: disable_dpad_movement); default 0 */
     int menuFilter;          /* 1 = bilinear-filter menus / 2D screens, independent of the in-game texture Filtering mode; default 0 (config key: menu_filter) */
-    int   adsr;             /* 1 = SPU ADSR envelopes (instrument attack/release fades in sequenced BGM); default 1 (config key: adsr) */
     int minimap;             /* minimap overlay: 0 = off, 1 = square, 2 = circle (config key: minimap); default 0 */
+    int anisoLevel;          /* max anisotropic taps, 1..16 (config key: aniso_level); default 8 */
+    int shadowMapSize;       /* flashlight shadow-map resolution, 256..8192 (config key: shadow_resolution); default 1024 */
     int minimapCorner;       /* minimap screen corner: 0 = top-left, 1 = top-right, 2 = bottom-left, 3 = bottom-right (config key: minimap_corner); default 0 */
+    int fpsDisplay;          /* FPS counter: 0 = off, 1 = top-left, 2 = top-right, 3 = bottom-left, 4 = bottom-right (config key: fps_display); default 0 */
     int minimapShape;        /* DEPRECATED, folded into `minimap`; still read to migrate old configs (config key: minimap_shape) */
+    int configVersion;       /* PC_CONFIG_VERSION the file was last written at; 0 = pre-versioning. Drives the default-migration in PcConfig_Load (config key: config_version) */
     float minimapScale;      /* minimap size percentage, MINIMAP_SCALE_MIN..MAX (config key: minimap_scale); default 100 */
+    int enablePlugins;       /* 1 = load plugins/*.dll gameplay plugins at boot; 0 = never touch them (config-only key: enable_plugins); default 0 -- a DLL runs arbitrary code, so the surface is strictly opt-in */
     int minimapRequireMap;   /* 1 = only draw the map once the area's paper map has been found; 0 = always draw it (config-only key: minimap_require_map); default 1 */
     float minimapOpacity;    /* minimap opacity percentage, 0..100 (config key: minimap_opacity); default 100 */
+    int   adsr;             /* 1 = SPU ADSR envelopes (instrument attack/release fades in sequenced BGM); default 1 (config key: adsr) */
     int   xboxPalettedTex; /* Xbox only: 1 = cache index pages + GPU palettes (default, ~4x texture capacity); 0 = the old per-(tpage,clut) ARGB cache. Config key: texture_paletted. Escape hatch if the paletted path misbehaves -- no rebuild needed. */
     int   xboxVideo720p;    /* Xbox only: 0 = 480p (default), 1 = 1280x720 pillarboxed 4:3 (config key: video_720p; applied at boot, reboot to change) */
     int   logDiag;          /* Xbox only: 0 = quiet log (default; per-frame diag probes gated), 1 = full diagnostic stream (config key: log_diag) */
-    int   cutsceneLineGapMs; /* minimum silence (ms) between cutscene voice lines so they don't run together; 0 = off, 300 = default (config key: cutscene_line_gap_ms) */
-    int   retroAchievements;  /* Xbox: 1 = enable RetroAchievements (softcore) (config key: retroachievements) */
-    char  raUsername[64];     /* RA account username (config key: ra_username) */
-    char  raToken[96];        /* RA connect token; persisted so the password need not be re-stored (config key: ra_token) */
     char  raPassword[64];     /* RA password: used ONCE on first login, then ra_xbox.c persists raToken (config key: ra_password) */
     int   audioOutput;      /* speaker layout: 0 = auto (OpenAL detects the system layout; alsoft.ini honored), 1 = stereo, 2 = quad, 3 = 5.1, 4 = 7.1, 5 = hrtf headphones. With rear speakers active: positional SFX pan on the full circle, wide-stereo BGM layers play from the surrounds (config key: audio_output = auto|stereo|quad|51|71|hrtf) */
-    float fpsFov;           /* first-person horizontal FOV in degrees (4:3 basis), 55..110; default 71.1 = the game's OWN projection (H = gsScreenHeight = 224 on the 320-wide progressive frame), so the default is a no-op; applied ONLY during FPS gameplay (config key: fps_fov) */
-    float tpsFov;           /* Thirdperson/OTS horizontal FOV in degrees (4:3 basis), 55..110; default 71.1 = the game's OWN projection (H = gsScreenHeight = 224 on the 320-wide progressive frame), so the default is a no-op; applied ONLY during TPS/OTS gameplay — the Classic camera always keeps the original projection (config key: tps_fov) */
-    float tpsAimZoom;       /* "TPS/OTS Aim Zoom": how far the TPS/OTS camera dollies in while aiming, as a percentage of the zoom range, 0..200. 100 (default) = the original full zoom, 200 = a deeper 2x zoom, 0 = no zoom at all. Replaces the old tps_aim_zoom on/off key (config key: tps_aim_zoom_amount) */
+    float fpsFov;           /* first-person horizontal FOV in degrees (4:3 basis), 40..140; default 71.1 = the game's OWN projection (H = gsScreenHeight = 224 on the 320-wide progressive frame), so the default is a no-op; applied ONLY during FPS gameplay (config key: fps_fov) */
+    float tpsFov;           /* Thirdperson horizontal FOV in degrees (4:3 basis), 40..140; default 71.1 = the game's OWN projection, a no-op; applied ONLY during TPS gameplay. OTS has its own otsFov (config key: tps_fov) */
+    float tpsAimZoom;       /* Thirdperson aim dolly, -200..200%. 0 = no zoom (rest distance), 100 (default) = the original zoom, 200 = as close as the camera goes; negative pulls the aim camera back (wider view while aiming) (config key: tps_aim_zoom_amount) */
+    float otsFov;           /* Over-the-Shoulder horizontal FOV in degrees, 40..140; default 71.1 (a no-op). Separate from tpsFov (config key: ots_fov) */
+    float otsAimZoom;       /* OTS aim dolly, -200..200%; same meaning as tpsAimZoom (config key: ots_aim_zoom_amount) */
+    /* Resting dolly, -200..200%, 0 = the original distance. Same scale as the
+     * aim dolly and along the same axis, so the camera can sit closer to Harry
+     * without touching the FOV -- widening the FOV to get nearer flattens the
+     * depth cues, which is the thing this avoids. The aim dolly then measures
+     * from wherever rest ends up, which is what "0 = rest distance" already
+     * says it does. (config keys: tps_rest_zoom_amount, ots_rest_zoom_amount) */
+    float tpsRestZoom;
+    float otsRestZoom;
+    /* Per-camera position offsets in the view frame (Q12): X = lateral along the
+     * right vector (shoulder side; g_OtsSide flips it), Y = vertical (shown +up in
+     * the menu; stored PSX-down). "Rest" = not aiming, "Aim" = aiming; the camera
+     * eases between them. The TPS aim offset applies only with tps_ots_aim on.
+     * Defaults reproduce the old hardcoded OTS_OFFSET (0.55) / OTS_OFFSET_AIM (0.9).
+     * Config keys: tps_rest_x/y, tps_aim_x/y, ots_rest_x/y, ots_aim_x/y. */
+    int   tpsRestX;
+    int   tpsRestY;
+    int   tpsAimX;
+    int   tpsAimY;
+    int   otsRestX;
+    int   otsRestY;
+    int   otsAimX;
+    int   otsAimY;
+    /* First-person eye position, the baseline for g_PcFpsOffset (a LOCAL offset in
+     * Harry's body frame, Q12): vx = right(+), vy = up(-, PSX +Y is down), vz =
+     * forward(+). Head-follow sway rides on top at runtime. Tunable in the View
+     * quick-options page while in FPS, and via the numpad debug keys. Baseline
+     * {-29, -6836, 919}. Config keys: fps_head_x, fps_head_y, fps_head_z. */
+    int   fpsHeadX;
+    int   fpsHeadY;
+    int   fpsHeadZ;
+    float fpsMeleeSwing;    /* FPS melee-swing camera pullback cap in world units, 0..1; default 0.5, 0 = off. How far the eye dollies back when Harry raises his arms to swing (config key: fps_melee_swing) */
+    /* display_aspect: 0 = crt (stretch the framebuffer to 4:3, as a television
+     * does, the default), 1 = raw (the framebuffer at the `par` knob's pixel
+     * aspect, faithful to the game's own numbers). */
+    int   aspectRaw;
+    /* crt_aspect_trim: multiplies the 4:3 target of display_aspect = crt.
+     * 1.0 is a textbook 4:3; below 1.0 gives taller, thinner figures.
+     * Console: crtaspect. Quick options: View & Aspect page. */
+    float crtAspectTrim;
+    /* The three live view knobs the console has always had (hfov / vfov / par),
+     * now persisted so the View & Aspect page can save what the player picks.
+     * hfov and vfov only change how much world is on screen -- display_aspect =
+     * crt divides them back out of the pixel aspect, so they cannot squash the
+     * picture -- and par is read only by display_aspect = raw.
+     * Config keys: world_hscale, world_vscale, pixel_aspect. */
+    float worldHScale;
+    float worldVScale;
+    float pixelAspect;
+    /* world_vshift: GTE projection-centre delta in PSX rows, + = view up.
+     * Gameplay cameras only; cutscenes use the separate cutshift. Console
+     * `vshift`. 0 = the console anchor, which is where it should stay unless
+     * a comparison says otherwise. */
+    float worldVShift;
+    float cutsceneVShift;   /* console `cutshift`: vertical view shift during cutscenes, PSX rows */
     float reverbScale;      /* reverb depth->wet mapping scale, 0 = leave PsyCross default (2.0) (config key: reverb_scale) */
     float mouseSensitivity;      /* mouse-look sensitivity multiplier for TPS/OTS/FPS cameras, 0.1..4.0; default 1.0 (config key: mouse_sensitivity) */
     float controllerSensitivity; /* right-stick look sensitivity multiplier for TPS/OTS/FPS cameras, 0.1..4.0; default 1.0 (config key: controller_sensitivity) */
@@ -182,7 +390,10 @@ typedef struct {
     /* Global (scheme-independent) binds. Change Camera / Reload / Cycle Weapons /
      * Quick Heal are per-scheme now — they live in ControlScheme above. */
     char keyQuickSave[24], keyQuickLoad[24]; /* PC-only: quick save/load screen hotkeys */
+    char keyQuickOptions[24]; /* PC-only: in-game quick options overlay hotkey (config key: key_quick_options); default F10 */
+    char padQuickOptions[24]; /* PC-only: OPTIONAL controller bind for the same overlay (config key: pad_quick_options); unbound by default */
     char keySwapShoulder[24]; /* PC-only: swap OTS shoulder side (default Mouse3) */
+    char padSwapShoulder[24]; /* PC-only: controller bind for the same (config key: pad_swap_shoulder); unbound by default */
     char keyConsole[24]; /* PC-only: dev console toggle key (default tilde "`"); keyboard-only */
     /* PC-only graphics-effect tuning keys (keyboard-only). keyGfxCycle switches
      * which enabled effect (flashlight / post-process / tonemap) is being tuned;
@@ -202,6 +413,34 @@ typedef struct {
      * disc is active — story/item text then comes from the disc itself. */
     int language;
 
+    /* Text language for NTSC-J discs: 0=Japanese, 1=Chinese (config key:
+     * jp_language, values "ja"/"zh"). Kept apart from `language` above because
+     * the two share no ids and no code path — the PAL setting picks which of
+     * the disc's own localized files to read, while this one only picks which
+     * glyph set the kanji rasterizer draws (see pc_kanji.h) and which menu
+     * text the port supplies. Chinese needs a disc carrying the fan
+     * translation; on a stock JP disc it changes nothing but the menus. */
+    int jpLanguage;
+    /* Which of the three main menus to show, independent of the disc:
+     * auto / us / pal / japanese. See pc_title_style.h. */
+    /* Cross-region languages: offer every installed pack on every disc and
+     * show the Language row off a PAL disc. ON by default -- most Brazilian
+     * players own the USA disc, and a US disc with no Language row is the
+     * reason a translator had to ship their own font patch to test. Off, a
+     * US or JP disc offers only its own languages and the Shift-JIS packs.
+     * (On a US or JP disc the PAL glyph grid is a pinned override, never an
+     * upload: that home is other art there -- see Font_EurGridBacked.)
+     * (config: cross_region_languages) */
+    int crossRegionLanguages;
+
+    /* The language as the config spells it. The id it means depends on the
+     * disc -- "de" is the disc's own German on PAL and the de pack anywhere
+     * else -- and the parser runs before the region is known, so the code is
+     * kept and Pc_LangInit resolves it once. (config key: language) */
+    char languageCode[16];
+
+    int menuStyle; /* TITLE_STYLE_* in pc_title_style.h; < 0 = follow the disc */
+
     /* Preferred disc region when several discs are in gamedata/: 0=auto
      * (USA wins, then PAL, then NTSC-J), 1=usa, 2=pal, 3=jap (config key:
      * region; the launcher's Region dropdown writes it). Missing preferred
@@ -214,7 +453,103 @@ typedef struct {
      * name-priority order. */
     char discImage[128];
 
+    /* Restore the Grey Children on a PAL or NTSC-J disc (config key:
+     * uncensored). Both censor them into Mumblers -- PAL everywhere, NTSC-J in
+     * the school and the amusement park -- and both carry the unused Grey
+     * Child model, so nothing has to be supplied. 1 = keep Grey Children
+     * (matches the US disc); 0 = retail behaviour for the disc (default). No
+     * effect on a USA disc, which was never censored. */
+    int uncensored;
+
+    /* Append a "PC Port Credits" block to the end of the staff roll, and back
+     * the ABOUT console command (config key: pc_port_credits, console:
+     * PCCREDITS). 1 = on (default), 0 = the PSX roll exactly as shipped. The
+     * roll's scroll rate is its length divided by the line count, so the extra
+     * lines tighten the per-line step slightly rather than outrunning the
+     * credits music. */
+    int pcPortCredits;
+
+    /* Play as another character (config key: player_character): harry (default),
+     * lisa, cybil, kaufmann, dahlia. Swaps the player's rendered model while
+     * keeping Harry's animations/gameplay; also cycled in-game with - / = while
+     * the keyframe viewer is on, or the console PLAYAS command. */
+    char playerCharacter[16];
+
+    /* Raise the pitch of Harry's OWN VOICE sound effects — his hurt cries,
+     * death screams, landing grunt and low-HP breathing — while playing as one
+     * of the female characters, so the voice matches the body. Playback-rate
+     * percent for the VOICED sounds: 140 by default, 100-200 accepted, 0 = off.
+     * The low-HP breathing is unvoiced noise and stops at 118 however high this
+     * goes — the shift that feminises a cry only makes breath sound fast.
+     * On by default because it is unreachable unless a female character is
+     * selected — an unmodified playthrough as Harry sounds exactly as it always
+     * did. Nothing else is touched: footsteps, weapons, monsters, music and
+     * ambience are untouched, and cutscene dialogue is streamed audio carrying
+     * whole scenes, so it stays as recorded (config key: female_voice_pitch) */
+    int femaleVoicePitch;
+
+    /* Discord Rich Presence: show the current area on the player's Discord
+     * profile (presence only — no achievements/account system; see
+     * docs/RetroAchievements_Feasibility.md). discordAppId is the project's
+     * Discord application id; empty = use the compiled-in default, and if that
+     * is also empty the feature stays dormant. (config keys:
+     * discord_rich_presence / discord_app_id) */
+    int  discordRichPresence;
+    char discordAppId[80];
+
+    /* RetroAchievements (softcore only — the port's quick save/load, debug
+     * controls, free cameras and gamemodes rule out hardcore). The launcher
+     * signs in and stores the account name plus a connect token; the game
+     * never sees the password. Unlocks post to the real RA account, matched to
+     * the player's own disc image by hash. (config keys: retroachievements /
+     * ra_username / ra_token) */
+    int  retroAchievements;
+    char raUsername[64];
+    char raToken[96];
+    /* Which unlock cue the toast plays: "xbox" | "playstation" | "steam",
+     * mapping to achievement.wav / trophy.wav / steam.wav. Written by the
+     * launcher's RetroAchievements page. (config key: ra_sfx) */
+    char raSfx[16];
+    /* Report a DIFFERENT disc hash to RetroAchievements than the mounted image
+     * actually has, so a disc RA has no set for can load the set of one it
+     * does. Empty (default) = report the real hash and change nothing.
+     * Accepts a 32-char MD5, or a name from the alias table in
+     * pc_retroachievements.c. (config key: ra_hash_override) */
+    char raHashOverride[40];
+    /* 1 = spectator mode: achievements evaluate and toast locally but are never
+     * submitted. Testing aid only — every region submits for real by default now
+     * that a live session proved the address map resolves the official set's
+     * reads correctly. (config key: ra_spectator) */
+    int  raSpectator;
+
     char mapName[64];    /* e.g. "map0_s00" */
+
+    /* With minimap_require_map on and this area's paper map not found yet:
+     * 1 = still draw an empty panel with Harry's arrow (the old behaviour),
+     * 0 = hide the minimap until the map is found. Appended last so plugins
+     * built against the earlier layout still read the fields above.
+     * (config-only key: minimap_show_without_map; console: minimapnomap) */
+    int  minimapShowWithoutMap;
+
+    /* The dream/ghosting screen blur: full-screen prims that sample the
+     * previous frame out of the PSX display buffers (Lisa, after Split Head,
+     * the otherworld rooms). 1 = on, 0 = only the loading-screen trail, which
+     * is the same mechanism and has always been allowed. The effect feeds on
+     * its own output, so any per-frame error compounds into visible garbage --
+     * the reason it sat disabled -- and a switch to turn it off in game is
+     * worth more than a rebuild. (config key: dream_blur; console: dreamblur) */
+    int  dreamBlur;
+
+    /* Strength of that blur: the gain of its feedback loop, 0 to 1. 1.0 is
+     * hardware, where the overlay's own 50/50 composite is the only decay.
+     * Lower fades the ghost faster. (config key: dream_blur_strength) */
+    float dreamBlurStrength;
+
+    /* Minimum time, in seconds, the Harry-running loading screen stays up.
+     * Fast loads finish in a frame or two, which flashed the screen; the load
+     * itself is never slowed, the new area just waits. 0 = no minimum.
+     * (config key: load_screen_min; console: loadmin) */
+    float loadScreenMin;
 } s_PcConfig;
 
 extern s_PcConfig g_PcConfig;
@@ -223,6 +558,14 @@ extern s_PcConfig g_PcConfig;
  * street room, whole_map_exteriors + preload_chunks + resident_textures all
  * on. Implemented in bodyprog_80040B74.c (needs g_Map/g_SavegamePtr). */
 int Pc_WholeMapDrawActive(void);
+/* whole_map_exteriors resolved against the live fog strength (auto mode)
+ * and PGXP, which the far band's depth test needs. */
+int Pc_WholeMapEnabled(void);
+/* Fog thinned below 1.0: the world is visible past where monsters spawn and
+ * despawn, so npc_main.c moves both out of the camera's view. */
+int Pc_LongViewActive(void);
+/* World point (Q12 x/z) inside the camera's horizontal view cone. */
+int Pc_WorldPointInView(int x, int z);
 
 /* Apply a flashlight mode (0..3, see flashlightMode) to the config + all PsyX
  * globals. Swaps flashlight_intensity/size between the two per-pixel styles'
@@ -236,6 +579,12 @@ const char* Pc_FlashlightModeLabel(int mode);
 
 /* Parse config.cfg from the executable's directory. Uses defaults if not found. */
 void PcConfig_Load(const char* path);
+
+/* Echo the config file into the log (ra_token redacted). Call after the log is
+ * open so a submitted log carries the settings the run actually used. */
+void PcConfig_LogEffective(const char* path);
+/* Compile-time defaults captured before the config file was parsed. */
+const s_PcConfig* PcConfig_Defaults(void);
 
 /* Rewrite only the `map = ...` line in the loaded config file (preserves the
  * rest). Persists a runtime map change so the next New Game loads it. */
@@ -258,6 +607,29 @@ void PcConfig_FormatFloat(char* buf, int cap, float v, int decimals);
  * the live XA source gain, and persists `xa_volume`. Used by the options menu
  * and the `xavolume` console command. */
 void PcConfig_ApplyXaVolume(float norm);
+
+/* Read-only: the physical input the launcher assigned to one PSX button.
+ * btnFlag = a single ControllerFlag_* bit; device 0 = keyboard/mouse, 1 = game
+ * controller; scheme 0 = classic, 1 = altcam; slot 0 = primary, 1 = the
+ * alternate (_2) bind. Returns the config's own name ("C", "Left Shift",
+ * "Mouse1", "lefttrigger"), or "" when unbound. Never NULL. */
+const char* PcConfig_BindName(unsigned short btnFlag, int device, int scheme, int slot);
+
+/* Rewrite (or append) several `key = value` lines in one read/write pass. */
+void PcConfig_SaveKeyValues(const char* const* keys, const char* const* values, int count);
+
+/* The in-game controls panel edits binds through these. BindField returns the
+ * live 24-byte field behind a bind config key (key_cross, pad_reload,
+ * key_quicksave, ...) for scheme 0 = classic / 1 = altcam, or NULL for an
+ * unknown key; *outPerScheme says whether the key is per-scheme, in which case
+ * the altcam copy is saved under key + "_altcam", exactly as the launcher does.
+ * BindDefault is the built-in value of the same field ("" if none). */
+char*       PcConfig_BindField(const char* key, int scheme, int* outPerScheme);
+const char* PcConfig_BindDefault(const char* key, int scheme);
+
+/* Bumped whenever a bind changes at runtime. Code that resolves a bind once
+ * and caches it compares its copy against this to know when to re-resolve. */
+extern int g_PcBindsGen;
 
 #endif /* PC_CONFIG_H */
 

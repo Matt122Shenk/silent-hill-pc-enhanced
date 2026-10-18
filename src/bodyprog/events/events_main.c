@@ -22,9 +22,9 @@ extern int  MapXbox_OverlayIsLinked(int mapIdx);
 extern void MapXbox_LogUnlinkedOverlay(int mapIdx, const char* where);
 #endif
 
-// 0x80037388 — un-nested from Event_Update: clang/nxdk does not support GCC's
-// nested-function extension. A file-scope static is behavior-identical (no parent
-// locals were captured) and still compiles fine under the PC port's gcc.
+// 0x80037388 — un-nested from Event_Update: Clang has no GCC nested-function
+// extension, so every Apple toolchain rejects the original form. Nothing was
+// captured from the parent frame, so a file-scope static is behaviour-identical.
 static void Event_ItemTriggersClear(void)
 {
     s32 i;
@@ -97,6 +97,18 @@ void Event_Update(bool disableButtonEvents) // 0x800373CC
 
     g_MapEventLastUsedItem = InvItemId_Unequipped;
 
+#ifdef SH_PC_PORT
+    /* Overlay-swap race (issue #113): during a map->map transition the overlay
+     * header is torn down and rebuilt, and a frame can run Event_Update while
+     * mapEvents is NULL. &mapEvents[-1] is then (base-1), ++ makes it NULL, and
+     * the mapEvent->triggerType read below faults -- the intermittent SIGSEGV on
+     * the alley->cafe (map0_s00->map0_s01) transition at 60fps. No overlay = no
+     * events this frame. */
+    if (g_MapOverlayHdr.mapEvents == NULL)
+    {
+        return;
+    }
+#endif
     mapEvent = &g_MapOverlayHdr.mapEvents[-1];
 
 #ifdef SH_PC_PORT

@@ -14,6 +14,13 @@ on:
       - 'pc_port/launcher/**'
   workflow_dispatch:
 
+# One Linux build per branch. Pushes land in bursts and a stuck run used to sit
+# there while newer ones queued behind it; the newest push is the one anyone
+# cares about.
+concurrency:
+  group: build-linux-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     # Only on our fork — never on Vatuu upstream (which has no PC port branch).
@@ -21,6 +28,8 @@ jobs:
     # 22.04 links against an older glibc than ubuntu-latest (24.04), so the binary
     # runs on a wider range of distros.
     runs-on: ubuntu-22.04
+    # The whole job is ~2.5 minutes; anything past this is a hang, not work.
+    timeout-minutes: 20
 
     steps:
       - name: Checkout (with PsyCross submodule)
@@ -29,18 +38,79 @@ jobs:
           submodules: recursive
 
       - name: Install build dependencies
+        # Bounded, with explicit retries and socket timeouts: an apt fetch that
+        # stalls against a slow mirror otherwise sits here doing nothing until the
+        # job timeout. Two runs in a row hung inside apt on 2026-09-11 while macOS
+        # built the same commits in two minutes.
+        timeout-minutes: 8
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
+          APT_NET='-o Acquire::Retries=3 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20'
+          sudo apt-get update $APT_NET
+          sudo apt-get install -y --no-install-recommends $APT_NET \
             build-essential cmake ninja-build pkg-config \
             libsdl2-dev libopenal-dev libjpeg-dev \
             libgl1-mesa-dev libglu1-mesa-dev
+
+      # The ffmpeg FMV fallback needs ffmpeg 6+ headers at build time. jammy only
+      # ships 4.4, which predates AVChannelLayout/swr_alloc_set_opts2, so unpack
+      # noble's -dev packages into a staging prefix rather than installing them
+      # (installing noble runtime libs here would drag in a newer glibc, which is
+      # exactly what pinning ubuntu-22.04 avoids). Headers only: ffmpeg is dlopen'd
+      # at runtime, so nothing from these packages is linked into or shipped with
+      # the binary. Without this the build still succeeds, just with the feature off.
+      - name: Stage ffmpeg 6 headers (build-only, never linked or bundled)
+        # The FMV fallback is optional and the build succeeds without it, so this
+        # step may never decide whether the job runs. On 2026-09-11 it hung past
+        # ten minutes inside apt against archive.ubuntu.com and blocked a nightly
+        # that was otherwise fine (macOS built the same commit in two minutes).
+        timeout-minutes: 4
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          FFDIR="$RUNNER_TEMP/ffmpeg-headers"
+          mkdir -p "$FFDIR/debs" "$FFDIR/root"
+          # Fetch from the mirror the runner image already uses (the hosted images
+          # point at a regional azure.archive mirror). archive.ubuntu.com answers
+          # Azure egress slowly enough to stall apt for tens of minutes.
+          MIRROR="$(awk '$1 == "deb" && $3 ~ /^jammy/ { print $2; exit }' /etc/apt/sources.list 2>/dev/null || true)"
+          [ -n "$MIRROR" ] || MIRROR='http://archive.ubuntu.com/ubuntu'
+          APT_NET='-o Acquire::Retries=2 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20'
+          echo "deb $MIRROR noble main universe" \
+            | sudo tee /etc/apt/sources.list.d/noble-ffmpeg-headers.list >/dev/null
+          sudo apt-get update $APT_NET \
+            -o Dir::Etc::sourcelist=/etc/apt/sources.list.d/noble-ffmpeg-headers.list \
+            -o Dir::Etc::sourceparts=- -o APT::Get::List-Cleanup=0
+          (cd "$FFDIR/debs" && apt-get download $APT_NET \
+            libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libswresample-dev)
+          for deb in "$FFDIR"/debs/*.deb; do dpkg-deb -x "$deb" "$FFDIR/root"; done
+          sudo rm -f /etc/apt/sources.list.d/noble-ffmpeg-headers.list
+          # Repoint the staged .pc files at the staging prefix so pkg-config hands
+          # CMake the right -I flags and the version it gates on.
+          PCDIR="$FFDIR/root/usr/lib/x86_64-linux-gnu/pkgconfig"
+          sed -i "s|^prefix=/usr\$|prefix=$FFDIR/root/usr|" "$PCDIR"/lib*.pc
+          echo "PKG_CONFIG_PATH=$PCDIR" >> "$GITHUB_ENV"
+          PKG_CONFIG_PATH="$PCDIR" pkg-config --modversion libavcodec libavutil
 
       - name: Build (build.sh -> Ninja + map .so overlays)
         run: |
           cd pc_port
           chmod +x build.sh
           ./build.sh
+          # The compile-time LP64 layout guard runs HERE: the build fails if the
+          # _Static_assert(offsetof(GsCOORDINATE2, coord) == 4) in
+          # pc_port/include/psyq/libgs.h ever breaks (the class behind the
+          # invisible Air Screamer).
+
+      - name: LP64 runtime smoke (skips cleanly without game data)
+        run: |
+          cd pc_port
+          chmod +x lp64-smoke.sh
+          # No disc image in public CI -> the script exits 0 (SKIP). On a
+          # self-hosted runner with the disc + a save (and Xvfb/xdotool/ffmpeg),
+          # it boots headless, loads the café and runs the Air Screamer fly-by,
+          # failing the job on any crash. See lp64-smoke.sh for the v2 golden-image
+          # step that would also catch silent render regressions.
+          ./lp64-smoke.sh
 
       - name: Stage release files
         run: |

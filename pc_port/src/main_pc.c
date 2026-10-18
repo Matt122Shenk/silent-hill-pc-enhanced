@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 /*
  * main_pc.c - Silent Hill PC Port entry point
  *
@@ -21,6 +22,9 @@
 #include "sh_log.h"
 #include "psx_memory.h"
 #include "pc_config.h"
+#include "hires_override.h" /* HiresOverride_ClampBudgetToVram */
+#include "pc_audio_config.h"
+#include "pc_discord.h"
 #include "map_registry.h"
 #include "main/fsqueue.h"
 #include "main/fileinfo.h"
@@ -35,6 +39,7 @@
 
 /* PsyCross public API */
 #include <PsyX/PsyX_public.h>
+#include <PsyX/PsyX_backend.h>
 #include <PsyX/common/glad.h>
 
 /* Null device differs by platform: NUL on Windows, /dev/null on POSIX. */
@@ -261,6 +266,25 @@ static void Sh_LogAtExitFlush(void) {
     if (g_ShDebugLog && g_ShDebugLog != stdout) fflush(g_ShDebugLog);
 }
 
+/* Bounded tail loss for crash reports. The 64KB buffer only self-flushes when
+ * full, so a quiet stretch (exploration, menus) can hold minutes of log that a
+ * crash then discards — and a crash that bypasses our SetUnhandledExceptionFilter
+ * (heap corruption fast-fails straight to the kernel) never gets the handler's
+ * flush either. One flush per wall-clock second caps the loss without
+ * reintroducing the per-SH_DBG flush that halved framerate. */
+void Sh_LogPeriodicFlush(void)
+{
+    static time_t s_lastFlush = 0;
+    time_t now;
+
+    if (!g_ShDebugLog || g_ShDebugLog == stdout) return;
+
+    now = time(NULL);
+    if (now == s_lastFlush) return;
+    s_lastFlush = now;
+    fflush(g_ShDebugLog);
+}
+
 /* Crash telemetry lives in pc_crash.c (windows.h conflicts with the decomp
  * `byte` typedef, so it can't be included here). */
 extern void Sh_InstallCrashFilter(void);
@@ -409,12 +433,13 @@ static int Pc_ReadDiscExe(const char* path, unsigned char** outBuf, unsigned* ou
     }
 }
 
-/* Correct g_FileTable for a rearranged USA fan disc. Reads the disc's own file
- * table out of its boot exe and remaps every sector by name (Fs_RemapFromDiscTable).
+/* Correct g_FileTable for a rearranged fan disc, any region. Reads the disc's own
+ * file table out of its boot exe and remaps every sector by name (Fs_RemapFromDiscTable).
  * The table sits at a build-specific offset in the exe (a rebuilt disc shifts it),
  * so locate it by anchoring on the baked table's first four file names — data we
- * already hold, so no filename is hardcoded. A no-op on a stock/Spanish USA disc
- * (its table equals ours). Any failure leaves the baked table intact. */
+ * already hold, so no filename is hardcoded (the USA/EUR/JAP tables all open with
+ * the same four 1ST files). A no-op on a stock or in-place-patched disc of any
+ * region (its table equals ours). Any failure leaves the baked table intact. */
 static void Pc_RemapFileTableFromDisc(const char* discPath)
 {
     unsigned char* exe     = NULL;
@@ -455,8 +480,12 @@ static void Pc_RemapFileTableFromDisc(const char* discPath)
     }
 
     {
+        /* Cap covers the largest real table (EUR is 2310 entries, USA/JAP 2074)
+         * plus slack for a fan disc that appended files; the tail past a shorter
+         * table is unrelated .data, but a false hit needs a 56-bit name/type/path
+         * collision and real entries come first and win. */
         unsigned avail   = (exeSize - tableOff) / 12;
-        s32      count   = (s32)(avail < 2200u ? avail : 2200u);
+        s32      count   = (s32)(avail < 2400u ? avail : 2400u);
         s32      changed = Fs_RemapFromDiscTable((const s_FileInfo*)(exe + tableOff), count);
         if (changed > 0)
             SH_LOG("Fan disc detected: remapped %d file sectors from disc's own table", changed);
@@ -466,11 +495,14 @@ static void Pc_RemapFileTableFromDisc(const char* discPath)
 }
 
 /* Select region tables for a resolved disc, then correct sectors from the disc
- * itself for USA fan re-translations that rearranged the CD (no-op otherwise). */
+ * itself for fan re-translations that rearranged the CD (no-op otherwise).
+ * Runs for every region: PAL and NTSC-J fan patches rebuild the CD the same way
+ * a USA one does, and Fs_RemapFromDiscTable matches through the region's own
+ * name/path shape, so a stock disc of any region still changes nothing. */
 static void Pc_ApplyDiscRegion(const char* discPath, e_GameRegion region)
 {
     Fs_InitFileTableForRegion(region);
-    if (region == Region_USA && discPath && discPath[0])
+    if (discPath && discPath[0])
         Pc_RemapFileTableFromDisc(discPath);
     /* Also to the log file: the "Disc:" SH_LOG line only reaches stdout/the
      * in-game console, so a launcher run leaves no record of the applied
@@ -638,11 +670,13 @@ static void PrintBanner(void)
 {
     printf("==============================================\n");
     printf("  Silent Hill - PC Port\n");
+    printf("  https://github.com/SlickAmogus/silent-hill-decomp/\n");
     printf("  Based on the Silent Hill Decompilation\n");
-    printf("  https://github.com/Vatuu/silent-hill-decomp\n");
     printf("==============================================\n");
     printf("\n");
 }
+
+static int s_SkipToGameArg = 0;
 
 static void ParseArgs(int argc, char* argv[])
 {
@@ -654,6 +688,12 @@ static void ParseArgs(int argc, char* argv[])
             g_GameDataPath[sizeof(g_GameDataPath) - 1] = '\0';
             i++;
         }
+        else if (strcmp(argv[i], "-skiptogame") == 0)
+        {
+            /* The flag existed and was honoured after the config load, but nothing
+             * ever SET it, so the option silently did nothing. */
+            s_SkipToGameArg = 1;
+        }
         else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0)
         {
             printf("Usage: SilentHillPC [options]\n");
@@ -663,6 +703,16 @@ static void ParseArgs(int argc, char* argv[])
             exit(0);
         }
     }
+}
+
+extern int (*g_PsyX_TextGlyphTest)(int tpage, int clut);
+extern int Font_IsTextGlyphPrim(int tpage, int clut);
+extern int BootScreen_IsLogoPrim(int clut);
+
+/* Kanji/hanzi cells, and the boot screens' logo images. */
+static int Pc_UnfilteredPrim(int tpage, int clut)
+{
+    return Font_IsTextGlyphPrim(tpage, clut) || BootScreen_IsLogoPrim(clut);
 }
 
 int main(int argc, char* argv[])
@@ -678,6 +728,21 @@ int main(int argc, char* argv[])
 
     /* Load config file */
     PcConfig_Load("config.cfg");
+    PcAudioConfig_Load("config.cfg");
+
+    /* After the config load, or the parsed skip_intros would clobber it.
+     * map0_s00 is the compiled-in default, so a config still naming it counts as
+     * "no level picked" and gets the bus level, which has a save point. */
+    if (s_SkipToGameArg)
+    {
+        g_PcConfig.skipIntros = 2;
+
+        if (strcmp(g_PcConfig.mapName, "map0_s00") == 0)
+        {
+            strncpy(g_PcConfig.mapName, "map0_s02", sizeof(g_PcConfig.mapName) - 1);
+            g_PcConfig.mapName[sizeof(g_PcConfig.mapName) - 1] = '\0';
+        }
+    }
 
     /* Now that we know whether logging is enabled, open the log file (or
      * leave g_ShDebugLog NULL so SH_DBG stays a no-op). */
@@ -690,17 +755,92 @@ int main(int argc, char* argv[])
             #include "sh_build_info.h"
             SH_DBG("[SH] build " SH_BUILD_GIT_HASH " (" SH_BUILD_STAMP ")");
         }
+        /* The user's actual settings, verbatim. Costs one pass over a small
+         * file at boot and removes the guesswork from every bug report. */
+        PcConfig_LogEffective("config.cfg");
+        /* One-line render-config fingerprint: these are the axes every remote
+         * corruption report gets bisected on — stop having to ask for the cfg. */
+        SH_DBG("[CONFIG] flashlight_mode=%d use_pgxp=%d resident_textures=%d global_chara_pool=%d",
+               g_PcConfig.flashlightMode, g_PcConfig.usePgxp,
+               g_PcConfig.residentTextures, g_PcConfig.globalCharaPool);
     }
 
-    /* PsyCross horizontal pixel-aspect compensation. Silent Hill renders a 320x224
-     * framebuffer the PSX displays as a 4:3 picture, so its pixels are NOT square
-     * (PAR = (4/3)/(320/224) = 14/15). PsyCross's Hor+ ortho and the matching game-side
-     * cull bounds scale the framebuffer-aspect horizontal extent by g_PsxPixelAspect;
-     * the value that restores the 4:3 picture is (320/224)*(3/4) = 15/14 ~= 1.0714.
-     * Baked in — it was a config knob, but no other value is correct for this game. */
+    /* Scale the texture-pack memory budgets to the machine's RAM. The defaults
+     * (texpack_cache_mb 2 GB compose cache + texpack_budget_mb 6 GB of GL
+     * textures) were sized for a discrete-GPU desktop; on a shared-memory AMD
+     * APU (integrated Radeon, no dedicated VRAM) both come out of the same
+     * system RAM as the game and the driver, so a big pack pushes total usage
+     * past physical RAM and the process is killed by an OOM the SEH handler
+     * can't catch (pc_crash.c logs nothing — matches the reporter's texture-pack
+     * crashes). Cap the compose cache to 1/8 of RAM always; cap the GL budget to
+     * 1/4 of RAM only on low-memory machines (<=8 GB, the APU/laptop range) so
+     * high-RAM desktops with discrete VRAM keep the full budget. Only ever
+     * lowers a value; logged so it's visible in the config fingerprint. */
+    {
+        int ramMb = SDL_GetSystemRAM(); /* physical RAM in MB (0 if unknown) */
+        if (ramMb > 0)
+        {
+            int cacheCap = ramMb / 8;
+            if (cacheCap < 128) cacheCap = 128;
+            if (g_PcConfig.texpackCacheMb > cacheCap)
+            {
+                SH_DBG("[TEXPACK] compose cache capped %d -> %d MB (1/8 of %d MB RAM)",
+                       g_PcConfig.texpackCacheMb, cacheCap, ramMb);
+                g_PcConfig.texpackCacheMb = cacheCap;
+            }
+            if (ramMb <= 8192)
+            {
+                int budgetCap = ramMb / 4;
+                if (budgetCap < 256) budgetCap = 256;
+                /* Published, not just applied: HiresOverride_ClampBudgetToVram runs
+                 * later with a live GL context and may RAISE an unset budget to the
+                 * GPU's reported VRAM. On a shared-memory APU that figure is the same
+                 * RAM this clamp is protecting, so it must not be allowed past here. */
+                g_PcConfig.texpackBudgetCeilingMb = budgetCap;
+                if (g_PcConfig.texpackBudgetMb > budgetCap)
+                {
+                    SH_DBG("[TEXPACK] GL texture budget capped %d -> %d MB (low-RAM %d MB machine)",
+                           g_PcConfig.texpackBudgetMb, budgetCap, ramMb);
+                    g_PcConfig.texpackBudgetMb = budgetCap;
+                }
+            }
+        }
+    }
+
+    /* PsyCross horizontal pixel-aspect compensation. The 15/14 previously baked
+     * here assumed the 320x224 picture fills 4:3 — it does not. The console scans
+     * the frame inside the 350x240 NTSC visible area (DuckStation reports exactly
+     * "1x native = 350x240" for this game, with real black bars around the
+     * picture), so a 320-mode dot's height/width = (350/240)/(4/3) = 35/32 =
+     * 1.09375 and the visible picture is ~1.306:1, slightly narrower than 4:3.
+     * Confirmed empirically 2026-08-25: DuckStation's game content measures
+     * 465x357 => (357/224)/(465/320) = 1.097 ~= 35/32. This is also the original
+     * PSX_NTSC_PIXEL_ASPECT PsyCross shipped (9c502de) and the constant the
+     * vw_calc.c cull comments still quote. Read only by display_aspect = raw;
+     * config key pixel_aspect, console `par`, View & Aspect quick-options row.
+     * hfov/vfov (world_hscale/world_vscale) come from the same page. */
     {
         extern float g_PsxPixelAspect;
-        g_PsxPixelAspect = (320.0f / 224.0f) * (3.0f / 4.0f);
+        extern float g_PsxWorldHScale;
+        extern float g_PsxWorldVScale;
+        extern float g_PsxWorldVShift;
+        extern float g_PsxCutsceneVShift;
+        g_PsxPixelAspect = g_PcConfig.pixelAspect;
+        g_PsxWorldHScale = g_PcConfig.worldHScale;
+        g_PsxWorldVScale = g_PcConfig.worldVScale;
+        g_PsxWorldVShift = g_PcConfig.worldVShift;
+        g_PsxCutsceneVShift = g_PcConfig.cutsceneVShift;
+    }
+
+    /* Seed the FPS eye baseline from config so a player's saved head position
+     * (View & Aspect quick-options page, or the numpad debug keys baked via the
+     * config) survives a restart. g_PcFpsOffset stays the live value the camera
+     * reads and the numpad edits; the menu writes both it and the config keys. */
+    {
+        extern VECTOR3 g_PcFpsOffset;
+        g_PcFpsOffset.vx = g_PcConfig.fpsHeadX;
+        g_PcFpsOffset.vy = g_PcConfig.fpsHeadY;
+        g_PcFpsOffset.vz = g_PcConfig.fpsHeadZ;
     }
 
     /* Apply widescreen mode to PsyCross. */
@@ -889,11 +1029,39 @@ int main(int argc, char* argv[])
     g_cfg_msaaSamples = g_PcConfig.msaaSamples;
     SH_LOG("MSAA: %dx", g_cfg_msaaSamples);
 
+    /* Same rule as MSAA: the backend decides whether SDL builds a WGL or an EGL
+     * window, so it has to be set before PsyX_Initialise. Unknown names resolve
+     * to native GL rather than failing, and a translated backend with no ANGLE
+     * present falls back inside PsyCross — this cannot block startup. */
+    g_cfg_renderBackend = PsyX_Backend_FromName(g_PcConfig.renderer);
+    SH_LOG("Renderer: %s -> %s", g_PcConfig.renderer, PsyX_Backend_GetDescription(g_cfg_renderBackend));
+    if (PsyX_Backend_IsTranslated(g_cfg_renderBackend) && !PsyX_Backend_AngleAvailable())
+        SH_LOG("Renderer: ANGLE (libEGL.dll + libGLESv2.dll) not found next to the exe — falling back to native OpenGL");
+
+    /* Before PsyX_Initialise: the window is confined as soon as it is created. */
+    g_cfg_confineCursor = g_PcConfig.confineCursor;
+
+    /* Prims that stay point-sampled under the Menus filter (PsyX_GPU.cpp). */
+    g_PsyX_TextGlyphTest = Pc_UnfilteredPrim;
+
+    /* Before PsyX_Initialise too: it decides whether the window may be
+     * multisampled (the native target is scaled onto it by a blit). */
+    {
+        extern int g_PcNativeRender;
+        g_PcNativeRender = g_PcConfig.nativeResolution;
+        if (g_PcNativeRender)
+            SH_LOG("Render: native PSX resolution, %dx%d window", windowWidth, windowHeight);
+    }
+
     /* Initialize PsyCross (creates SDL2 window + OpenGL context) */
     SH_LOG("Initializing PsyCross (SDL2 + OpenGL)...");
     PsyX_Initialise("Silent Hill", windowWidth, windowHeight, g_PcConfig.fullscreen);
 
     SH_LOG("PsyCross initialized. Window: %dx%d", windowWidth, windowHeight);
+
+    /* Needs the GL context, so it runs here rather than beside the system-RAM
+     * clamp above. Same rule as that one: only ever lowers. */
+    HiresOverride_ClampBudgetToVram();
 
     {
         const char* gl_renderer = (const char*)glGetString(GL_RENDERER);
@@ -902,6 +1070,14 @@ int main(int argc, char* argv[])
         SH_LOG("GL Renderer: %s", gl_renderer ? gl_renderer : "(null)");
         SH_LOG("GL Vendor:   %s", gl_vendor   ? gl_vendor   : "(null)");
         SH_LOG("GL Version:  %s", gl_version  ? gl_version  : "(null)");
+
+        /* AMD used to get resident_textures forced OFF here, from a 2026-07-21
+         * report of undefined-texture-read corruption in the pool path. That
+         * silently split the user base across two render paths, so an AMD bug
+         * report described a build nobody else was running and the path never
+         * got the exposure it needed to be fixed. Everyone is on the resident
+         * pool now; AMD-specific corruption gets root-caused rather than
+         * routed around. Anyone hitting it can still set resident_textures=0. */
     }
 
     /* Apply keyboard/controller bindings + movement/debug options from config
@@ -960,18 +1136,41 @@ int main(int argc, char* argv[])
      * dither, 2 = bilinear. Mutually exclusive — bilinear softens
      * everything while dither keeps the original look but masks the
      * texture-page seam artifacts and adds the authentic PSX noise. */
-    switch (g_PcConfig.psxDither) {
-    case 1:  g_cfg_psxDither = 1; g_cfg_bilinearFiltering = 0; break;
-    case 2:  g_cfg_psxDither = 0; g_cfg_bilinearFiltering = 1; break;
-    default: g_cfg_psxDither = 0; g_cfg_bilinearFiltering = 0; break;
+    { extern int g_cfg_textureFilter, g_cfg_anisoLevel; }
+    /* Dither and filtering are independent settings now, so both are applied
+     * rather than one excluding the other. texture_filter 3..6 is anisotropic,
+     * where the value carries the tap count as well as the mode. */
+    g_cfg_psxDither = g_PcConfig.dithering ? 1 : 0;
+    switch (g_PcConfig.textureFilter) {
+    case 1:  g_cfg_textureFilter = 1; break;
+    case 2:  g_cfg_textureFilter = 2; break;
+    case 3:  g_cfg_textureFilter = 3; g_cfg_anisoLevel = 2;  break;
+    case 4:  g_cfg_textureFilter = 3; g_cfg_anisoLevel = 4;  break;
+    case 5:  g_cfg_textureFilter = 3; g_cfg_anisoLevel = 8;  break;
+    case 6:  g_cfg_textureFilter = 3; g_cfg_anisoLevel = 16; break;
+    default: g_cfg_textureFilter = 0; break;
     }
+
+    /* Upscale method for a render resolution below the window. */
+    {
+        extern int g_PcPresentScale;
+        static const char* const kScaleNames[] = { "integer", "nearest", "bilinear",
+                                                   "sharp bilinear" };
+        g_PcPresentScale = g_PcConfig.scaling;
+        SH_LOG("Scaling: %s", kScaleNames[(g_PcConfig.scaling >= 0 &&
+                                          g_PcConfig.scaling <= 3) ? g_PcConfig.scaling : 2]);
+    }
+    g_cfg_bilinearFiltering = (g_cfg_textureFilter > 0);
     /* Menus / 2D-only frames (g_PsxDitherSuppressed) get bilinear if enabled,
      * independent of the 3D psx_dither mode above. */
     g_cfg_menuFilter = g_PcConfig.menuFilter ? 1 : 0;
-    g_cfg_disableDpadMovement = g_PcConfig.disableDpadMovement ? 1 : 0;
-    SH_LOG("Filtering: %s",
-           g_cfg_psxDither ? "PSX dither" :
-           g_cfg_bilinearFiltering ? "bilinear" : "off");
+    g_cfg_disableDpadMovement = 0; /* driven per-frame by gameplay state (game_main.c) so the D-pad still navigates menus */
+    SH_LOG("Dithering: %s   Filtering: %s%s",
+           g_cfg_psxDither ? "on" : "off",
+           g_cfg_textureFilter == 1 ? "bilinear" :
+           g_cfg_textureFilter == 2 ? "trilinear" :
+           g_cfg_textureFilter == 3 ? "anisotropic" : "off",
+           g_cfg_textureFilter == 3 ? " (taps in texture_filter)" : "");
 
     /* PGXP master gate: PsyCross is compiled with USE_PGXP=1, but the
      * runtime path is opt-in via config.cfg use_pgxp. When 0, prim emit
@@ -981,6 +1180,33 @@ int main(int argc, char* argv[])
      * (declared in PsyX/PsyX_public.h, defined in PsyX_render.cpp) */
     g_PsxUsePgxp = g_PcConfig.usePgxp ? 1 : 0;
     SH_LOG("PGXP: %s", g_PsxUsePgxp ? "ON (perspective-correct, WIP)" : "off (affine)");
+
+    /* [ITEMDEPTH] one-shot item-model depth probe. Diagnostic only — the probe
+     * reads state and never writes rendering state. */
+    {
+        extern int g_PsyX_ItemDepthProbe;
+        g_PsyX_ItemDepthProbe = g_PcConfig.itemDepthProbe ? 1 : 0;
+        if (g_PsyX_ItemDepthProbe)
+            SH_LOG("Item depth probe: ON ([ITEMDEPTH] one-shot dump per item-screen entry)");
+    }
+
+    /* [CHARAPRIM] one-shot character-part submission probe. Diagnostic only —
+     * counts rejects the draw chain already performs, changes none of them. */
+    {
+        extern int g_PcCharaPrimProbe;
+        g_PcCharaPrimProbe = g_PcConfig.charaPrimProbe;
+        if (g_PcCharaPrimProbe)
+            SH_LOG("Chara prim probe: ON for charaId=%d ([CHARAPRIM] one-shot per-model dump)", g_PcCharaPrimProbe);
+    }
+
+    /* PSX GPU parity: reject triangles whose screen bbox exceeds 1023x511
+     * (hardware never rasterized them; PsyX drawing them is the wedge-poly
+     * corruption when the camera sits inside geometry). Console `polysizecull`. */
+    {
+        extern int g_PsxPolySizeCull;
+        g_PsxPolySizeCull = g_PcConfig.psxPolySizeCull ? 1 : 0;
+        SH_LOG("PSX oversize-poly cull: %s", g_PsxPolySizeCull ? "on" : "OFF (wedge polys possible)");
+    }
 
     /* Full-screen post-process look (color grade / CRT / scanlines / vignette /
      * grain / sharpen / PSX downsample / cinematic). Runtime-settable; F2 cycles
@@ -1006,28 +1232,81 @@ int main(int argc, char* argv[])
         SH_LOG("Flashlight mode: %s", Pc_FlashlightModeLabel(g_PcConfig.flashlightMode));
     }
 
-    /* SPU ADSR envelopes (attack/release instrument fades in the sequenced BGM)
-     * + reverb depth->wet scale. adsr default on; `adsr 0/1` console overrides
-     * live, `revscale` tunes the reverb mapping. */
+    /* Select the backend before applying backend-specific controls. */
     {
-        extern void  PsyX_SPUAL_SetAdsrEnabled(int on);
-        extern void  PsyX_SPUAL_SetReverbDepthScale(float scale);
-        PsyX_SPUAL_SetAdsrEnabled(g_PcConfig.adsr ? 1 : 0);
-        if (g_PcConfig.reverbScale > 0.0f)
-            PsyX_SPUAL_SetReverbDepthScale(g_PcConfig.reverbScale);
-        SH_LOG("SPU ADSR envelopes: %s, reverb scale %.2f",
-               g_PcConfig.adsr ? "ON" : "off", g_PcConfig.reverbScale);
+        extern void PsyX_SPUAL_ConfigureOutput(int backend, int mode, int rate, int bitPerfect);
+        extern int PsyX_SPUAL_ConfigureRenderer(int renderer, int highPrecisionClip,
+                                                int modernClip, int modernDither);
+        if (PcAudioConfig_UsesSoftwareSpu())
+            PsyX_SPUAL_ConfigureOutput(g_PcAudioConfig.backend, g_PcAudioConfig.mode,
+                                       g_PcAudioConfig.rate, g_PcAudioConfig.bitPerfect);
+
+        if (!PsyX_SPUAL_ConfigureRenderer(g_PcAudioConfig.renderer,
+                                         g_PcAudioConfig.highPrecisionClip,
+                                         g_PcAudioConfig.modernClip,
+                                         g_PcAudioConfig.modernDither))
+            SH_ERR("Invalid SPU renderer configuration; audio startup will fail");
+
+    {
+        /* A television scans the framebuffer out to 4:3 whatever its line
+         * count, which is the picture these games were composed on. raw
+         * keeps the framebuffer at the `par` pixel aspect instead. */
+        extern int g_PsxAspectRaw;
+        g_PsxAspectRaw = g_PcConfig.aspectRaw ? 1 : 0;
+        {
+            /* Unset (0) means no trim, not a zero-width picture. */
+            extern float g_PsxCrtAspectTrim;
+            if (g_PcConfig.crtAspectTrim > 0.0f)
+                g_PsxCrtAspectTrim = g_PcConfig.crtAspectTrim;
+        }
+        SH_LOG("Display aspect: %s (trim %.3f, hfov %.3f, vfov %.3f, par %.4f)",
+               g_PsxAspectRaw ? "raw (framebuffer par)" : "crt (stretched to 4:3)",
+               g_PcConfig.crtAspectTrim, g_PcConfig.worldHScale,
+               g_PcConfig.worldVScale, g_PcConfig.pixelAspect);
     }
 
-    /* Speaker layout (audio_output = auto|stereo|quad|51|71|hrtf). Must be
-     * latched before SpuInit below — the OpenAL context is created there and
-     * an explicit layout rides in as a context attribute. Auto passes no
-     * attribute so OpenAL Soft detects the system layout itself. */
-    {
-        extern void PsyX_SPUAL_SetOutputMode(int mode);
-        static const char* const kSpeakerNames[] = { "auto", "stereo", "quad", "5.1", "7.1", "hrtf" };
-        PsyX_SPUAL_SetOutputMode(g_PcConfig.audioOutput);
-        SH_LOG("Speaker layout request: %s", kSpeakerNames[g_PcConfig.audioOutput]);
+        {
+            /* Spatial output: the software SPU keeps its exact synthesis and
+             * reverb, but its per-voice taps are placed by OpenAL instead of
+             * being downmixed to stereo, so surround layouts finally get the
+             * accurate reverb. Ignored by the legacy backend. */
+            extern void PsyX_SPUAL_ConfigureSpatial(int enable, int speakers);
+            /* audio_output 2..5 = quad, 5.1, 7.1, hrtf. Asking for any of those
+             * on the software SPU used to do nothing at all: without spatial the
+             * renderer falls through to the plain stereo sink and the layout is
+             * read, passed in and ignored. audio_spatial was the only way to
+             * turn it on and was documented nowhere, so naming a layout now
+             * implies it. hrtf is in the range for the same reason the speaker
+             * layouts are: it is binaural PLACEMENT, so without spatial it is a
+             * plain stereo downmix and the mode does nothing. auto and stereo
+             * stay out -- neither asks for placement. An explicit audio_spatial
+             * still wins, so = 0 remains a way back to the stereo sink. */
+            int wantSurround = g_PcConfig.audioOutput >= 2 && g_PcConfig.audioOutput <= 5;
+            /* Store the resolved value back so the log below, and anything
+             * that reads it later, sees what actually happened. */
+            if (!g_PcAudioConfig.spatialUserSet)
+                g_PcAudioConfig.spatial = wantSurround;
+            PsyX_SPUAL_ConfigureSpatial(
+                (PcAudioConfig_UsesSoftwareSpu() && g_PcAudioConfig.spatial) ? 1 : 0,
+                g_PcConfig.audioOutput);
+        }
+        if (PcAudioConfig_UsesSoftwareSpu()) {
+            SH_LOG("Software SPU output: renderer=%d backend=%d mode=%d rate=%d bit-perfect=%d spatial=%d",
+                   g_PcAudioConfig.renderer, g_PcAudioConfig.backend, g_PcAudioConfig.mode,
+                   g_PcAudioConfig.rate, g_PcAudioConfig.bitPerfect, g_PcAudioConfig.spatial);
+        } else {
+            extern void PsyX_SPUAL_SetAdsrEnabled(int on);
+            extern void PsyX_SPUAL_SetReverbDepthScale(float scale);
+            extern void PsyX_SPUAL_SetOutputMode(int mode);
+            static const char* const kSpeakerNames[] = { "auto", "stereo", "quad", "5.1", "7.1", "hrtf" };
+            PsyX_SPUAL_SetAdsrEnabled(g_PcConfig.adsr ? 1 : 0);
+            if (g_PcConfig.reverbScale > 0.0f)
+                PsyX_SPUAL_SetReverbDepthScale(g_PcConfig.reverbScale);
+            PsyX_SPUAL_SetOutputMode(g_PcConfig.audioOutput);
+            SH_LOG("Legacy OpenAL SPU: ADSR %s, reverb scale %.2f, speakers %s",
+                   g_PcConfig.adsr ? "ON" : "off", g_PcConfig.reverbScale,
+                   kSpeakerNames[g_PcConfig.audioOutput]);
+        }
     }
 
     /* Effect intensities (in-game [ lowers / ] raises, \ switches which enabled
@@ -1039,7 +1318,30 @@ int main(int argc, char* argv[])
         g_PsyX_FlashlightIntensity = g_PcConfig.flashlightIntensity;
         g_cfg_postProcessIntensity = g_PcConfig.postProcessIntensity;
         g_cfg_tonemapIntensity     = g_PcConfig.tonemapIntensity;
+        /* Without this fog_strength only took effect once the options slider was
+         * touched, because the slider writes g_PsyX_FogStrength directly and
+         * nothing pushed the parsed config value at boot. */
+        {
+            extern float g_PsyX_FogStrength;
+            g_PsyX_FogStrength = g_PcConfig.fogStrength;
+        }
+        {
+            extern float g_cfg_brightness, g_cfg_contrast, g_cfg_saturation;
+            g_cfg_brightness = g_PcConfig.brightness;
+            g_cfg_contrast   = g_PcConfig.contrast;
+            g_cfg_saturation = g_PcConfig.saturation;
+            {
+                extern int g_cfg_imageAdjustScope;
+                g_cfg_imageAdjustScope = g_PcConfig.imageAdjustScope;
+            }
+        }
         g_PsyX_FlashlightSize      = g_PcConfig.flashlightSize;
+        {
+            /* Shadow-map resolution. GR_EnsureShadowTarget clamps and rebuilds
+             * the target, so this is safe to set before any GL work. */
+            extern int g_PsyX_ShadowMapSize;
+            g_PsyX_ShadowMapSize = g_PcConfig.shadowMapSize;
+        }
         g_PsyX_FlashlightIntensityFps = g_PcConfig.flashlightIntensityFps;
         g_PsyX_FlashlightSizeFps      = g_PcConfig.flashlightSizeFps;
         SH_LOG("Effect intensity: flashlight %.2f, post %.2f, tonemap %.2f; flashlight size %.2f",
@@ -1051,9 +1353,11 @@ int main(int argc, char* argv[])
     {
         extern float g_PcXaVolume;
         extern float g_PcFmvVolume;
+        extern int   g_PcFmvPsxVolume;
         g_PcXaVolume = g_PcConfig.xaVolume;
         g_PcFmvVolume = g_PcConfig.fmvVolume;
-        SH_LOG("XA voice volume: %.2f, FMV movie volume: %.2f", g_PcXaVolume, g_PcFmvVolume);
+        g_PcFmvPsxVolume = g_PcConfig.fmvPsxVolume;
+        SH_LOG("XA voice volume: %.2f, FMV movie volume: %.2f (psx_vol=%d)", g_PcXaVolume, g_PcFmvVolume, g_PcFmvPsxVolume);
     }
 
     /* Initialize PSY-Q subsystems via PsyCross */
@@ -1071,7 +1375,26 @@ int main(int argc, char* argv[])
             SH_LOG("CD image found, initializing CDFS...");
             PsyX_CDFS_Init(cdImagePath, 0, 0);
         } else {
+            /* Every asset read from here on fails, and the first one takes the
+             * process down. On Windows the crash handler at least pops a box;
+             * on Linux/macOS it died silently with nothing on screen and the
+             * reason only in a log the user has no reason to look at (PR #80).
+             * SDL's message box is the one dialog that works the same on all
+             * three, and SDL is already up by now. Say it, then leave
+             * cleanly rather than crashing further in. */
+            char msg[768];
             SH_WARN("Game will not be able to load assets without a disc image.");
+            snprintf(msg, sizeof(msg),
+                     "No Silent Hill disc image was found.\n\n"
+                     "Put one in:\n  %s\n\n"
+                     "for example \"Silent Hill (USA).bin\". USA, PAL and NTSC-J\n"
+                     "discs all work. A .bin/.cue rip of your own disc is what\n"
+                     "this expects; the launcher can extract its contents for you.",
+                     PcPort_GetGameDataPath());
+            SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR,
+                                     "Silent Hill - no disc image found", msg, NULL);
+            PsyX_Shutdown();
+            return 1;
         }
     }
 
@@ -1080,6 +1403,10 @@ int main(int argc, char* argv[])
     { extern void CharaData_ApplyRegionPatches(void); CharaData_ApplyRegionPatches(); }
     { extern void Font_ApplyRegionPatches(void); Font_ApplyRegionPatches(); }
     { extern void Pc_LangInit(void); Pc_LangInit(); }
+
+    /* Play-as character (config player_character): retargets Harry's
+     * CHARA_FILE_INFOS row before the boot-time WorldGfx_HarryCharaLoad. */
+    { extern void Pc_PlayAs_Init(void); Pc_PlayAs_Init(); }
 
     CdInit();
 
@@ -1114,6 +1441,20 @@ int main(int argc, char* argv[])
     MapRegistry_Init();
     SH_LOG("Active map: %s", g_PcConfig.mapName);
 
+    /* Discord Rich Presence: opens the Discord IPC pipe lazily on the first
+     * per-frame update (Pc_Discord_Update, pumped from DbgOverlay_Render), so
+     * this only captures the session-start time + resolves the app id. */
+    Pc_Discord_Init();
+
+    /* RetroAchievements: logs in with the launcher-stored token, hashes the
+     * disc the port is actually running, and requests that game's set. Inert
+     * unless enabled and signed in. */
+    { extern void Pc_Ra_Init(void); Pc_Ra_Init(); }
+
+    /* Gameplay plugins (plugins/*.dll). Self-gated on config enable_plugins,
+     * which defaults OFF -- the scan never runs unless the user opted in. */
+    { extern void Pc_Plugins_Init(void); Pc_Plugins_Init(); }
+
     SH_LOG("All subsystems initialized. Entering MainLoop...");
 
     /* The graphic-content warning ("There are violent and disturbing
@@ -1133,6 +1474,9 @@ int main(int argc, char* argv[])
 
     /* Cleanup */
     SH_DBG("[SH] MainLoop exited normally. Shutting down...");
+    { extern void Pc_Ra_Shutdown(void); Pc_Ra_Shutdown(); }
+    { extern void Pc_Plugins_Shutdown(void); Pc_Plugins_Shutdown(); }
+    Pc_Discord_Shutdown();
     PsyX_Shutdown();
 
     return 0;

@@ -1,6 +1,9 @@
 # Contributing
 
-Thanks for your interest in the **Silent Hill AI-Assisted PC Port**.
+Thanks for your interest in the **Silent Hill Native PC Port**, a PC port built on the
+Silent Hill PSX decompilation. It is not an emulator and not a static recompilation:
+the game is compiled from decompiled C source, so contributions are ordinary source
+changes to real code. Development is heavily AI-assisted, and we say so openly.
 
 ## Ownership & Governance
 
@@ -17,7 +20,7 @@ come **only** from one of the following sources:
 - The official project website: <https://sh1pc.com/>
 - This **GitHub repository**
 - Chris's **YouTube channel** (KushAstronaut)
-- Chris's posts in the **project's thread in the PS1 Decompilation Discord**
+- Chris's posts in the **PS1 Decompilation Discord** or the **Official Port Discord** located here: https://discord.gg/JWuNzVsQbr
 
 If you see information about this project anywhere else, or attributed to anyone
 else as "official," please treat it as unofficial and unverified until confirmed

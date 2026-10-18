@@ -116,7 +116,7 @@ SH_OPT := -O2 -fno-strict-aliasing -fwrapv
 $(PSYCROSS)/src/psx/inline_c.obj:                  CFLAGS   += $(SH_OPT)
 $(PSYCROSS)/src/psx/libgte.obj:                    CFLAGS   += $(SH_OPT)
 $(PSYCROSS)/src/psx/abs.obj:                       CFLAGS   += $(SH_OPT)
-$(PSYCROSS)/src/gte/PsyX_GTE.obj:                  CXXFLAGS += $(SH_OPT)
+$(XBOX_PORT)/build/gte/PsyX_GTE.obj:                CXXFLAGS += $(SH_OPT) -I$(PSYCROSS)/src/gte
 # The mesh draw / OT build (the 18-20ms) + the NV2A render backend.
 $(DECOMP)/src/bodyprog/gfx/bodyprog_80055028.obj:  CFLAGS   += $(SH_OPT)
 $(DECOMP)/src/bodyprog/gfx/bodyprog_80040B74.obj:  CFLAGS   += $(SH_OPT)
@@ -154,7 +154,8 @@ GTE_SRCS = \
 	$(PSYCROSS)/src/psx/inline_c.c \
 	$(PSYCROSS)/src/psx/libgte.c \
 	$(PSYCROSS)/src/psx/abs.c \
-	$(PSYCROSS)/src/gte/PsyX_GTE.cpp
+	$(XBOX_PORT)/build/gte/PsyX_GTE.cpp
+
 
 # --- Decomp game code (shared; PC bits sit behind #ifdef SH_PC_PORT) --------
 # Recursive wildcard (pure make; no shell `find` dependency).
@@ -215,7 +216,13 @@ PCPORT_HAL_EXCLUDE := main_pc pc_combat pc_console_cmd pc_crash pc_quicksave \
 	control_style pc_mouse_cursor \
 	combat_target \
 	miniz tex_pack \
-	map7_s03_boss_motion
+	map7_s03_boss_motion \
+	dds_load dll_security pc_plugins texpack_lazy \
+	pc_binds pc_bind_panel pc_confirm_dialog pc_freecam_hud pc_quick_options \
+	pc_rando_settings pc_ui_sound pc_discord pc_discord_ipc \
+	pc_retroachievements pc_ra_browser pc_ra_http pc_ra_toast \
+	xa_player_software xa_player_dispatch \
+	pc_modern_depth pc_modern_mesh pc_modern_shader pc_modern_vertex
 PCPORT_REUSE := $(filter-out $(foreach f,$(PCPORT_HAL_EXCLUDE),$(PCPORT)/src/$(f).c),\
 	$(wildcard $(PCPORT)/src/*.c))
 
@@ -251,6 +258,10 @@ $(XBOX_PORT)/src/dsound_xbox.obj: CFLAGS += -I$(XBOX_PORT)/src/dsound/rxdk_inclu
 # Xbox platform shell + NV2A/PSX-libgpu HAL.
 XBOX_SRCS = \
 	$(XBOX_PORT)/src/main_xbox.c \
+	$(XBOX_PORT)/src/pdclib_print_fp.c \
+	$(XBOX_PORT)/src/fs_path_xbox.c \
+	$(XBOX_PORT)/src/xbox_pcmerge_stubs.c \
+	$(XBOX_PORT)/src/psycross_cxx_stubs.cpp \
 	$(XBOX_PORT)/src/crash_xbox.c \
 	$(XBOX_PORT)/src/sh_log_xbox.c \
 	$(XBOX_PORT)/src/fs_xbox.c \
@@ -380,6 +391,21 @@ CLEANRULES += clean-maps
 NXDK_NET = y
 
 include $(NXDK_DIR)/Makefile
+
+# Link through a response file: the object list outgrew the 32K Windows command
+# line that nxdk-link's exec of lld is limited to (see tools/nxdk-link-rsp.sh).
+LD = sh $(XBOX_PORT)/tools/nxdk-link-rsp.sh
+
+# PsyX_GTE.cpp is compiled from a generated copy with its PGXP "twin" tables
+# shrunk 16384 -> 1024 entries. Three static tables of that size are 3.4MB of
+# BSS -- more than this console has free in a busy map -- and they only serve
+# PGXP's exact-matrix reprojection, where a hash collision costs precision,
+# never correctness. The check fails the build if upstream renames the define,
+# rather than silently shipping the full-size tables again.
+$(XBOX_PORT)/build/gte/PsyX_GTE.cpp: $(PSYCROSS)/src/gte/PsyX_GTE.cpp
+	@mkdir -p $(dir $@)
+	@grep -q '^#define TWIN_BITS 14$$' $< || { echo "PsyX_GTE.cpp: TWIN_BITS define changed; update Makefile.nxdk"; exit 1; }
+	sed 's/^#define TWIN_BITS 14$$/#define TWIN_BITS 10/' $< > $@
 
 # Link the prebuilt USB host lib (pad_xbox.c) — extra prerequisite merged into the
 # nxdk main.exe rule so it joins $^ on the link line. MUST come AFTER the include:

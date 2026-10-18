@@ -3830,12 +3830,51 @@ void func_800D7408(void) // 0x800D7408
     WorldObject_ModelNameSet(&D_800E0698.objRef_238, "REF_NEAR");
 }
 
+#ifdef SH_PC_PORT
+/* EUR: the per-screen draw table D_800DB874 is extracted US map data, but
+ * retail SLES ships it for the PAL TV bank (see the EUR block below): TV2 on
+ * tpage 26 with the PAL TIM's tile offsets, every palette at x=896 rows
+ * 496..507. Sizes and v offsets are identical on both discs; only the page,
+ * palette and u differ. Values decoded from the EUR MAP4_S03.BIN. Applied
+ * here, with the bank upload, because this runs on every mall entry; the
+ * init that derives the SPUM602F pages (func_800D078C) only runs from the
+ * Twinfeeler's setup, so a patch there left the screens pointing at the US
+ * palette rows, which the bank no longer fills. */
+static void Pc_EurTvDrawTableApply(void)
+{
+    static const struct { u8 tpage; u16 clutY; u8 u; } s_eur[15] = {
+        { 29, 497,   8 }, { 29, 496,   0 }, { 29, 497,   0 }, { 29, 497,   0 }, { 29, 496, 128 },
+        { 26, 501,   0 }, { 26, 502,   0 }, { 26, 502,   0 },
+        { 26, 502, 128 }, { 26, 502, 128 }, { 26, 502, 128 }, { 26, 502, 128 },
+        { 28, 506,   0 }, { 28, 506,   0 }, { 28, 507, 128 },
+    };
+    s32 i;
+
+    for (i = 0; i < 15; i++)
+    {
+        D_800DB874[i].field_0 = s_eur[i].tpage;
+        D_800DB874[i].field_2 = getClut(896, s_eur[i].clutY);
+        D_800DB874[i].field_4 = s_eur[i].u;
+    }
+}
+#endif
+
 void func_800D7450(void) // 0x800D7450
 {
     e_FsFile textureFileIdx;
     s32      i;
 
     textureFileIdx = NO_VALUE;
+
+#ifdef SH_PC_PORT
+    {
+        extern e_GameRegion g_GameRegion;
+        if (g_GameRegion == Region_EUR)
+        {
+            Pc_EurTvDrawTableApply();
+        }
+    }
+#endif
 
     for (i = 0; i < 3; i++)
     {
@@ -3865,6 +3904,33 @@ void func_800D7450(void) // 0x800D7450
                 D_800DB91C.clutY    = 10;
                 break;
         }
+
+#ifdef SH_PC_PORT
+        /* EUR: the US bank puts TV2 on tpage 12 at u=32, which on the PAL VRAM
+         * layout runs straight through the FONT16 atlas home (768,128) and its
+         * CLUT (816,255): every TV re-upload stamped static over the font and
+         * every font re-queue stamped glyphs over the screens. Retail SLES lays
+         * the bank out differently, recovered from the EUR MAP4_S03.BIN's copy
+         * of this routine (same store skeleton, different immediates): TV2 on
+         * tpage 26 at (640,256), u=0, and all three palettes at x=896 rows
+         * 496/501/506 instead of x=448 rows 0/5/10. The PAL TV2.TIM is authored
+         * for that placement, and the draw table gets its PAL values in
+         * func_800D078C. */
+        {
+            extern e_GameRegion g_GameRegion;
+            if (g_GameRegion == Region_EUR)
+            {
+                static const u16 s_eurClutY[3] = { 496, 501, 506 };
+                D_800DB91C.clutX = 896;
+                D_800DB91C.clutY = s_eurClutY[i];
+                if (i == 1)
+                {
+                    D_800DB91C.tPage[1] = 26;
+                    D_800DB91C.u        = 0;
+                }
+            }
+        }
+#endif
 
         Fs_QueueStartReadTim(textureFileIdx, FS_BUFFER_1, &D_800DB91C);
     }
@@ -5082,6 +5148,10 @@ void Map_WorldObjectsInit(void) // 0x800D991C
     WorldObject_ModelNameSet(&g_CommonWorldObjects[5], D_800A99E4[7]);
 }
 
+#ifdef SH_PC_PORT
+static q19_12 s_fenceTiltAcc;
+#endif
+
 void Map_WorldObjectsUpdate(void) // 0x800D9BB0
 {
     q19_12 var_a0; // Angle?
@@ -5103,6 +5173,9 @@ void Map_WorldObjectsUpdate(void) // 0x800D9BB0
 
                 g_SysWork.playerWork.player.fallSpeed += Q12(1.0f);
                 D_800E05AE += Q12(1.0f);
+#ifdef SH_PC_PORT
+                s_fenceTiltAcc = 0;
+#endif
             }
 
             Collision_FlagBitsClear(CollisionFlag_1);
@@ -5110,10 +5183,31 @@ void Map_WorldObjectsUpdate(void) // 0x800D9BB0
 
             if (D_800E05AC) {} // @hack
 
+#ifdef SH_PC_PORT
+            /* The hinge swing is a per-call accumulation (`var` has no dt
+             * term and grows as the per-frame gravity shrinks) damped to zero
+             * over the first 0.5 s, so the angle it settles at is "how many
+             * calls fit in half a second": about 39 degrees at the PSX's 30
+             * calls, 86 degrees at 240 fps. The grating then flips flat
+             * before Harry's dt-correct fall is visible. Step it at the PSX
+             * cadence; the Y motion below is already dt-scaled and untouched. */
+            s_fenceTiltAcc += g_DeltaTime;
+            while (s_fenceTiltAcc >= TIMESTEP_30_FPS)
+            {
+                q19_12 gravity30 = Q12_MULT(TIMESTEP_30_FPS, Q12(9.8f));
+
+                s_fenceTiltAcc -= TIMESTEP_30_FPS;
+                var = ratan2(Q12_ANGLE(360.0f), FP_FROM(gravity30 * Math_Cos(g_WorldObject_Fence.rotation.vx), Q12_SHIFT));
+                var_a0 = MAX(Q12(0.0f), Q12(1.0f) - (D_800E05A8 * 2));
+                D_800E05AC = Q12_MULT_PRECISE(var_a0, D_800E05AC + var);
+                g_WorldObject_Fence.rotation.vx += Q12_MULT_PRECISE(TIMESTEP_30_FPS, D_800E05AC);
+            }
+#else
             var = ratan2(Q12_ANGLE(360.0f), FP_FROM(g_GravitySpeed * Math_Cos(g_WorldObject_Fence.rotation.vx), Q12_SHIFT));
             var_a0 = MAX(Q12(0.0f), Q12(1.0f) - (D_800E05A8 * 2));
             D_800E05AC = Q12_MULT_PRECISE(var_a0, D_800E05AC + var);
             g_WorldObject_Fence.rotation.vx += Q12_MULT_PRECISE(g_DeltaTime, D_800E05AC);
+#endif
 
             D_800E05AE = MIN(Q12(15.0f), (D_800E05AE + g_GravitySpeed) + (g_GravitySpeed >> 4));
 
@@ -5169,7 +5263,11 @@ void Map_WorldObjectsUpdate(void) // 0x800D9BB0
         }
     }
 
+#ifdef SH_PC_PORT
+    if ((PLAYER_IN_MAP_CHUNK(vx, 1, 6, -1, 6) && PLAYER_IN_MAP_CHUNK(vz, 1, -1, 0, 0)) || Pc_CommonPickupInRange(&g_CommonWorldObjectPoses[1].position))
+#else
     if (PLAYER_IN_MAP_CHUNK(vx, 1, 6, -1, 6) && PLAYER_IN_MAP_CHUNK(vz, 1, -1, 0, 0))
+#endif
     {
         if (!Savegame_EventFlagGet(EventFlag_M4S03_RifleShells0))
         {
@@ -5177,7 +5275,11 @@ void Map_WorldObjectsUpdate(void) // 0x800D9BB0
         }
     }
 
+#ifdef SH_PC_PORT
+    if ((PLAYER_IN_MAP_CHUNK(vx, 1, 6, -1, 6) && PLAYER_IN_MAP_CHUNK(vz, 1, -1, 0, 0)) || Pc_CommonPickupInRange(&g_CommonWorldObjectPoses[2].position))
+#else
     if (PLAYER_IN_MAP_CHUNK(vx, 1, 6, -1, 6) && PLAYER_IN_MAP_CHUNK(vz, 1, -1, 0, 0))
+#endif
     {
         if (!Savegame_EventFlagGet(EventFlag_M4S03_RifleShells1))
         {

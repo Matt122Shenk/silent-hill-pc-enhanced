@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 /* Center crosshair drawn while aiming in TPS / OTS (always in FPS), gated by the
  * `crosshair` config option; `crosshair_style` selects the shape. A small
  * translucent white 2D overlay, modeled on the cutscene-border draw: centered
@@ -23,10 +24,37 @@ enum { CH_CROSS = 0, CH_DOT = 1, CH_CIRCLE = 2, CH_DASH = 3 };
 
 #define CH_MAX_PRIMS 12  /* worst case = the circle's 8 ring quads */
 
+/* Downward reticle nudge (UI-Y px) to center the hand-vs-camera bullet drop in
+ * TPS/OTS. Tunable: raise if far shots still read low, lower if close shots read
+ * too high. */
+#define CH_AIM_DROP_Y 4
+
 /* Axis-aligned filled rectangle (POLY_G4 quad) at [x0,x1] x [y0,y1]. */
 static void Ch_Rect(POLY_G4* q, int x0, int y0, int x1, int y1)
 {
     setXY4(q, x0, y0, x1, y0, x0, y1, x1, y1);
+}
+
+/* Scale one centre-origin coordinate by `crosshair_size` percent. The shapes
+ * are authored 1px thick, so a shrunk bar must never round to zero width or
+ * it vanishes; keep at least one pixel on the original side of centre. */
+static short Ch_Scale(int v, int pct)
+{
+    int s = (v * pct + (v >= 0 ? 50 : -50)) / 100;
+    if (s == 0 && v != 0) s = (v > 0) ? 1 : -1;
+    return (short)s;
+}
+
+static void Ch_ScalePrims(POLY_G4* p, int n, int pct)
+{
+    int i;
+    for (i = 0; i < n; i++)
+    {
+        p[i].x0 = Ch_Scale(p[i].x0, pct); p[i].y0 = Ch_Scale(p[i].y0, pct);
+        p[i].x1 = Ch_Scale(p[i].x1, pct); p[i].y1 = Ch_Scale(p[i].y1, pct);
+        p[i].x2 = Ch_Scale(p[i].x2, pct); p[i].y2 = Ch_Scale(p[i].y2, pct);
+        p[i].x3 = Ch_Scale(p[i].x3, pct); p[i].y3 = Ch_Scale(p[i].y3, pct);
+    }
 }
 
 /* Build the geometry for `style` into p[0..]; returns the prim count used. */
@@ -119,6 +147,30 @@ void Pc_CrosshairDraw(void)
     buf = g_ActiveBufferIdx;
     p   = s_pool[buf];
     n   = Pc_CrosshairBuild(p, g_PcConfig.crosshairStyle);
+
+    {
+        int pct = (int)(g_PcConfig.crosshairSize + 0.5f);
+        if (pct < 25) pct = 25;
+        if (pct > 125) pct = 125;
+        if (pct != 100) Ch_ScalePrims(p, n, pct);
+    }
+
+    /* Bullet-drop compensation (TPS/OTS only). The shot fires from Harry's hand,
+     * below the camera, and converges with the screen-center reticle only at the
+     * aim-trace distance (~60u): close shots land dead on the reticle, farther
+     * shots land a little below it (more with range). Nudging the DRAWN reticle
+     * down a few px centers that error — close reads slightly high, medium/far
+     * lines up — instead of far always reading low. This is purely a draw offset;
+     * it cannot move where bullets actually go (so it can never scatter them).
+     * FPS aims straight down the view ray (no hand-vs-view parallax) → centered. */
+    if (g_ControlStyle == ControlStyle_Tps || g_ControlStyle == ControlStyle_Ots)
+    {
+        const int dy = CH_AIM_DROP_Y;
+        for (i = 0; i < n; i++)
+        {
+            p[i].y0 += dy; p[i].y1 += dy; p[i].y2 += dy; p[i].y3 += dy;
+        }
+    }
 
     for (i = 0; i < n; i++)
     {

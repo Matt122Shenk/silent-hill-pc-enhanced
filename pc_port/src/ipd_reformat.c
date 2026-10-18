@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 /*
  * ipd_reformat.c - Reformat PSX 32-bit IPD binary to 64-bit PC struct layout
  *
@@ -29,6 +30,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "sh_log.h"
+#include "pc_big_ipd.h"
 
 #include "bodyprog/bodyprog.h"
 
@@ -150,6 +152,43 @@ static void ParseIpdModelBufferC(s_IpdModelInstance* dst, const u8* src)
     }
 }
 
+/* Point at `base + off`, unless that lands in the region the 64-bit
+ * s_IpdHeader is about to be written over, in which case hand back a heap copy
+ * taken now while the bytes are still intact. Sized by the caller because only
+ * it knows the element count.
+ *
+ * Allocation lifetime matches IpdColl_RelocateClobbered's: owned by the chunk
+ * until the buffer is reused. Only chunks whose sections actually start under
+ * the header ever allocate, which is a small minority. */
+static void* RescueClobbered(u8* base, u32 off, u32 bytes)
+{
+    void* heap;
+
+    if (off >= sizeof(s_IpdHeader) || bytes == 0)
+    {
+        return base + off;
+    }
+
+    heap = malloc(bytes);
+    if (heap == NULL)
+    {
+        return base + off;
+    }
+    memcpy(heap, base + off, bytes);
+
+    {
+        static int s_logged = 0;
+        if (s_logged < 8)
+        {
+            SH_DBG("[IPD-RELOC] model sub-array at +0x%X (%u bytes) was inside the "
+                   "header clobber window [0,0x%X) — relocated",
+                   off, bytes, (u32)sizeof(s_IpdHeader));
+            s_logged++;
+        }
+    }
+    return heap;
+}
+
 static void ParseIpdModelBuffer(s_IpdModelBuffer* dst, const u8* src, u8* base)
 {
     dst->modelInstanceCount      = src[0];
@@ -187,11 +226,26 @@ static void ParseIpdModelBuffer(s_IpdModelBuffer* dst, const u8* src, u8* base)
         dst->modelInstances = NULL;
     }
 
-    /* field_10: SVECTOR array, field_1 entries - raw data in buffer, no reformatting needed */
-    dst->field_10 = (SVECTOR*)(base + field10_off);
-
-    /* subcellPositions: SVECTOR bounding box array, field_2 entries */
-    dst->subcellPositions = (SVECTOR*)(base + field14_off);
+    /* field_10 and subcellPositions need no reformatting — SVECTOR is 8 bytes
+     * on disc and on LP64 alike — so they are used in place. That is only safe
+     * ABOVE the header clobber window: the caller writes the 64-bit
+     * s_IpdHeader over raw[0, sizeof(s_IpdHeader)) at the end of the reformat,
+     * and on 64-bit that header is 0x1D0 bytes where the PSX one was 0x20-odd.
+     * Any of this data sitting under that mark is zeroed after we point at it.
+     *
+     * subcellPositions is the per-subcell bounding box array, so zeroing it
+     * collapses every box to the origin and the subcell fails its position
+     * test — the model is silently never drawn. That is the missing Nowhere
+     * elevator door, and it is 64-bit-only, which is why the 32-bit Xbox 360
+     * build has never shown it.
+     *
+     * Rescued the same way IpdColl_RelocateClobbered rescues the collision
+     * sub-arrays, and for the same reason; the model side simply never got the
+     * equivalent. Copies happen HERE because this runs before the memset. */
+    dst->field_10         = (SVECTOR*)RescueClobbered(base, field10_off,
+                                                      (u32)dst->field_1 * sizeof(SVECTOR));
+    dst->subcellPositions = (SVECTOR*)RescueClobbered(base, field14_off,
+                                                      (u32)dst->subcellCount * sizeof(SVECTOR));
 }
 
 static void ParseIpdCollisionData(s_IpdCollisionData* dst, const u8* collraw, u8* collbase)
@@ -387,6 +441,57 @@ bool IpdHeader_FixOffsets_PC(s_IpdHeader* ipdHdr)
     u32 modelBuffersOff  = rd32(&raw[0x18]);
     u32 modelOrderOff    = rd32(&raw[0x50]);
 
+    /* Real validation, not just the head byte. Every field above lives in the
+     * FIRST sector, so a partially-delivered or half-stale buffer (fresh head,
+     * stale tail) passes the magic test and would reformat garbage geometry AND
+     * collision that the caller registry then records as done. The LM header
+     * sits at lmHdrOff — the file's DEEPEST section — so its magic+version
+     * double as a tail-arrival sentinel: a different chunk's stale tail almost
+     * never has LM bytes at THIS file's lmHdrOff. Failing here takes the
+     * caller's designed invalid-IPD path (skip + retry next frame), which also
+     * self-heals the genuinely-still-loading case. */
+    {
+        /* No chunk file can exceed the slot it is read into; the shared chunk
+         * buffer (the largest slot) is 0x2C000. An edited chunk may have been
+         * grown past that into a PC-owned buffer (pc_big_ipd.c) — bound-check
+         * against the real destination when this is one, so a legitimately
+         * larger map chunk is not rejected as corrupt. */
+        const size_t destCap = Pc_BigIpd_DestCapacity(raw);
+        const u32    maxIpd  = (destCap > 0x2C000) ? (u32)destCap : 0x2C000;
+        const char*  bad     = NULL;
+
+        if (lmHdrOff < 0x188 || lmHdrOff > maxIpd - 2)
+            bad = "lmHdrOff";
+        else if (raw[lmHdrOff] != LM_HEADER_MAGIC || raw[lmHdrOff + 1] != LM_VERSION)
+            bad = "LM tail sentinel";
+        else if (modelCount > 0 &&
+                 (modelInfoOff < 0x188 || modelInfoOff > lmHdrOff ||
+                  (u32)modelCount * PSX_IPD_MODEL_INFO_SIZE > lmHdrOff - modelInfoOff))
+            bad = "modelInfo bounds";
+        else if (modelBufferCount > 0 &&
+                 (modelBuffersOff < 0x188 || modelBuffersOff > lmHdrOff ||
+                  (u32)modelBufferCount * PSX_IPD_MODEL_BUFFER_SIZE > lmHdrOff - modelBuffersOff))
+            bad = "modelBuffers bounds";
+        else if (modelOrderCount > 0 &&
+                 (modelOrderOff < 0x188 || modelOrderOff > lmHdrOff ||
+                  (u32)modelOrderCount > lmHdrOff - modelOrderOff))
+            bad = "modelOrder bounds";
+
+        if (bad != NULL)
+        {
+            /* A failing chunk retries every frame — cap the log, keep the canary. */
+            static s32 s_valLogCount = 0;
+            if (s_valLogCount < 32)
+            {
+                s_valLogCount++;
+                SH_DBG("[IPD-VAL] rejected buffer %p: %s (lmHdrOff=0x%X info=0x%X bufs=0x%X order=0x%X counts=%u/%u/%u)%s",
+                       (void*)raw, bad, lmHdrOff, modelInfoOff, modelBuffersOff, modelOrderOff,
+                       modelCount, modelBufferCount, modelOrderCount,
+                       s_valLogCount == 32 ? " — suppressing further" : "");
+            }
+            return false;
+        }
+    }
 
     /* Save subcell table (52 bytes from PSX offset 0x1C to 0x4F) */
     u8 subcellTable[52];
@@ -477,18 +582,21 @@ bool IpdHeader_FixOffsets_PC(s_IpdHeader* ipdHdr)
 
     ipdHdr->modelOrderList = raw + modelOrderOff;
 
-    /* Sanity: the in-place header also clobbers [0x188, sizeof(s_IpdHeader))
-     * for NON-collision sections. The collision arrays are rescued above; if
-     * any model-side section ever starts that early too, surface it. */
+    /* Only modelOrderList is still read straight out of the raw buffer, so it
+     * is the only model-side offset the clobber window can still hurt.
+     *
+     * This used to warn on modelInfoOff/modelBuffersOff too, and did so
+     * constantly — both are parsed into calloc'd arrays well before the memset,
+     * so being under the header costs them nothing. Crying wolf on those hid
+     * the real casualties, which were the per-buffer SVECTOR arrays now rescued
+     * in RescueClobbered. */
     {
         static int s_modelClobLogged = 0;
-        if (s_modelClobLogged < 4 &&
-            ((modelInfoOff    && modelInfoOff    < sizeof(s_IpdHeader)) ||
-             (modelBuffersOff && modelBuffersOff < sizeof(s_IpdHeader)) ||
-             (modelOrderOff   && modelOrderOff   < sizeof(s_IpdHeader))))
+        if (s_modelClobLogged < 4 && modelOrderOff && modelOrderOff < sizeof(s_IpdHeader))
         {
-            SH_DBG("[IPD-RELOC] WARNING: model section in clobber window (info=0x%X bufs=0x%X order=0x%X hdr=0x%X)",
-                   modelInfoOff, modelBuffersOff, modelOrderOff, (u32)sizeof(s_IpdHeader));
+            SH_WARN("[IPD-RELOC] modelOrderList at +0x%X is inside the header clobber "
+                    "window [0,0x%X) and is used in place — expect missing geometry",
+                    modelOrderOff, (u32)sizeof(s_IpdHeader));
             s_modelClobLogged++;
         }
     }

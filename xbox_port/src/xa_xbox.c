@@ -37,7 +37,10 @@
 
 #include "xa_player.h"   /* the exact prototypes sd_call.c/game_main.c compile against */
 #include "sh_log.h"
-#include "pc_config.h"   /* g_PcConfig.cutsceneLineGapMs (inter-line voice gap) */
+#include "pc_config.h"   /* g_PcConfig.cutsceneLineGapMs, allowLooseFiles */
+#include "xa_wav.h"      /* loose voice WAVs (pc_port/src/xa_wav.c) */
+#include <stdio.h>
+#include <stdlib.h>
 
 /* --- externs ---------------------------------------------------------------*/
 
@@ -132,9 +135,58 @@ static uint32_t s_underrunFrames    = 0;
 static uint32_t s_underrunEpisodes  = 0;
 static uint32_t s_underrunLogged    = 0;
 
-/* Post-voice inter-line gap deadline (KeTickCount ms). Armed at real audio
- * drain; consumed by Xa_VoiceGapHold below. See that function for rationale. */
-static uint32_t s_xaVoiceGapEndMs   = 0;
+/* PSX pacing, ported from pc_port/src/xa_player.c (KeTickCount ms).
+ *
+ * s_xaPadEndMs: the game's sound task pool only stopped a line at its vblank
+ * watchdog, play start + (length + 32) / 60 s, so every line held its
+ * "streaming" state ~0.53 s past its audio. That pad is the authored rhythm
+ * between voiced lines; signalling finished at the real drain advanced each
+ * line early and compressed long dialogues ahead of the scene.
+ *
+ * s_xaSeekEndMs: each voice also started a beat AFTER its trigger, while the
+ * drive sought to it and the Stop/Play task states ran one per frame. The
+ * modelled delay (xa_seek_model.c, the PC port's Dialog Pause) holds the start
+ * of audio; page timers and the drain gate are untouched. This replaces the
+ * old end-of-line hold, which moved the page advance and could drift tightly
+ * timed scenes. */
+static uint32_t s_xaPlayStartMs     = 0;
+
+/* Loose voice files (gamedata/load/XA), the PC port's voice mods and fan dubs:
+ * xa_NNNN.wav replaces disc line NNNN, and msg_<KEY>.wav gives a voice to an
+ * unvoiced text box (pc_msg_voice.c -> XaPlayer_PlayFile). The WAV is decoded
+ * whole into RAM (xa_wav.c resamples it to 37800 Hz) and the pump feeds it
+ * through the same resampler and ring as a disc line, so routing, volume and
+ * the drain gate are identical. Gated on allow_loose_files like the rest of
+ * the load folder. */
+#define XA_FILE_IDX       0xFFFFu   /* s_xa.xaIdx for a msg_ file: never a disc line */
+#define XA_OVR_CHUNK      2016u     /* frames pushed per pump step (one sector's worth) */
+static int16_t* s_ovPcm    = NULL;
+static uint32_t s_ovFrames = 0;
+static uint32_t s_ovPos    = 0;
+
+static void XaOverride_Free(void)
+{
+    free(s_ovPcm);
+    s_ovPcm    = NULL;
+    s_ovFrames = 0;
+    s_ovPos    = 0;
+}
+
+static int XaOverride_LoadPath(const char* path, int* outRate, int* outStereo)
+{
+    unsigned char* pcm;
+    uint32_t       bytes;
+
+    if (!XaWav_Load(path, &pcm, &bytes, outRate, outStereo))
+        return 0;
+    XaOverride_Free();
+    s_ovPcm    = (int16_t*)pcm;
+    s_ovFrames = bytes / (*outStereo ? 4u : 2u);
+    s_ovPos    = 0;
+    return 1;
+}
+static uint32_t s_xaPadEndMs        = 0;
+static uint32_t s_xaSeekEndMs       = 0;
 
 /* --- XA-ADPCM decode (ported verbatim from pc_port/src/xa_player.c) --------*/
 
@@ -263,6 +315,20 @@ void Xa_XboxPump(void)
 
     if (!s_xa.isPlaying)
         return;
+
+    if (s_ovPcm != NULL) {
+        const uint32_t ch = s_xa.isStereo ? 2u : 1u;
+        while (s_ovPos < s_ovFrames && (s_ringWrite - s_ringRead) < XA_TARGET_FRAMES) {
+            uint32_t n = s_ovFrames - s_ovPos;
+            if (n > XA_OVR_CHUNK)
+                n = XA_OVR_CHUNK;
+            PushResampled(s_ovPcm + (size_t)s_ovPos * ch, (int)(n * ch), s_xa.isStereo);
+            s_ovPos += n;
+        }
+        if (s_ovPos >= s_ovFrames)
+            s_xa.remainingSectors = 0;
+        return;
+    }
 
     while (s_xa.remainingSectors > 0 && decoded < XA_PUMP_MAX_SECTORS) {
         uint8_t raw[BIN_SECTOR_SIZE];
@@ -436,6 +502,8 @@ void Xa_XboxMixInto(int* accL, int* accR, int* accC)
 
     if (!s_xa.isPlaying && !s_fmvStream)
         return;
+    if (s_xa.isPlaying && s_xaSeekEndMs != 0)
+        return;   /* the modelled CD seek has not "finished" yet: silence */
 
     if (s_ringRead == s_ringWrite) {
         /* Underrun bookkeeping is XaPlayer-only; an empty ring in FMV stream
@@ -505,6 +573,52 @@ void XaPlayer_Play(uint16_t xaIdx)
     if (s_xa.isPlaying)
         XaPlayer_Stop();
 
+    if (g_PcConfig.allowLooseFiles) {
+        char path[260];
+        int  ovRate = 0, ovStereo = 0;
+
+        XaWav_OverridePath(xaIdx, path, sizeof(path));
+        if (XaOverride_LoadPath(path, &ovRate, &ovStereo)) {
+            extern uint32_t Pc_XaSeek_LineDelayMs(void);
+            uint32_t nowMs = (uint32_t)KeTickCount;
+
+            memset(&s_xa.lastSamples, 0, sizeof(s_xa.lastSamples));
+            s_xa.xaIdx            = xaIdx;
+            s_xa.baseSector       = 0;
+            s_xa.currentSector    = 0;
+            s_xa.totalSectors     = 1;
+            s_xa.remainingSectors = 1;   /* cleared by the pump at end of PCM */
+            s_xa.sampleRate       = ovRate;
+            s_xa.isStereo         = ovStereo;
+            s_xa.rsStep           = ((uint32_t)ovRate * 65536u) / (uint32_t)OUT_HZ;
+            s_xa.rsPhase          = 0;
+            s_xa.rsPrevL          = 0;
+            s_xa.rsPrevR          = 0;
+            s_xa.volQ7L           = 128;
+            s_xa.volQ7R           = 128;
+            s_ringRead            = 0;
+            s_ringWrite           = 0;
+            s_inUnderrun          = 0;
+
+            /* The line keeps its AUTHORED pacing: a shorter take does not rush
+             * the scene (the finish waits for the original pad), and the
+             * page-advance hold stretches to cover a longer one. */
+            s_xaPlayStartMs = nowMs;
+            s_xaPadEndMs    = nowMs + (((uint32_t)item->audioLength_8_bits + 32u) * 1000u) / 60u;
+            s_xaSeekEndMs   = Pc_XaSeek_LineDelayMs();
+            if (s_xaSeekEndMs != 0)
+                s_xaSeekEndMs += nowMs;
+
+            s_xa.isPlaying = 1;
+            SH_DBG("[XA] override xa_%04u.wav %s %dHz %ums (authored %ums)",
+                   (unsigned)xaIdx, ovStereo ? "stereo" : "mono", ovRate,
+                   (unsigned)(((uint64_t)s_ovFrames * 1000u) / (unsigned)ovRate),
+                   (unsigned)(((uint32_t)item->audioLength_8_bits * 1000u) / 60u));
+            Xa_XboxPump();
+            return;
+        }
+    }
+
     Cd_XboxInit();   /* idempotent; the BIN is normally open long before now */
 
     baseSector = g_FileXaLoc[fileIdx];
@@ -553,7 +667,16 @@ void XaPlayer_Play(uint16_t xaIdx)
     s_ringRead  = 0;
     s_ringWrite = 0;
     s_inUnderrun = 0;
-    s_xaVoiceGapEndMs = 0;   /* fresh line: no pending inter-line gap */
+
+    {
+        extern uint32_t Pc_XaSeek_LineDelayMs(void);
+        uint32_t nowMs  = (uint32_t)KeTickCount;
+        s_xaPlayStartMs = nowMs;
+        s_xaPadEndMs    = nowMs + (((uint32_t)item->audioLength_8_bits + 32u) * 1000u) / 60u;
+        s_xaSeekEndMs   = Pc_XaSeek_LineDelayMs();
+        if (s_xaSeekEndMs != 0)
+            s_xaSeekEndMs += nowMs;
+    }
 
     s_xa.isPlaying = 1;
 
@@ -579,10 +702,9 @@ void XaPlayer_Stop(void)
         SH_DBG("[XA] Stop xaIdx=%u (remaining=%u/%u sectors, ring=%u frames)",
                (unsigned)s_xa.xaIdx, s_xa.remainingSectors, s_xa.totalSectors,
                s_ringWrite - s_ringRead);
-        /* Interrupted mid-line: impose no post-voice inter-line gap. A natural
-         * drain arms the gap via XaPlayer_Update; a hard stop means "move on". */
-        s_xaVoiceGapEndMs = 0;
     }
+    s_xaSeekEndMs = 0;
+    XaOverride_Free();
 
     s_xa.isPlaying = 0;
     s_ringRead     = 0;
@@ -604,6 +726,17 @@ void XaPlayer_Update(void)
     if (!s_xa.isPlaying)
         return;
 
+    if (s_xaSeekEndMs != 0) {
+        uint32_t nowMs = (uint32_t)KeTickCount;
+        if ((int32_t)(nowMs - s_xaSeekEndMs) < 0)
+            return;
+        /* The seek is over: the clocks were stamped at Play, so move them to
+         * the real start of audio. */
+        s_xaPadEndMs   += nowMs - s_xaPlayStartMs;
+        s_xaPlayStartMs = nowMs;
+        s_xaSeekEndMs   = 0;
+    }
+
     Xa_XboxPump();
 
     /* Rate-limited underrun reporting: first 5 episodes, then every 50th. */
@@ -616,13 +749,77 @@ void XaPlayer_Update(void)
 
     /* End of playback: duration countdown done AND the ring fully drained. */
     if (s_xa.remainingSectors == 0 && s_ringRead == s_ringWrite) {
-        SH_DBG("[XA] finished xaIdx=%u (drained)", (unsigned)s_xa.xaIdx);
+        /* Hold the finished signal until the PSX watchdog moment (see
+         * s_xaPadEndMs). An explicit XaPlayer_Stop still signals at once. */
+        if ((int32_t)((uint32_t)KeTickCount - s_xaPadEndMs) < 0)
+            return;
+        SH_DBG("[XA] finished xaIdx=%u (drained) playedMs=%u", (unsigned)s_xa.xaIdx,
+               (unsigned)((uint32_t)KeTickCount - s_xaPlayStartMs));
         s_xa.isPlaying = 0;
-        /* Arm the inter-line gap from the REAL audio end (see Xa_VoiceGapHold).
-         * cutscene_line_gap_ms==0 disables it (the >0 guard in the getter). */
-        s_xaVoiceGapEndMs = (uint32_t)KeTickCount + (uint32_t)g_PcConfig.cutsceneLineGapMs;
+        XaOverride_Free();
         Xa_SignalPlaybackFinished();
     }
+}
+
+/* A loose msg_<KEY>.wav for an unvoiced text box (pc_msg_voice.c). Returns 1
+ * if it started. A disc line still producing audio keeps the player; only its
+ * pad tail (audio drained, finish pending) may be cut for the file. */
+int XaPlayer_PlayFile(const char* path)
+{
+    FILE*    probe;
+    int      rate = 0, stereo = 0;
+    uint32_t nowMs, wavMs;
+
+    if (!g_PcConfig.allowLooseFiles || path == NULL)
+        return 0;
+    if (s_xa.isPlaying && s_xa.xaIdx != XA_FILE_IDX && Xa_IsVoiceAudioDraining())
+        return 0;
+    probe = fopen(path, "rb");   /* a missing file must not cut a pad tail */
+    if (probe == NULL)
+        return 0;
+    fclose(probe);
+
+    if (s_xa.isPlaying)
+        XaPlayer_Stop();
+    if (!XaOverride_LoadPath(path, &rate, &stereo))
+        return 0;
+
+    nowMs = (uint32_t)KeTickCount;
+    wavMs = (uint32_t)(((uint64_t)s_ovFrames * 1000u) / (unsigned)rate);
+
+    memset(&s_xa.lastSamples, 0, sizeof(s_xa.lastSamples));
+    s_xa.xaIdx            = XA_FILE_IDX;
+    s_xa.baseSector       = 0;
+    s_xa.currentSector    = 0;
+    s_xa.totalSectors     = 1;
+    s_xa.remainingSectors = 1;
+    s_xa.sampleRate       = rate;
+    s_xa.isStereo         = stereo;
+    s_xa.rsStep           = ((uint32_t)rate * 65536u) / (uint32_t)OUT_HZ;
+    s_xa.rsPhase          = 0;
+    s_xa.rsPrevL          = 0;
+    s_xa.rsPrevR          = 0;
+    s_xa.volQ7L           = 128;
+    s_xa.volQ7R           = 128;
+    s_ringRead            = 0;
+    s_ringWrite           = 0;
+    s_inUnderrun          = 0;
+
+    /* No disc position to seek from, so a loose file keeps the flat gap. */
+    s_xaPlayStartMs = nowMs;
+    s_xaPadEndMs    = nowMs + wavMs;
+    s_xaSeekEndMs   = (g_PcConfig.cutsceneLineGapMs > 0) ? nowMs + (uint32_t)g_PcConfig.cutsceneLineGapMs : 0;
+
+    s_xa.isPlaying = 1;
+    SH_DBG("[XA] file %s %s %dHz %ums", path, stereo ? "stereo" : "mono", rate, (unsigned)wavMs);
+    Xa_XboxPump();
+    return 1;
+}
+
+void XaPlayer_StopFile(void)
+{
+    if (s_xa.isPlaying && s_xa.xaIdx == XA_FILE_IDX)
+        XaPlayer_Stop();
 }
 
 /* map_msg_display.c holds a voiced subtitle page's auto-advance open while the
@@ -632,27 +829,13 @@ void XaPlayer_Update(void)
  * setting isPlaying, so movies never hold subtitles. */
 int Xa_IsVoiceAudioDraining(void)
 {
-    return s_xa.isPlaying;
-}
-
-/* PSX CD-seek inter-line gap. On PSX the pause between cutscene voice lines came
- * from BOTH the authored ~J page timers (tuned longer than the voice) AND the CD
- * seek to the next clip. The Xbox port honours the ~J timers but loads instantly,
- * so lines whose ~J timer ~= the voice length ran together ("talking over each
- * other"). s_xaVoiceGapEndMs is armed at the REAL audio-drain moment
- * (XaPlayer_Update) to KeTickCount + cutscene_line_gap_ms; the cutscene
- * page-advance gate (map_msg_display.c pcVoiceHold) holds until it elapses.
- *
- * This matches the PC mechanism's effect (a MINIMUM silence past the voice's
- * real end) without the PC's Play-time expMs projection — deriving the gap from
- * the actual drain avoids the mono/stereo sector-duration ambiguity. It is a
- * MINIMUM only: the page still requires mapMsgTimer==0, so a line whose authored
- * ~J gap already exceeds cutscene_line_gap_ms is UNTOUCHED. NOT the reverted
- * blanket +533ms pad (that extended every line and desynced Flauros). */
-int Xa_VoiceGapHold(void)
-{
-    return g_PcConfig.cutsceneLineGapMs > 0 && s_xaVoiceGapEndMs != 0 &&
-           (uint32_t)KeTickCount < s_xaVoiceGapEndMs;
+    /* True only while the line is actually producing (or about to produce)
+     * audio, EXCLUDING the watchdog pad: PSX pages advanced on their authored
+     * ~J timers alone, so gating them on the padded flag would add a redundant
+     * ~0.5 s per line (the map6_s04 Flauros desync on PC). */
+    if (!s_xa.isPlaying)
+        return 0;
+    return s_xaSeekEndMs != 0 || s_xa.remainingSectors > 0 || s_ringRead != s_ringWrite;
 }
 
 void XaPlayer_SetVolume(int16_t volLeft, int16_t volRight)

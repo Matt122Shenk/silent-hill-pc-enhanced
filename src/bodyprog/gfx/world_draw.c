@@ -1,9 +1,12 @@
 #include "game.h"
 #ifdef SH_PC_PORT
+#include "pc_pick.h"
 #include <stdio.h>
 #include <string.h>   /* strcmp — the play-as held-item "HERO" texture test */
 #include "sh_log.h"
 #include "pc_config.h"
+#include "pc_big_lm.h"
+#include "pc_playas.h"
 #ifdef SH_PC_PORT
 #include "main/fileinfo.h" /* g_GameRegion — PAL BG_ETC material-UV relocation */
 #endif
@@ -429,13 +432,6 @@ void Ipd_CloseRangeChunksInit(void) // 0x8003C3AC
         pos1.vz = CLAMP(pos1.vz, temp_a2 + 1, temp_a2 + (Q12(2.5f) - 1));
     }
 
-#ifdef SH_PC_PORT
-    {
-        static s32 closeRangeLogCD = 0;
-        if ((closeRangeLogCD++ % 300) == 0) {
-        }
-    }
-#endif
     Ipd_ChunkInit(pos0.vx, pos0.vz, pos1.vx, pos1.vz);
 }
 
@@ -472,6 +468,36 @@ static inline unsigned long long ShxWdRdtsc(void)
 
 void Gfx_InGameDraw(bool arg0) // 0x8003C878
 {
+#ifdef SH_PC_PORT
+    /* Assert the WORLD's GTE anchor at the moment the world is projected.
+     * MainLoop's per-frame anchor assert runs AFTER the state update, and the
+     * whole world is projected DURING it (right here), so that assert's value
+     * lands one frame late: any 0<->8 transition leaked one world frame at the
+     * stale value -- the 8-row upward flick on every common-pickup confirm
+     * (pickup frames assert 0 for the item pass; the first world frame after
+     * the confirm was still projected with it). Same decide-at-submission
+     * pattern as the Hor+ framing flag set beside this call's site
+     * (game_sys_states.c). The item pass never comes through here, so its
+     * validated zero baseline is untouched.
+     *
+     * [FLICK] logs anchor CHANGES only (bounded): after this fix no world
+     * submission may ever log an anchor of 0. */
+    {
+        extern s32 Pc_WorldAnchorOfy(void);
+        extern int g_PcPickupItemActive;
+        s32 worldOfy = Pc_WorldAnchorOfy();
+        static s32 s_prevOfy = -9999;
+        static int s_flickLogs = 0;
+        if (worldOfy != s_prevOfy && s_flickLogs < 24)
+        {
+            s_flickLogs++;
+            SH_DBG("[FLICK] world anchor %d -> %d (pickup=%d)",
+                   s_prevOfy, worldOfy, g_PcPickupItemActive);
+        }
+        s_prevOfy = worldOfy;
+        SetGeomOffset(0, worldOfy);
+    }
+#endif
     Gfx_WorldObjectsDraw(&g_WorldGfxWork);
 
 #ifdef SH_PC_PORT
@@ -573,6 +599,34 @@ void WorldObject_ModelNameSet(s_WorldObjectModel* model, char* newStr) // 0x8003
 
     model->metadata.field_8 = 0;
 }
+
+#ifdef SH_PC_PORT
+bool Pc_CommonPickupInRange(const VECTOR3* pos)
+{
+    extern s_MapTerrain g_Map;
+    const VECTOR3*      pp = &g_SysWork.playerWork.player.position;
+    q19_12              dy = pos->vy - pp->vy;
+    s32                 dx;
+    s32                 dz;
+
+    /* Interiors only: rooms are short and first person sees across a cell
+     * edge within a few steps. Outdoors keeps the original per-cell items. */
+    if (g_Map.isExterior)
+    {
+        return false;
+    }
+
+    /* The floor test keeps an item on a storey above or below from showing
+     * through a stairwell or an unloaded room. */
+    if (dy > Q12(3.0f) || dy < Q12(-3.0f))
+    {
+        return false;
+    }
+    dx = FLOOR_TO_STEP(pos->vx, CHUNK_CELL_SIZE) - FLOOR_TO_STEP(pp->vx, CHUNK_CELL_SIZE);
+    dz = FLOOR_TO_STEP(pos->vz, CHUNK_CELL_SIZE) - FLOOR_TO_STEP(pp->vz, CHUNK_CELL_SIZE);
+    return dx >= -1 && dx <= 1 && dz >= -1 && dz <= 1;
+}
+#endif
 
 void WorldGfx_ObjectAdd(s_WorldObjectModel* model, const VECTOR3* pos, const SVECTOR3* rot) // 0x8003C92C
 {
@@ -734,6 +788,9 @@ void Gfx_WorldObjectDraw(s_WorldObject* obj) // 0x8003CBA4
     rot.vz = Q10_TO_Q12(obj->rotationZ);
 
     Math_RotMatrixZxyNeg(&rot, &coord.coord);
+#ifdef SH_PC_PORT
+    Pc_Pick_WorldObjectPreDraw(obj, &coord);
+#endif
     Vw_CoordToWorldAndViewMatrices(&coord, &mats[1], &mats[0]);
 
     func_8003CC7C(obj->model, &mats[0], &mats[1]);
@@ -820,6 +877,47 @@ void func_8003CC7C(s_WorldObjectModel* model, MATRIX* viewMat, MATRIX* worldMat)
         model->metadata.lmIdx = 0;
         return;
     }
+
+#ifdef SH_PC_PORT
+    /* Name the owner of any packet the CLUT sanitizer is about to discard.
+     * PsyCross sees only the packet (CLUTDROP can't say whose it was); a clut
+     * decoding past the pool (slot >= 512) cannot come from any stamp path --
+     * it is poisoned prim data, i.e. this model is being drawn from a
+     * reclaimed buffer even though its name still matches. Log the object,
+     * model address and prim so user logs identify the reclaimed file
+     * (Nowhere elevator: use elevator -> hall -> return). */
+    {
+        static int s_poisonLog = 0;
+
+        if (s_poisonLog < 8 && modelHdr->meshCount > 0)
+        {
+            s_MeshHeader* _mh = &modelHdr->meshHdrs[0];
+            s32           _pi;
+
+            for (_pi = 0; _pi < _mh->primitiveCount; _pi++)
+            {
+                u16 _c = (u16)_mh->primitives[_pi].field_2;
+
+                if ((_c & 0x8000) &&
+                    (((((_c >> 6) & 0x3FF) - 512) / 16) * 64 + (_c & 0x3F)) >= 512)
+                {
+                    extern int Pc_PrimHashCheck(const void* ptr, u32 len);
+                    int _v = Pc_PrimHashCheck(_mh->primitives,
+                                              (u32)_mh->primitiveCount * sizeof(s_Primitive));
+                    s_poisonLog++;
+                    SH_DBG("[WOBJ-POISON] '%.8s' lmIdx=%d modelHdr=%p mesh0 prim%d clut=0x%04X primCnt=%d prims=%p verts=%p p0clut=0x%04X verdict=%s",
+                           model->metadata.name.str, (int)lmIdx, (void*)modelHdr,
+                           (int)_pi, (unsigned)_c, (int)_mh->primitiveCount,
+                           (void*)_mh->primitives, (void*)_mh->verticesXy,
+                           (unsigned)(u16)_mh->primitives[0].field_2,
+                           (_v == 1) ? "BORN-AT-REFORMAT" :
+                           (_v == 2) ? "STOMPED-IN-PLACE" : "PTR-NOT-A-REFORMAT-OUTPUT");
+                    break;
+                }
+            }
+        }
+    }
+#endif
 
     func_80057090(&model->modelInfo, &g_OrderingTable0[g_ActiveBufferIdx], 1, viewMat, worldMat, 0);
 }
@@ -1041,6 +1139,9 @@ s32 WorldGfx_PlayerHeldItemSet(e_InvItemId itemId) // 0x8003CDA0
     // Load model.
     if (fileIdx != NO_VALUE)
     {
+#ifdef SH_PC_PORT
+        heldItem->lmHdr = Pc_BigLm_Redirect(fileIdx, heldItem->lmHdr);
+#endif
         heldItem->queueIdx = Fs_QueueStartRead(fileIdx, heldItem->lmHdr);
         return heldItem->queueIdx;
     }
@@ -1097,7 +1198,6 @@ void WorldGfx_HeldItemDraw(void) // 0x8003D058
              * load path filled the desc. */
             if (heldItem->textureName != NULL && strcmp(heldItem->textureName, "HERO") == 0)
             {
-                extern void Pc_PlayAs_HeldItemImageDesc(void* imageDesc);
                 Pc_PlayAs_HeldItemImageDesc(&heldItem->imageDesc);
             }
 #endif
@@ -1132,22 +1232,14 @@ void WorldGfx_HarryCharaLoad(void) // 0x8003D160
     g_WorldGfxWork.registeredCharaModels[Chara_Harry] = harryModel;
 
 #ifdef SH_PC_PORT
-    {
-        extern void* Pc_PlayAs_PlayerLmRedirect(int modelFileIdx, void* lmHdr);
-        extern void  Pc_PlayAs_PlayerImageDesc(void* imageDesc);
-
-        /* A play-as retarget must never read a non-HERO ILM into the HERO-sized
-         * slab: disc reads are sector-granular and HELD_ITEM_LM_BUFFER sits only
-         * 14592 bytes above HARRY_LM_BUFFER, so the read would overrun into the
-         * equipped weapon's PLM window. */
-        harryLmHdr = (s_LmHeader*)Pc_PlayAs_PlayerLmRedirect(
-            CHARA_FILE_INFOS[Chara_Harry].modelFileIdx, harryLmHdr);
-        /* ...and a non-HERO player TIM must never land in the HERO-sized VRAM
-         * parcel: it overruns onto the chara CLUT shelf below it and turns every
-         * enemy in the map rainbow. Mutating `image` here covers both the upload
-         * and the material bake — they share this desc. */
-        Pc_PlayAs_PlayerImageDesc(&image);
-    }
+    harryLmHdr = Pc_BigLm_Redirect(CHARA_FILE_INFOS[Chara_Harry].modelFileIdx, harryLmHdr);
+    /* A play-as retarget must never read a non-HERO ILM into the HERO-sized
+     * slab (sector-granular reads overrun HELD_ITEM_LM_BUFFER). */
+    harryLmHdr = (s_LmHeader*)Pc_PlayAs_PlayerLmRedirect(CHARA_FILE_INFOS[Chara_Harry].modelFileIdx, harryLmHdr);
+    /* ...and a non-HERO player TIM must never land in the HERO-sized VRAM parcel:
+     * it overruns onto the chara CLUT shelf below it. Mutating `image` here
+     * covers both the upload and the material bake — they share this desc. */
+    Pc_PlayAs_PlayerImageDesc(&image);
 #endif
     Fs_QueueStartRead(CHARA_FILE_INFOS[Chara_Harry].modelFileIdx, harryLmHdr);
     queueIdx = Fs_QueueStartReadTim(CHARA_FILE_INFOS[Chara_Harry].textureFileIdx, FS_BUFFER_1, &image);
@@ -1359,10 +1451,25 @@ void WorldGfx_CharaLmBufferAssign(s8 forceFree) // 0x8003D5B4
         if (charaId != Chara_None)
         {
 #ifdef SH_PC_PORT
-            lmData = (uintptr_t)curModel->lmHdr + Fs_GetFileSize(CHARA_FILE_INFOS[charaId].modelFileIdx);
-            if ((uintptr_t)g_WorldGfxWork.charaLmBuffer < lmData)
             {
-                g_WorldGfxWork.charaLmBuffer = (u8*)lmData;
+                /* A big-LM lmHdr is a heap pointer: heap + fileSize would hijack
+                 * the slab bump cursor and the next chara load would fread into
+                 * unowned memory. Account with the slab pointer the redirect
+                 * displaced so the packing matches vanilla exactly. */
+                s_LmHeader* baseLm = curModel->lmHdr;
+
+                if (Pc_BigLm_IsOwned(baseLm))
+                {
+                    baseLm = Pc_BigLm_NativeOf(baseLm);
+                }
+                if (baseLm != NULL)
+                {
+                    lmData = (uintptr_t)baseLm + Fs_GetFileSize(CHARA_FILE_INFOS[charaId].modelFileIdx);
+                    if ((uintptr_t)g_WorldGfxWork.charaLmBuffer < lmData)
+                    {
+                        g_WorldGfxWork.charaLmBuffer = (u8*)lmData;
+                    }
+                }
             }
 #else
             lmData = (s32)curModel->lmHdr + Fs_GetFileSize(CHARA_FILE_INFOS[charaId].modelFileIdx);
@@ -1451,6 +1558,13 @@ s32 WorldGfx_CharaModelLoad(e_CharaId charaId, s32 modelIdx, s_LmHeader* lmHdr, 
     g_WorldGfxWork.registeredCharaModels[charaId] = model;
 
     // Load model and texture files.
+#ifdef SH_PC_PORT
+    /* Keyed by the CURRENT modelFileIdx — CHARA_FILE_INFOS rows are retargeted
+     * at runtime (PAL/JPN Mumbler swap, pool beta retargets), so charaId is not
+     * a stable key. Substitutes regardless of the incoming lmHdr: the slot-reuse
+     * path above can hand a previous chara's redirected buffer to a new chara. */
+    lmHdr = Pc_BigLm_Redirect(CHARA_FILE_INFOS[charaId].modelFileIdx, lmHdr);
+#endif
     queueIdx = Fs_QueueStartRead(CHARA_FILE_INFOS[charaId].modelFileIdx, lmHdr);
     if (CHARA_FILE_INFOS[charaId].textureFileIdx != NO_VALUE)
     {
@@ -1470,7 +1584,7 @@ void WorldGfx_PlayerModelProcessLoad(void) // 0x8003D938
 {
     WorldGfx_CharaModelProcessLoad(&g_WorldGfxWork.harryModel);
 #ifdef SH_PC_PORT
-    { extern void Pc_PlayAs_OnPlayerModelLoaded(void); Pc_PlayAs_OnPlayerModelLoaded(); }
+    Pc_PlayAs_OnPlayerModelLoaded();
 #endif
 }
 
@@ -1544,6 +1658,13 @@ void WorldGfx_CharaModelProcessLoad(s_CharaModel* model) // 0x8003D9C8
 #endif
 }
 
+#ifdef SH_PC_PORT
+/* Console SCALE for the character about to be drawn, Q12. Set by
+ * Pc_Pick_CharaPreDraw and consumed by this draw, so a draw with no preceding
+ * set -- the save/load screen Harry -- cannot inherit the last one. */
+s32 g_PcCharaDrawScale = Q12(1.0f);
+#endif
+
 #ifdef SH_XBOX_PORT
 /* Timing wrapper (see the [UPD] localizer): func_8003DA9C draws every skinned
  * character — Harry and all NPCs/monsters — so this one wrap captures the whole
@@ -1600,6 +1721,33 @@ void func_8003DA9C(e_CharaId charaId, GsCOORDINATE2* boneCoords, s32 arg2, q3_12
                       Q12_MULT_PRECISE(Q12(1.0f) - timer, g_WorldEnvWork.worldTintColor.g) << 5,
                       Q12_MULT_PRECISE(Q12(1.0f) - timer, g_WorldEnvWork.worldTintColor.b) << 5,
                       g_WorldEnvWork.screenBrightness);
+
+#ifdef SH_PC_PORT
+        /* This IS the vanish for a Larval Stalker: timer is its timer_C6, and
+         * at Q12(1.0) the scaling above drives the world tint AND the per-vertex
+         * light matrix to zero, so the model should light to nothing. A capture
+         * shows the state machine completing (timer_C6 4096/4096, health -1) with
+         * the creature still plainly visible, so the question is whether the
+         * values really arrive at zero here or the PC lighting path lights it
+         * anyway. Logs the fade only near its end, once per second. */
+        {
+            static q19_12 s_next = 0;
+            static s32    s_lines = 0;
+            s_next -= g_DeltaTime;
+            if (timer > Q12(0.5f) && s_lines < 24 && s_next <= 0)
+            {
+                s_next = Q12(1.0f);
+                s_lines++;
+                SH_DBG("[FADE] chara=%d timer=%d/%d tintIn=(%d,%d,%d) tintOut=(%d,%d,%d) light00=%d mode=%d fog=%d",
+                       (int)charaId, (int)timer, (int)Q12(1.0f),
+                       (int)tintColor.r, (int)tintColor.g, (int)tintColor.b,
+                       (int)g_WorldEnvWork.worldTintColor.r, (int)g_WorldEnvWork.worldTintColor.g,
+                       (int)g_WorldEnvWork.worldTintColor.b,
+                       (int)g_WorldEnvWork.field_2C.m[0][0],
+                       (int)g_WorldEnvWork.field_0, (int)g_WorldEnvWork.isFogEnabled);
+            }
+        }
+#endif
     }
 
 #ifdef SH_PC_PORT
@@ -1652,12 +1800,30 @@ void func_8003DA9C(e_CharaId charaId, GsCOORDINATE2* boneCoords, s32 arg2, q3_12
      * pre-pass (monsters still cast). Set here (build time) so the GTE captures it
      * per-vertex; cleared right after. */
     { extern int g_PsyX_NoShadowCast; g_PsyX_NoShadowCast = (charaId == Chara_Harry) ? 1 : 0; }
+    /* Hand the same fade the block above applied to this character's LIGHTING to
+     * the per-pixel flashlight, which adds its light on top of the TEXTURE and so
+     * would otherwise relight a character the game has already faded to nothing.
+     * That is a Larval Stalker's whole vanish: it fades out, and on Classic (no
+     * per-pixel light) it duly disappears, while every Modern/shadow mode kept it
+     * lit and standing there forever. Rides the view-space FIFO per vertex. */
+    { extern float g_PsyX_CharaFade; g_PsyX_CharaFade = (float)timer / 4096.0f; }
+    /* [CHARAPRIM]: the draw chain below (func_80057090 -> func_8005AC50) only ever
+     * sees a model header, never a chara, so the probe's subject is stamped here —
+     * the one place both are in scope. */
+    { extern int g_PcCharaPrimProbe, g_PcCharaPrimProbeActive;
+      g_PcCharaPrimProbeActive = (g_PcCharaPrimProbe != 0 && charaId == g_PcCharaPrimProbe); }
 #endif
     func_80045534(&g_WorldGfxWork.registeredCharaModels[charaId]->skeleton, &g_OrderingTable0[g_ActiveBufferIdx], arg2,
                   boneCoords, Q8_TO_Q12(CHARA_FILE_INFOS[charaId].field_6), ret, CHARA_FILE_INFOS[charaId].field_8);
+
 #ifdef SH_PC_PORT
+    g_PcCharaDrawScale = Q12(1.0f);
+#endif
+#ifdef SH_PC_PORT
+    { extern int g_PcCharaPrimProbeActive; g_PcCharaPrimProbeActive = 0; }
     { extern int g_PcHideHarryFpsBody; g_PcHideHarryFpsBody = 0; }
     { extern int g_PsyX_NoShadowCast; g_PsyX_NoShadowCast = 0; }
+    { extern float g_PsyX_CharaFade; g_PsyX_CharaFade = 0.0f; }
 #endif
 
     if (timer != Q12(0.0f))
@@ -1694,14 +1860,10 @@ void WorldGfx_HeldItemAttach(e_CharaId charaId, s32 arg1) // 0x8003DD80
             /* func_8003DE60's hand-variant lists are hard-coded HERO part
              * indices — on a play-as skin every equip would hide/show the
              * wrong meshes. Re-assert the skin's own table instead. */
+            if (Pc_PlayAs_SuppressHarryHandVariants())
             {
-                extern int  Pc_PlayAs_SuppressHarryHandVariants(void);
-                extern void Pc_PlayAs_ApplySkinVisibility(void);
-                if (Pc_PlayAs_SuppressHarryHandVariants())
-                {
-                    Pc_PlayAs_ApplySkinVisibility();
-                    break;
-                }
+                Pc_PlayAs_ApplySkinVisibility();
+                break;
             }
 #endif
             func_8003DE60(&model->skeleton, arg1);
@@ -1930,11 +2092,10 @@ void func_8003E238(s_Skeleton* skel, s32 arg1) // 0x8003E238
 {
     s32 maskedVal;
 
-    /* The 0x06050403 list's 0xFE terminator lives in the next word — kept as one
-     * array so -O2 GlobalDCE can't drop the (unreferenced) terminator and let the
-     * byte-walker run off the end into the neighbouring static (the invisible-
-     * parasite / stacked-neck-variant bug). Byte-identical to two adjacent s32.
-     * Matches the PC fix (0065c7a0f). */
+    /* Kaufmann's hide list has the same cross-static terminator as the nurse's
+     * (see func_8003E4A0). It currently survives an optimizing build only
+     * because the static the linker happens to place next starts with a byte
+     * this list already hides -- an accident, not a guarantee. */
     static s32 D_800A9F20[2] = { 0x06050403, 0x000000FE };
     static s32 D_800A9F28 = 0x0000FE03;
     static s32 D_800A9F2C = 0x0000FE04;
@@ -2049,8 +2210,15 @@ void func_8003E4A0(s_Skeleton* skel, s32 arg1) // 0x8003E4A0
 {
     s32 maskedVal;
 
-    /* 0x05040302 list continues + terminates (0xFE) in the next word — one array
-     * so -O2 can't drop the terminator (Puppet Nurse back-parasite). See D_800A9F20. */
+    /* One byte stream, not two words: `Bone_ModelIdxGet` walks bytes forward
+     * from the pointer it is given and only stops on -2, so the terminator for
+     * this list lives in the word the PSX linker placed immediately after it.
+     * Nothing names that second word, so an optimizing build drops it and
+     * reorders what is left -- the walk then runs off the end of this list into
+     * whatever static landed next (measured: Split Head's 0xFE22FD1A, which
+     * hides bones 26-34 and took the nurse's back parasite with it). An array
+     * makes the adjacency a language guarantee instead of a linker accident;
+     * the emitted bytes are the PSX ones in the PSX order. */
     static s32 D_800A9F58[2] = { 0x05040302, 0x00FE0706 };
     static s32 D_800A9F60 = 0x00FE0502;
     static s32 D_800A9F64 = 0x00FE0603;
@@ -2082,8 +2250,8 @@ void func_8003E544(s_Skeleton* skel, s32 arg1) // 0x8003E544
 {
     s32 maskedVal;
 
-    /* 0x05040302 list continues + terminates (0xFE) in the next word — one array
-     * so -O2 can't drop the terminator (Puppet Doctor back-parasite). See D_800A9F20. */
+    /* Same cross-static byte stream as the nurse above -- kept contiguous by
+     * the array so the terminator cannot be optimized away. */
     static s32 D_800A9F6C[2] = { 0x05040302, 0x00FE0706 };
     static s32 D_800A9F74 = 0x00FE0502;
     static s32 D_800A9F78 = 0x00FE0603;

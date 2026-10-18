@@ -337,6 +337,90 @@ void PsxVram_Store(int x, int y, int w, int h, uint16_t* dst)
     }
 }
 
+/* The sewer water caustic (water.c func_8008E5B4) composites two scrolled copies
+ * of a 4bpp wave texture into a 32x32 VRAM tile that the water surface samples
+ * back as 4bpp through a DIFFERENT palette, so every colour word must be
+ * bit-exact PSX GPU output. The NV2A cannot render into this emulated VRAM, so
+ * rasterize the 1:1 rect here with the GPU's arithmetic (PC port parity with
+ * PsyCross's PsyX_VramDrawTexturedRect): CLUT fetch, texel 0 transparent, 4x4
+ * ordered dither, 5-bit saturating semi-transparency per abr, STP carried. */
+void PsyX_VramDrawTexturedRect(int dstX, int dstY, int w, int h, int tpage, int clut,
+                               int u0, int v0, int semiTrans, int dither)
+{
+    static const int s_dither[4][4] = { { -4, 0, -3, 1 }, { 2, -2, 3, -1 }, { -3, 1, -4, 0 }, { 3, -1, 2, -2 } };
+    const int tpX   = (tpage & 0xF) * 64;
+    const int tpY   = ((tpage >> 4) & 1) * 256;
+    const int abr   = (tpage >> 5) & 3;
+    const int depth = (tpage >> 7) & 3;
+    const int clutX = (clut & 0x3F) * 16;
+    const int clutY = (clut >> 6) & 0x1FF;
+    int x, y, k;
+
+    if (w <= 0 || h <= 0 || dstX < 0 || dstY < 0 || dstX + w > VRAM_W || dstY + h > VRAM_H)
+        return;
+
+    for (y = 0; y < h; y++) {
+        const int       v   = (v0 + y) & 255;
+        const uint16_t* row = &s_vram[((tpY + v) & (VRAM_H - 1)) * VRAM_W];
+        uint16_t*       dst = &s_vram[(dstY + y) * VRAM_W + dstX];
+
+        for (x = 0; x < w; x++) {
+            const int u = (u0 + x) & 255;
+            uint16_t  texel;
+            int       c[3], stp;
+
+            if (depth == 0) {
+                uint16_t word = row[(tpX + (u >> 2)) & (VRAM_W - 1)];
+                texel = s_vram[clutY * VRAM_W + ((clutX + ((word >> ((u & 3) * 4)) & 0xF)) & (VRAM_W - 1))];
+            } else if (depth == 1) {
+                uint16_t word = row[(tpX + (u >> 1)) & (VRAM_W - 1)];
+                texel = s_vram[clutY * VRAM_W + ((clutX + ((word >> ((u & 1) * 8)) & 0xFF)) & (VRAM_W - 1))];
+            } else {
+                texel = row[(tpX + u) & (VRAM_W - 1)];
+            }
+
+            if (texel == 0)
+                continue;
+
+            c[0] = texel & 31;
+            c[1] = (texel >> 5) & 31;
+            c[2] = (texel >> 10) & 31;
+            stp  = (texel >> 15) & 1;
+
+            if (dither) {
+                const int d = s_dither[y & 3][x & 3];
+                for (k = 0; k < 3; k++) {
+                    int e = (c[k] << 3) + d;
+                    if (e < 0) e = 0;
+                    if (e > 255) e = 255;
+                    c[k] = e >> 3;
+                }
+            }
+
+            if (semiTrans && stp) {
+                const uint16_t back = dst[x];
+                const int b[3] = { back & 31, (back >> 5) & 31, (back >> 10) & 31 };
+                for (k = 0; k < 3; k++) {
+                    int e;
+                    switch (abr) {
+                    case 0:  e = (b[k] + c[k]) >> 1; break;
+                    case 1:  e = b[k] + c[k]; break;
+                    case 2:  e = b[k] - c[k]; break;
+                    default: e = b[k] + (c[k] >> 2); break;
+                    }
+                    if (e < 0) e = 0;
+                    if (e > 31) e = 31;
+                    c[k] = e;
+                }
+            }
+
+            dst[x] = (uint16_t)(c[0] | (c[1] << 5) | (c[2] << 10) | (stp << 15));
+        }
+    }
+
+    InvalidateRegion(dstX, dstY, dstX + w, dstY + h);
+}
+
 static uint32_t Psx16ToArgb(uint16_t c)
 {
     int r, g, b;

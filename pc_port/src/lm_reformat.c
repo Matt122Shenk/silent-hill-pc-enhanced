@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 /*
  * lm_reformat.c - Reformat PSX 32-bit binary structs to 64-bit PC layout
  *
@@ -22,6 +23,14 @@
 #include <string.h>
 
 #include "bodyprog/bodyprog.h"
+
+/* game.h already provides u8/u16/u32/s32. */
+#define LM_VALIDATE_HAVE_TYPES
+#include "lm_validate.h"
+
+#include "pc_big_lm.h"
+#include "pc_wide_lm.h"
+#include "tex_pack.h"
 
 #define PSX_SIZEOF_LM_HEADER    20
 #define PSX_SIZEOF_MODEL_HEADER 16
@@ -151,6 +160,42 @@ static void ParseMaterial(s_Material* dst, const u8* src)
 }
 
 /**
+ * Log-only diagnostic for loose byte-replaced LM buffers, called from the
+ * Fs_QueueTickRead loose hit path — the ONLY trigger, so stock disc loads
+ * never pay for it and a file the walkers tolerate is never rejected.
+ * Non-LM bytes (TIMs, ANMs, ...) return on the magic gate. skeletal=0: this
+ * path also serves held-item PLMs and map-loaded LMs, whose dangling corner
+ * refs resolve against the wielder's/map pool by design. tailSlack=16: the
+ * destination is either a g_PsxRam slab (1 MB guarded arena) or a big-lm
+ * buffer (calloc +16), both readable past fileSize.
+ */
+void Lm_LooseValidateDiag(const void* raw, u32 fileSize, const char* name)
+{
+    const u8*          bytes = (const u8*)raw;
+    s_LmValidateParams params;
+    char               err[160];
+    int                rule;
+
+    if (fileSize < PSX_SIZEOF_LM_HEADER ||
+        bytes[0] != LM_HEADER_MAGIC ||
+        (bytes[1] != LM_VERSION && bytes[1] != 7) || bytes[2] != 0)
+    {
+        return;
+    }
+
+    params.tailSlackBytes = LM_VALIDATE_BUF_TAIL;
+    params.anmBoneCount   = -1;
+    params.version        = bytes[1];
+    params.skeletal       = 0;
+
+    rule = Lm_Validate(bytes, fileSize, &params, err, sizeof(err));
+    if (rule != 0)
+    {
+        SH_DBG("[LOOSE/WARN] %s: modded LM fails validation: %s", name, err);
+    }
+}
+
+/**
  * PC replacement for LmHeader_FixOffsets + ModelHeader_FixOffsets.
  *
  * Reads the raw PSX 32-bit binary data at lmHdr's address, parses it into
@@ -192,6 +237,23 @@ void LmHeader_FixOffsets_PC(s_LmHeader* lmHdr)
     /* Free the prior parse of THIS buffer before re-allocating (leak fix). */
     LmTrack_FreePrior(raw);
 #endif
+    /* v7 high-poly ILM: build the narrow spine (v6-style reformat, meshCount
+     * forced 0 so the stock walkers draw nothing) and register the wide u32
+     * geometry blob for the PC drawer. On any failure the spine alone stands:
+     * an invisible, non-corrupting model. The version==7 predicate is false for
+     * every stock v6 file, which falls through to the unchanged path below. */
+    if (version == 7)
+    {
+        Pc_WideLm_Parse(lmHdr, Pc_BigLm_DestCapacity(lmHdr), Pc_BigLm_FileIdxOf(lmHdr));
+        return;
+    }
+
+    /* Texture dump (dump_textures): register what this model draws over each of
+     * its sheets BEFORE anything is reformatted or rebased — the dumper reads
+     * the raw PSX bytes still standing here, and needs the material/primitive
+     * CLUT words as the file baked them (Material_FsImageApply rewrites them
+     * against VRAM the moment this header is usable). No-op when dumping is off. */
+    TexPack_DumpScanLm(raw);
 
     /* Parse materials (PSX stride = 24 bytes) into heap allocation */
     s_Material* mats = NULL;

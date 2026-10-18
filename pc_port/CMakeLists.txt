@@ -4,6 +4,21 @@ project(SilentHillPC C CXX)
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_CXX_STANDARD 17)
 
+# No CMAKE_BUILD_TYPE meant -O0 for the whole game (engine, PsyCross and every
+# map DLL), and release-nightly.ps1 ships this build dir -- so every release so
+# far was unoptimized. RelWithDebInfo keeps -g for the open crash
+# investigations. Callers who pass -DCMAKE_BUILD_TYPE explicitly still win.
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+    set(CMAKE_BUILD_TYPE RelWithDebInfo CACHE STRING "Build type" FORCE)
+    message(STATUS "CMAKE_BUILD_TYPE unset -> defaulting to RelWithDebInfo")
+endif()
+
+# The decomp is MIPS-faithful C: it type-puns through incompatible pointers and
+# relies on signed arithmetic wrapping the way the PSX did. Both are UB that an
+# optimizer is free to exploit, and -O0 was masking it. These two flags cost
+# almost nothing and keep the generated code honest to what the source means.
+add_compile_options(-fno-strict-aliasing -fwrapv)
+
 # Build everything position-independent. On Linux the map overlays are .so
 # shared objects that link the static psycross_static archive; linking a
 # static (non-PIC) archive into a shared object fails, so force PIC globally.
@@ -16,6 +31,10 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 option(SH_USE_OPENGL "Use OpenGL renderer (via PsyCross)" ON)
 option(SH_DEBUG "Enable debug output" OFF)
 option(SH_ASAN "Enable AddressSanitizer for memory corruption detection" OFF)
+# FMV ffmpeg fallback (native h264/h265/vp9/av1 in mp4/mkv/webm/avi override files).
+# ON by default and free to be: ffmpeg is loaded at runtime, so this costs only the
+# headers at build time and nothing is bundled or linked. See the ffmpeg section below.
+option(SH_FMV_FFMPEG "Enable ffmpeg FMV fallback decoder (h264/h265/vp9/av1, mp4/mkv/webm)" ON)
 
 # =============================================================================
 # Version defines - default to USA
@@ -147,7 +166,9 @@ set_source_files_properties(${MAP_SOURCES} PROPERTIES
 )
 
 # PC port specific sources
-file(GLOB_RECURSE PC_PORT_SOURCES
+# CONFIGURE_DEPENDS so adding a file under pc_port/src is picked up by a plain
+# `cmake --build .` (the documented build command) instead of linking without it.
+file(GLOB_RECURSE PC_PORT_SOURCES CONFIGURE_DEPENDS
     "${CMAKE_SOURCE_DIR}/src/*.c"
     "${CMAKE_SOURCE_DIR}/src/*.cpp"
 )
@@ -178,6 +199,60 @@ if(WIN32)
         OBJECT_DEPENDS "${CMAKE_SOURCE_DIR}/res/app_icon.ico;${CMAKE_BINARY_DIR}/sh_version.h")
 endif()
 
+# =============================================================================
+# RetroAchievements (rcheevos) — optional, ON when the submodule is present
+# =============================================================================
+# rcheevos is self-contained (libc only): the achievement runtime, the RA web
+# API layer, and the disc hasher that identifies the user's real PSX dump.
+# Excluded: rc_libretro.c (needs libretro.h) and rc_client_raintegration.c
+# (Windows RAIntegration dev toolkit — not used by a player-facing client).
+set(SH_RCHEEVOS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/rcheevos")
+option(SH_ENABLE_RETROACHIEVEMENTS "Build RetroAchievements support (rcheevos)" ON)
+if(SH_ENABLE_RETROACHIEVEMENTS AND EXISTS "${SH_RCHEEVOS_DIR}/src/rc_client.c")
+    file(GLOB RCHEEVOS_SOURCES
+        "${SH_RCHEEVOS_DIR}/src/rcheevos/*.c"
+        "${SH_RCHEEVOS_DIR}/src/rapi/*.c"
+        "${SH_RCHEEVOS_DIR}/src/rhash/*.c"
+        "${SH_RCHEEVOS_DIR}/src/rc_client.c"
+        "${SH_RCHEEVOS_DIR}/src/rc_client_external.c"
+        "${SH_RCHEEVOS_DIR}/src/rc_compat.c"
+        "${SH_RCHEEVOS_DIR}/src/rc_util.c"
+        "${SH_RCHEEVOS_DIR}/src/rc_version.c"
+    )
+    add_library(rcheevos_static STATIC ${RCHEEVOS_SOURCES})
+    target_include_directories(rcheevos_static PUBLIC
+        "${SH_RCHEEVOS_DIR}/include"
+        "${SH_RCHEEVOS_DIR}/src"
+    )
+    # Third-party: don't inherit the port's warning set.
+    if(NOT MSVC)
+        target_compile_options(rcheevos_static PRIVATE -w)
+    endif()
+    set(SH_HAVE_RETROACHIEVEMENTS ON)
+else()
+    set(SH_HAVE_RETROACHIEVEMENTS OFF)
+    message(STATUS "RetroAchievements: disabled (rcheevos submodule missing — run: git submodule update --init --recursive)")
+endif()
+
+# Lua 5.4 — vendored under third_party/lua/src, compiled into a static lib for
+# the randomizer scripting layer. The standalone programs (lua.c/luac.c) and the
+# amalgamation/test files are not vendored, so a plain src/*.c glob is safe. The
+# generic ISO-C luaconf (no LUA_USE_* platform define) keeps it portable and
+# sandboxes out dynamic C-library loading, which user scripts must not do.
+set(SH_LUA_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/lua")
+if(EXISTS "${SH_LUA_DIR}/src/lua.h")
+    file(GLOB LUA_SOURCES "${SH_LUA_DIR}/src/*.c")
+    add_library(lua_static STATIC ${LUA_SOURCES})
+    target_include_directories(lua_static PUBLIC "${SH_LUA_DIR}/src")
+    if(NOT MSVC)
+        target_compile_options(lua_static PRIVATE -w)
+    endif()
+    set(SH_HAVE_LUA ON)
+else()
+    set(SH_HAVE_LUA OFF)
+    message(STATUS "Lua scripting: disabled (third_party/lua missing)")
+endif()
+
 add_executable(SilentHillPC
     ${PC_PORT_SOURCES}
     ${MAIN_SOURCES}
@@ -191,9 +266,19 @@ add_executable(SilentHillPC
 # On Linux, ENABLE_EXPORTS adds -rdynamic so dlopen'd libraries see exe symbols.
 # On Windows/MinGW, we additionally need --export-all-symbols because MinGW
 # only exports __declspec(dllexport)-marked symbols by default.
+#
+# Not with SH_STATIC_MAPS: every overlay is linked in, so nothing resolves
+# against the exe at runtime and the export table has nothing to serve.
+# (Dropping it does not measurably shrink the binary — that is dominated by
+# .bss, see the note on the static path below — but there is no reason to emit
+# an export entry for all 43 overlays' globals.)
+if(NOT SH_STATIC_MAPS)
 set_target_properties(SilentHillPC PROPERTIES ENABLE_EXPORTS ON)
+endif()
 if(MINGW)
-    target_link_options(SilentHillPC PRIVATE "-Wl,--export-all-symbols")
+    if(NOT SH_STATIC_MAPS)
+        target_link_options(SilentHillPC PRIVATE "-Wl,--export-all-symbols")
+    endif()
     # Build as a GUI (windows) subsystem app so Windows doesn't spawn a console
     # window at launch. We keep the standard C entry (SDL_MAIN_HANDLED is set, so
     # main() is the real entry); force -emainCRTStartup because the windows
@@ -212,6 +297,33 @@ add_custom_command(TARGET SilentHillPC POST_BUILD
     COMMENT "Copying shipped runtime assets (pc_port/assets/)"
 )
 
+# ANGLE runtime, for the renderer=d3d11 / vulkan / d3d9 / software backends.
+# Optional by design: the game only loads these when the config asks for a
+# translated backend, and falls back to native OpenGL with a logged warning when
+# they are absent, so a build without them is complete and shippable.
+#
+# They are not vendored because ANGLE is ~15 MB of binary with its own release
+# cadence and license. Drop libEGL.dll + libGLESv2.dll (and d3dcompiler_47.dll
+# if your Windows lacks it) into pc_port/angle/ and they are deployed beside the
+# exe. Prebuilt weekly x64/arm64 Windows builds:
+#   https://github.com/mmozeiko/build-angle/releases/latest
+# An Electron release zip is an equally good source of the same two DLLs.
+# copy_directory rather than a file(GLOB) of *.dll: the glob is evaluated once at
+# configure time, so a DLL added to angle/ afterwards is silently never deployed,
+# and ANGLE's Vulkan backend needs companions that are not DLLs at all
+# (vk_swiftshader_icd.json). Copying the directory keeps the deployed set equal
+# to the source set without a reconfigure.
+if(WIN32 AND EXISTS "${CMAKE_SOURCE_DIR}/angle")
+    add_custom_command(TARGET SilentHillPC POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+                "${CMAKE_SOURCE_DIR}/angle" "$<TARGET_FILE_DIR:SilentHillPC>"
+        COMMENT "Copying ANGLE runtime (D3D11/Vulkan backends)"
+    )
+    message(STATUS "ANGLE runtime found - D3D11/Vulkan render backends will be available")
+else()
+    message(STATUS "No pc_port/angle/ - only the native OpenGL backend will be selectable at runtime")
+endif()
+
 # Game-specific defines (only on our target, NOT PsyCross)
 target_compile_definitions(SilentHillPC PRIVATE
     VER_${SH_VERSION}
@@ -226,6 +338,20 @@ file(GLOB_RECURSE ALL_C_SOURCES
 )
 set_source_files_properties(${ALL_C_SOURCES} PROPERTIES
     COMPILE_DEFINITIONS "static_assert=_Static_assert"
+)
+set_property(SOURCE "${CMAKE_SOURCE_DIR}/src/xa_player.c" APPEND PROPERTY
+    COMPILE_DEFINITIONS
+        "XaPlayer_PlayWithParams=PcLegacyXa_PlayWithParams"
+        "XaPlayer_Play=PcLegacyXa_Play"
+        "XaPlayer_Stop=PcLegacyXa_Stop"
+        "XaPlayer_Update=PcLegacyXa_Update"
+        "XaPlayer_SetVolume=PcLegacyXa_SetVolume"
+        "XaPlayer_SetPauseHold=PcLegacyXa_SetPauseHold"
+        "Xa_IsVoiceAudioDraining=PcLegacyXa_IsVoiceAudioDraining"
+        "Xa_VoiceGapHold=PcLegacyXa_VoiceGapHold"
+        "XaPlayer_SetMasterVolume=PcLegacyXa_SetMasterVolume"
+        "XaPlayer_PlayFile=PcLegacyXa_PlayFile"
+        "XaPlayer_StopFile=PcLegacyXa_StopFile"
 )
 if(SH_DEBUG)
     target_compile_definitions(SilentHillPC PRIVATE SH_DEBUG=1)
@@ -286,6 +412,30 @@ target_link_libraries(SilentHillPC PRIVATE
     psycross_static
 )
 
+# Lua scripting (randomizer): link the vendored interpreter + flag its presence.
+if(SH_HAVE_LUA)
+    target_link_libraries(SilentHillPC PRIVATE lua_static)
+    target_compile_definitions(SilentHillPC PRIVATE SH_LUA=1)
+endif()
+
+# RetroAchievements: the runtime plus the platform HTTP backend it posts through
+# (WinHTTP ships with Windows; libcurl is the Linux/macOS standard).
+if(SH_HAVE_RETROACHIEVEMENTS)
+    target_link_libraries(SilentHillPC PRIVATE rcheevos_static)
+    target_compile_definitions(SilentHillPC PRIVATE SH_RETROACHIEVEMENTS=1)
+    if(WIN32)
+        target_link_libraries(SilentHillPC PRIVATE winhttp)
+    else()
+        find_package(CURL)
+        if(CURL_FOUND)
+            target_link_libraries(SilentHillPC PRIVATE CURL::libcurl)
+            target_compile_definitions(SilentHillPC PRIVATE SH_RA_HAVE_CURL=1)
+        else()
+            message(STATUS "RetroAchievements: libcurl not found — RA will be inert on this build")
+        endif()
+    endif()
+endif()
+
 # On Linux/ELF the map overlay .so files no longer link their own copy of
 # PsyCross (see maps/CMakeLists.txt) — they import the entire PsyCross runtime
 # from this executable at dlopen so there is a single, initialized instance of
@@ -300,6 +450,11 @@ if(UNIX AND NOT APPLE)
         "$<TARGET_FILE:psycross_static>"
         "LINKER:--no-whole-archive"
     )
+elseif(APPLE AND SH_BUILD_MAP_DLLS)
+    # Same for macOS: the map dylibs resolve PsyCross from the exe through
+    # -undefined dynamic_lookup (maps/CMakeLists.txt), so all of it must be here.
+    target_link_options(SilentHillPC PRIVATE
+        "LINKER:-force_load,$<TARGET_FILE:psycross_static>")
 endif()
 
 if(SDL2_FOUND)
@@ -337,6 +492,115 @@ if(JPEG_LIBRARY)
     endif()
 else()
     target_link_libraries(SilentHillPC PRIVATE jpeg)
+endif()
+
+# =============================================================================
+# ffmpeg (optional FMV fallback: h264/h265/vp9/av1 in mp4/mkv/webm/avi)
+# =============================================================================
+# Headers only — the libs are resolved at runtime by fmv_player.cpp through
+# dll_loader, so nothing ffmpeg lands in the exe's import table and we bundle no
+# ffmpeg binaries (we cannot redistribute the GPL prebuilts, and an import-table
+# dependency would stop the exe launching for every user without the DLLs).
+# Users who want container overrides drop shared libs whose major versions match
+# the headers this was built against next to the exe, or install them system-wide
+# (fmv_player.cpp derives the soname it looks for from those same headers).
+# Missing headers only cost the feature, never the build, so a plain checkout
+# still compiles.
+#
+# ffmpeg 6.0 (libavcodec 60) is the floor: the decoder uses AVChannelLayout and
+# swr_alloc_set_opts2, which do not exist before ffmpeg 5.1, and 6.0 is the
+# oldest release we actually validate against. Newer majors are accepted.
+set(SH_FFMPEG_MIN_AVCODEC_MAJOR 60)
+set(SH_FFMPEG_PREFIX "" CACHE PATH
+    "Prefix holding ffmpeg development headers to build against (uses <prefix>/include)")
+if(SH_FMV_FFMPEG)
+    set(FFMPEG_HEADER_DIRS "")
+    set(FFMPEG_HEADERS_FOUND FALSE)
+    if(SH_FFMPEG_PREFIX)
+        # An explicit prefix is a deliberate override (side-installed headers that
+        # must win over whatever the system offers), so pkg-config is skipped
+        # entirely rather than allowed to contradict it.
+        if(EXISTS "${SH_FFMPEG_PREFIX}/include/libavcodec/avcodec.h")
+            set(FFMPEG_HEADER_DIRS "${SH_FFMPEG_PREFIX}/include")
+            set(FFMPEG_HEADERS_FOUND TRUE)
+        else()
+            message(STATUS "SH_FFMPEG_PREFIX=${SH_FFMPEG_PREFIX} has no "
+                "include/libavcodec/avcodec.h")
+        endif()
+    else()
+        if(PkgConfig_FOUND OR PKG_CONFIG_FOUND)
+            pkg_check_modules(FFMPEG
+                libavformat>=60 libavcodec>=${SH_FFMPEG_MIN_AVCODEC_MAJOR}
+                libavutil>=58 libswscale>=7 libswresample>=4)
+        endif()
+        if(FFMPEG_FOUND)
+            # pkg-config omits -I for compiler-default include dirs, so an EMPTY
+            # FFMPEG_INCLUDE_DIRS means "already on the search path", not "missing".
+            set(FFMPEG_HEADER_DIRS ${FFMPEG_INCLUDE_DIRS})
+            set(FFMPEG_HEADERS_FOUND TRUE)
+        else()
+            find_path(FFMPEG_INCLUDE_DIR libavcodec/avcodec.h)
+            if(FFMPEG_INCLUDE_DIR)
+                set(FFMPEG_HEADER_DIRS ${FFMPEG_INCLUDE_DIR})
+                set(FFMPEG_HEADERS_FOUND TRUE)
+            endif()
+        endif()
+    endif()
+
+    # The major is ALWAYS read from the header the compiler will actually open,
+    # never from pkg-config's claim: a .pc whose includedir points at a different
+    # tree reports one version while the compiler silently gets another, and the
+    # runtime soname fmv_player.cpp derives comes from the header, not the .pc.
+    set(_ff_major 0)
+    set(_ff_header_root "")
+    if(FFMPEG_HEADERS_FOUND)
+        foreach(_dir IN LISTS FFMPEG_HEADER_DIRS)
+            if(EXISTS "${_dir}/libavcodec/avcodec.h")
+                set(_ff_header_root "${_dir}")
+                break()
+            endif()
+        endforeach()
+        if(NOT _ff_header_root)
+            find_path(FFMPEG_DEFAULT_INCLUDE_DIR libavcodec/avcodec.h)
+            if(FFMPEG_DEFAULT_INCLUDE_DIR)
+                set(_ff_header_root "${FFMPEG_DEFAULT_INCLUDE_DIR}")
+            endif()
+        endif()
+
+        # version_major.h since ffmpeg 5.0, version.h before that.
+        set(_ff_version_header "${_ff_header_root}/libavcodec/version_major.h")
+        if(NOT EXISTS "${_ff_version_header}")
+            set(_ff_version_header "${_ff_header_root}/libavcodec/version.h")
+        endif()
+        if(_ff_header_root AND EXISTS "${_ff_version_header}")
+            file(STRINGS "${_ff_version_header}" _ff_major_lines
+                 REGEX "^#define[ \t]+LIBAVCODEC_VERSION_MAJOR[ \t]+[0-9]+")
+            if(_ff_major_lines)
+                list(GET _ff_major_lines 0 _ff_major_line)
+                string(REGEX REPLACE "^.*LIBAVCODEC_VERSION_MAJOR[ \t]+([0-9]+).*$" "\\1"
+                       _ff_major "${_ff_major_line}")
+            endif()
+        endif()
+        if(_ff_major LESS SH_FFMPEG_MIN_AVCODEC_MAJOR)
+            message(STATUS "ffmpeg headers at ${_ff_header_root} are libavcodec major "
+                "${_ff_major}; ${SH_FFMPEG_MIN_AVCODEC_MAJOR}+ (ffmpeg 6.0+) required")
+            set(FFMPEG_HEADERS_FOUND FALSE)
+        endif()
+    endif()
+
+    if(FFMPEG_HEADERS_FOUND)
+        if(FFMPEG_HEADER_DIRS)
+            target_include_directories(SilentHillPC PRIVATE ${FFMPEG_HEADER_DIRS})
+        endif()
+        target_compile_definitions(SilentHillPC PRIVATE SH_FMV_FFMPEG)
+        message(STATUS "ffmpeg FMV fallback ENABLED (runtime-loaded, libavcodec major "
+            "${_ff_major}, headers: ${_ff_header_root})")
+    else()
+        message(WARNING "SH_FMV_FFMPEG=ON but ffmpeg 6.0+ development headers were not found "
+            "(MSYS2: pacman -S mingw-w64-x86_64-ffmpeg; Debian/Ubuntu: apt install libavcodec-dev "
+            "libavformat-dev libavutil-dev libswscale-dev libswresample-dev). Building WITHOUT the "
+            "ffmpeg FMV fallback; mp4/mkv/webm overrides will be ignored.")
+    endif()
 endif()
 
 if(WIN32)
@@ -416,10 +680,122 @@ if(WIN32 AND EXISTS "${CMAKE_SOURCE_DIR}/run_capture.bat")
 endif()
 
 # =============================================================================
-# Map Overlay DLLs (optional — builds all maps as loadable modules)
+# Map overlays
 # =============================================================================
+# The 42 non-starting maps ship one of two ways. map0_s00 is always compiled
+# straight into the exe (MAP_SOURCES above) and is unaffected by either.
+#
+#   SH_BUILD_MAP_DLLS  each overlay is a dlopen'd module. Desktop default:
+#                      one map rebuilds without relinking the exe, and it is
+#                      what map mods are distributed as.
+#   SH_STATIC_MAPS     each overlay is an archive whose defined symbols are
+#                      prefixed <map>_ and force-loaded into the exe. For
+#                      platforms that refuse loose dynamic libraries — iOS will
+#                      not load a dylib that is not part of the signed bundle.
+#
+# The static path costs memory, and that is its real trade-off rather than code
+# size: each overlay reserves its own .bss (chara/particle/anim working
+# buffers), so all 43 coexist permanently instead of one at a time. Measured on
+# the Windows verification build that is ~198 MB of .bss against ~4 MB of .text.
+# It is demand-zero, so pages cost nothing until a map is actually visited, but
+# nothing releases them afterwards either. Worth watching against the iOS
+# jetsam limit.
+#
+# They are mutually exclusive: the prefixing that lets 43 overlays coexist in
+# one binary also renames the very symbol dlsym would look up.
 option(SH_BUILD_MAP_DLLS "Build map overlays as DLLs for dynamic loading" OFF)
-if(SH_BUILD_MAP_DLLS)
+option(SH_STATIC_MAPS "Link map overlays into the executable with per-map symbol prefixing" OFF)
+
+if(IOS AND NOT SH_BUILD_MAP_DLLS)
+    set(SH_STATIC_MAPS ON CACHE BOOL "" FORCE)
+endif()
+if(SH_BUILD_MAP_DLLS AND SH_STATIC_MAPS)
+    message(FATAL_ERROR "SH_BUILD_MAP_DLLS and SH_STATIC_MAPS are mutually exclusive.")
+endif()
+
+if(SH_STATIC_MAPS)
+    find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    # llvm-objcopy is the only objcopy that rewrites Mach-O symbol tables; GNU
+    # objcopy cannot. Verified against arm64 Mach-O and x86_64 COFF archives.
+    find_program(SH_LLVM_NM      NAMES llvm-nm      llvm-nm-18 llvm-nm-17)
+    find_program(SH_LLVM_OBJCOPY NAMES llvm-objcopy llvm-objcopy-18 llvm-objcopy-17)
+    if(NOT SH_LLVM_NM OR NOT SH_LLVM_OBJCOPY)
+        message(FATAL_ERROR
+            "SH_STATIC_MAPS needs llvm-nm and llvm-objcopy on PATH "
+            "(LLVM/Xcode command line tools). Found nm=${SH_LLVM_NM} objcopy=${SH_LLVM_OBJCOPY}")
+    endif()
+    # Mach-O decorates C symbols with a leading underscore; ELF and x86_64 COFF
+    # do not. The prefix has to be inserted after it, not before.
+    if(APPLE)
+        set(SH_SYM_PREFIX "_")
+    else()
+        set(SH_SYM_PREFIX "")
+    endif()
+
+    add_subdirectory(maps)
+
+    get_property(SH_STATIC_MAP_TARGETS GLOBAL PROPERTY SH_STATIC_MAP_TARGETS)
+    if(NOT SH_STATIC_MAP_TARGETS)
+        message(FATAL_ERROR "SH_STATIC_MAPS is on but no overlay targets were created.")
+    endif()
+    list(LENGTH SH_STATIC_MAP_TARGETS SH_STATIC_MAP_COUNT)
+    message(STATUS "Static map overlays: ${SH_STATIC_MAP_COUNT}")
+
+    # Generated registry: MapOverlay_Load resolves a name through this instead
+    # of dlopen/dlsym. Each header is reached by its prefixed name.
+    set(SH_MAP_REG "${CMAKE_BINARY_DIR}/map_static_registry.c")
+    set(_reg "/* GENERATED by pc_port/CMakeLists.txt (SH_STATIC_MAPS) - do not edit. */\n")
+    string(APPEND _reg "#include \"map_overlay_loader.h\"\n")
+    string(APPEND _reg "#include \"map_static_registry.h\"\n#include <string.h>\n\n")
+    foreach(m ${SH_STATIC_MAP_TARGETS})
+        string(APPEND _reg "extern s_MapOverlayHdr ${m}_g_MapOverlayHeader_${m};\n")
+    endforeach()
+    string(APPEND _reg "\nstatic const s_StaticMapEntry k_staticMaps[] = {\n")
+    foreach(m ${SH_STATIC_MAP_TARGETS})
+        string(APPEND _reg "    { \"${m}\", &${m}_g_MapOverlayHeader_${m} },\n")
+    endforeach()
+    string(APPEND _reg "};\n\n")
+    string(APPEND _reg "s_MapOverlayHdr* MapStatic_Find(const char* name)\n{\n")
+    string(APPEND _reg "    unsigned i;\n")
+    string(APPEND _reg "    for (i = 0; i < sizeof(k_staticMaps) / sizeof(k_staticMaps[0]); i++)\n")
+    string(APPEND _reg "    {\n        if (strcmp(k_staticMaps[i].name, name) == 0)\n")
+    string(APPEND _reg "        {\n            return k_staticMaps[i].header;\n        }\n    }\n")
+    string(APPEND _reg "    return (s_MapOverlayHdr*)0;\n}\n")
+    file(GENERATE OUTPUT "${SH_MAP_REG}" CONTENT "${_reg}")
+    # The ALL_C_SOURCES glob that maps static_assert -> _Static_assert only
+    # covers the source tree, and this file is generated into the build dir.
+    # Without it, libgpu.h's static_asserts do not parse.
+    set_source_files_properties("${SH_MAP_REG}" PROPERTIES
+        GENERATED TRUE
+        COMPILE_DEFINITIONS "static_assert=_Static_assert")
+    target_sources(SilentHillPC PRIVATE "${SH_MAP_REG}")
+    target_compile_definitions(SilentHillPC PRIVATE SH_STATIC_MAPS)
+
+    # Force-load: an overlay's event tables and its constructor-patched
+    # anim_info objects are referenced only through the header's pointers, so
+    # ordinary lazy archive semantics would leave them out of the link.
+    set(SH_MAP_ARCHIVES "")
+    foreach(m ${SH_STATIC_MAP_TARGETS})
+        add_dependencies(SilentHillPC ${m})
+        list(APPEND SH_MAP_ARCHIVES "$<TARGET_FILE:${m}>")
+        if(APPLE)
+            target_link_options(SilentHillPC PRIVATE "LINKER:-force_load,$<TARGET_FILE:${m}>")
+        elseif(MSVC)
+            target_link_options(SilentHillPC PRIVATE "/WHOLEARCHIVE:$<TARGET_FILE:${m}>")
+        endif()
+    endforeach()
+    if(NOT APPLE AND NOT MSVC)
+        # One group around every archive, not a pair per archive: CMake
+        # de-duplicates identical link options, which would collapse 43
+        # --whole-archive/--no-whole-archive pairs into a single pair wrapping
+        # only the first archive and leave the other 42 outside it. They then
+        # sit ahead of the objects that reference them in the link line, where
+        # ordinary archive semantics resolve nothing and every overlay header
+        # comes back undefined.
+        target_link_options(SilentHillPC PRIVATE
+            "LINKER:--whole-archive" ${SH_MAP_ARCHIVES} "LINKER:--no-whole-archive")
+    endif()
+elseif(SH_BUILD_MAP_DLLS)
     add_subdirectory(maps)
 endif()
 
@@ -427,3 +803,29 @@ endif()
 # Install
 # =============================================================================
 install(TARGETS SilentHillPC RUNTIME DESTINATION bin)
+
+# =============================================================================
+# Tests (-DBUILD_TESTING=ON, then ctest)
+# =============================================================================
+if(BUILD_TESTING)
+    enable_testing()
+
+    # Oversized loose ITEM TMD capacity lift (pc_big_tmd.c). Links the real
+    # module against the real file table so path building, slot arithmetic and
+    # the accept/reject verdicts are exercised exactly as the game does them.
+    add_executable(pc_big_tmd_test
+        tests/pc_big_tmd_test.c
+        src/pc_big_tmd.c
+        "${DECOMP_DIR}/src/main/fileinfo.c")
+    target_compile_definitions(pc_big_tmd_test PRIVATE
+        SH_PC_PORT VER_USA SKIP_ASM static_assert=_Static_assert)
+    # include/decomp is a 32-bit shim whose struct layouts do not satisfy the
+    # decomp static asserts on 64-bit, so it is deliberately absent here — the
+    # real headers live under ${DECOMP_DIR}/include.
+    target_include_directories(pc_big_tmd_test PRIVATE
+        "${CMAKE_BINARY_DIR}"
+        include include/psyq_compat src
+        "${DECOMP_DIR}/include" "${DECOMP_DIR}/include/decomp"
+        "${PSYCROSS_DIR}/include/psx" "${PSYCROSS_DIR}/include")
+    add_test(NAME pc_big_tmd_test COMMAND pc_big_tmd_test)
+endif()

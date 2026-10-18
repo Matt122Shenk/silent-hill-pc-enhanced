@@ -1,22 +1,105 @@
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "hires_override.h"
+#include "dds_load.h"
+#include "texpack_lazy.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
+#include "miniz.h"
+
 /* PNG overrides carry a true 8-bit alpha channel (TIM transparency is
  * 1-bit: raw value 0 = transparent). stb_image is vendored, PNG-only,
  * memory-only; its default allocator is malloc so the shared free() below
- * is valid for both decode paths. */
+ * is valid for both decode paths.
+ *
+ * The IDAT inflate is hooked out to miniz (already vendored for .zip packs):
+ * on the 200-file pack sample it cuts a whole stbi_load_from_memory from
+ * 2.519 to 1.973 ms/file (-21.7%), no new dependency. Output matched stb's
+ * on all 400 real pack PNGs; the hook also deliberately tolerates a bad
+ * trailing adler32 (see Png_Inflate) so it cannot reject an image stb would
+ * have accepted. Only the inflate is swapped — stb still does filters,
+ * palette expansion, tRNS and 16-bit reduction, which is what makes its
+ * output the reference. */
+static char* Png_Inflate(const char* buf, int len, int initialSize, int* outLen, int parseHeader);
+#define STBI_PNG_ZLIB_DECODE Png_Inflate
+
 #define STB_IMAGE_IMPLEMENTATION
 #define STBI_ONLY_PNG
 #define STBI_NO_STDIO
 #include "stb_image.h"
 
+/* stb's raw_len guess is the exact decoded size for a non-interlaced PNG, so
+ * the common case decodes straight into a right-sized buffer and never grows.
+ * Interlaced PNGs (whose Adam7 filter bytes overrun that guess) fall back to
+ * the growing heap decode. stb frees the result with STBI_FREE == free, which
+ * is what miniz's MZ_MALLOC/MZ_REALLOC use here.
+ *
+ * ADLER32: stb's own inflate never checks the zlib trailer, so it happily
+ * decodes a stream whose adler32 is wrong or truncated. miniz's mem_to_mem /
+ * mem_to_heap wrappers DO check it and fail the whole call, which would make
+ * this drop-in stricter than what it replaces and silently vanish a texture
+ * that used to load. Drive tinfl_decompress directly instead and accept
+ * ADLER32_MISMATCH alongside DONE. The heap fallback below still goes through
+ * miniz's wrapper, so a bad adler32 can only bite an INTERLACED PNG (the one
+ * shape that overruns stb's size guess) — no such file exists in any known
+ * pack, and the non-interlaced path above covers everything else. */
+static char* Png_Inflate(const char* buf, int len, int initialSize, int* outLen, int parseHeader)
+{
+    int flags = parseHeader ? TINFL_FLAG_PARSE_ZLIB_HEADER : 0;
+
+    if (initialSize > 0)
+    {
+        char* out = (char*)malloc((size_t)initialSize);
+        if (out != NULL)
+        {
+            /* ~11KB; malloc'd rather than stacked so this stays safe on the
+             * queue/post-load call depth. */
+            tinfl_decompressor* decomp =
+                (tinfl_decompressor*)malloc(sizeof(tinfl_decompressor));
+            if (decomp != NULL)
+            {
+                size_t       inN  = (size_t)len;
+                size_t       outN = (size_t)initialSize;
+                tinfl_status st;
+
+                tinfl_init(decomp);
+                st = tinfl_decompress(decomp, (const mz_uint8*)buf, &inN,
+                                      (mz_uint8*)out, (mz_uint8*)out, &outN,
+                                      flags | TINFL_FLAG_USING_NON_WRAPPING_OUTPUT_BUF);
+                free(decomp);
+
+                if (st == TINFL_STATUS_DONE || st == TINFL_STATUS_ADLER32_MISMATCH)
+                {
+                    *outLen = (int)outN;
+                    return out;
+                }
+            }
+            free(out);
+        }
+    }
+
+    {
+        size_t outN = 0;
+        void*  p    = tinfl_decompress_mem_to_heap(buf, (size_t)len, &outN, flags);
+        if (p == NULL)
+        {
+            /* stb's contract: a failing zlib decode must leave an error string,
+             * or stbi_failure_reason() reports whatever failed last instead. */
+            stbi__err("PNG inflate failed", "Corrupt PNG");
+            return NULL;
+        }
+        *outLen = (int)outN;
+        return (char*)p;
+    }
+}
+
 #include "sh_log.h"
 #include "pc_config.h"
 
 #include <PsyX/common/glad.h>
+#include <PsyX/PsyX_backend.h>
 
 #define MAX_HIRES_OVERRIDES 256
 
@@ -29,14 +112,35 @@ typedef struct {
     int      hiresW, hiresH;     /* actual pixel dimensions of decoded RGBA */
     int      sourceBitDepth;     /* TIM mode of the loose file itself */
     unsigned packBytes;          /* GL bytes charged to the pack budget (0 = uncounted) */
+    unsigned tick;               /* pump tick this entry was last SAMPLED (LRU key) */
     unsigned long long contentHash; /* TexPack_LastComposeHash of the resident texture; 0 = unknown/always re-upload */
+    /* Survives VRAM rewrites of its rect and the evictor. For an entry whose
+     * VRAM home is deliberately NOT uploaded: the PAL font grid on a USA or
+     * Japanese disc, where (768,128) belongs to other art (font_region.c). The
+     * prim keyed to it never samples VRAM, so what the game writes there is
+     * no reason to drop it. Only the owner's explicit drop removes it. */
+    int      pinned;
 } HiresEntry;
 
 static HiresEntry g_entries[MAX_HIRES_OVERRIDES];
 static int        g_numEntries = 0;
+/* Bumped on every change to the set or placement of g_entries; invalidates the
+ * (tpage, clut) lookup memo in HiresOverride_LookupByTpageClut. */
+static unsigned   g_hiresEntriesGen = 1;
 static int        g_initialized = 0;
 
 static int upload_rgba(GLuint* tex, const unsigned char* rgba, int w, int h, int nearest);
+static void bgr555_to_rgba(unsigned short cx, unsigned char* out);
+
+/* Force GL_NEAREST (point) sampling on the next upload(s), set by the font TIM
+ * loader. HD font packs paint gutterless glyph cells edge-to-edge, so bilinear
+ * MAG/mipmap sampling bleeds a neighbour glyph's ink across the cell boundary
+ * ("ghost text" beside A/O). Point-sampling the font atlas removes the bleed
+ * while every other override keeps bilinear. Persistent (not one-shot): a font
+ * registers one upload per CLUT row, so the loader sets it around the whole
+ * PostLoadTim registration and clears it after. */
+static int s_forceNearestUpload = 0;
+void HiresOverride_SetForceNearestUpload(int on) { s_forceNearestUpload = on ? 1 : 0; }
 
 /* ---- Texture-pack GL byte budget ------------------------------------------
  * A DuckStation pack composes + uploads a pack-resolution RGBA texture (with
@@ -72,6 +176,102 @@ static void pack_charge(unsigned* slot, int w, int h)
     g_packBytesLive += (long long)*slot;
 }
 
+/* Size the pack budget to what this GPU can actually hold.
+ *
+ * The shipped `texpack_budget_mb` is a CONSTANT (6144 MB). While this routine
+ * only ever LOWERED it, that constant was the effective budget on every card
+ * bigger than ~13.6 GB: a 16 GB card computes a 7372 MB ceiling, 6144 is
+ * already under it, nothing changes, and the run pins at exactly 6 GB with 8 GB
+ * of VRAM still free — the reported "stops loading textures after some point".
+ * A constant cannot be right for both a 4 GB laptop and a 24 GB desktop, so
+ * when the user has not named a value the budget is DERIVED from the GPU
+ * instead and may be raised as well as lowered.
+ *
+ * An explicit config value still only ever gets lowered, so a user who wrote a
+ * small number is respected and 0 ("unlimited") stays unlimited by their own
+ * choice. texpackBudgetCeilingMb caps the derivation on shared-memory APUs,
+ * where main_pc.c has already limited pack memory against physical RAM — the
+ * GPU may report plenty of "VRAM" that is really the same RAM the game runs in.
+ *
+ * Needs a live GL context, so it runs after PsyX_Initialise. 45% leaves room
+ * for the native rows, the PsyCross framebuffers and the driver's working set;
+ * with LRU eviction in the pump the budget is now a steady-state working-set
+ * target rather than a one-way ratchet, so overshooting it is self-correcting. */
+void HiresOverride_ClampBudgetToVram(void)
+{
+    int dedicatedMb = 0;
+
+    while (glGetError() != GL_NO_ERROR) { }
+
+    {
+        /* GL_NVX_gpu_memory_info: total dedicated video memory, in KB. */
+        GLint kb = 0;
+        glGetIntegerv(0x9047 /* GPU_MEMORY_INFO_DEDICATED_VIDMEM_NVX */, &kb);
+        if (glGetError() == GL_NO_ERROR && kb > 0)
+        {
+            dedicatedMb = kb / 1024;
+        }
+    }
+
+    if (dedicatedMb <= 0)
+    {
+        /* GL_ATI_meminfo: [0] = total free texture memory, in KB. Free rather
+         * than total, so it reads low — acceptable for a clamp that only
+         * lowers, and it is the only figure this extension offers. */
+        GLint info[4] = { 0, 0, 0, 0 };
+        glGetIntegerv(0x87FC /* TEXTURE_FREE_MEMORY_ATI */, info);
+        if (glGetError() == GL_NO_ERROR && info[0] > 0)
+        {
+            dedicatedMb = info[0] / 1024;
+        }
+    }
+
+    while (glGetError() != GL_NO_ERROR) { }
+
+    if (dedicatedMb <= 0)
+    {
+        SH_DBG("[TEXPACK] GPU VRAM not reported by this driver — budget left at %d MB",
+               g_PcConfig.texpackBudgetMb);
+        return;
+    }
+
+    {
+        int cap = dedicatedMb * 45 / 100;
+        if (cap < 256) cap = 256;
+
+        SH_DBG("[TEXPACK] GPU reports %d MB VRAM; pack budget ceiling %d MB", dedicatedMb, cap);
+
+        if (g_PcConfig.texpackBudgetUserSet)
+        {
+            if (g_PcConfig.texpackBudgetMb > cap)
+            {
+                SH_DBG("[TEXPACK] GL texture budget capped %d -> %d MB (45%% of %d MB VRAM)",
+                       g_PcConfig.texpackBudgetMb, cap, dedicatedMb);
+                g_PcConfig.texpackBudgetMb = cap;
+            }
+            return;
+        }
+
+        /* No user value: the GPU decides, up or down. */
+        {
+            int want = cap;
+            if (g_PcConfig.texpackBudgetCeilingMb > 0 &&
+                want > g_PcConfig.texpackBudgetCeilingMb)
+            {
+                want = g_PcConfig.texpackBudgetCeilingMb;
+                SH_DBG("[TEXPACK] VRAM-derived budget held at the %d MB system-RAM ceiling",
+                       want);
+            }
+            if (want != g_PcConfig.texpackBudgetMb)
+            {
+                SH_DBG("[TEXPACK] GL texture budget %d -> %d MB (45%% of %d MB VRAM, auto)",
+                       g_PcConfig.texpackBudgetMb, want, dedicatedMb);
+                g_PcConfig.texpackBudgetMb = want;
+            }
+        }
+    }
+}
+
 int HiresOverride_PackBudgetExceeded(void)
 {
     long long cap = (long long)g_PcConfig.texpackBudgetMb << 20;
@@ -80,10 +280,363 @@ int HiresOverride_PackBudgetExceeded(void)
     return g_packBytesLive >= cap;
 }
 
+/* Eviction target: 7/8 of the cap, NOT the cap itself.
+ *
+ * Evicting only until `PackBudgetExceeded` clears settles the run at exactly
+ * the cap, which has two costs. It leaves ZERO headroom for the OTHER consumer
+ * of this budget — the VRAM-entry path (charas, items, HUD, 2D backgrounds)
+ * composes eagerly at PostLoadTim and simply gives up when the budget is spent,
+ * so a pool path parked on the line starves it permanently. And it recycles one
+ * row per pump forever: free 5 MB, compose 5 MB, exceed, repeat (measured: 69
+ * consecutive "evicted 1 cold row(s)" hovering at 510/512 MB). Freeing a slab
+ * at a time gives both a working margin. */
+int HiresOverride_PackBudgetOverTarget(void)
+{
+    long long cap = (long long)g_PcConfig.texpackBudgetMb << 20;
+    if (cap <= 0)
+        return 0;
+    return g_packBytesLive > cap - (cap >> 3);
+}
+
+long long HiresOverride_PackBytesLive(void) { return g_packBytesLive; }
+
+/* ---- Chunk-pool virtual slots (resident_textures) -------------------------
+ * See hires_override.h for the canonical key encoding. Slot texture content
+ * is REPLACED in place when the engine reuses a slot for another TIM. */
+typedef struct {
+    GLuint glTexture[HIRES_POOL_MAX_ROWS]; /* per CLUT row; [0] = base, 0 = empty */
+    int    nativeW, nativeH; /* disc TIM pixel dims — texelSize denominator so
+                              * prim UVs map 0..1 over any replacement size */
+    unsigned rowPackBytes[HIRES_POOL_MAX_ROWS]; /* pack-budget charge per row */
+    unsigned short rowW[HIRES_POOL_MAX_ROWS];   /* GL texture pixel dims per row — */
+    unsigned short rowH[HIRES_POOL_MAX_ROWS];   /* the shader's footprint clamp */
+    unsigned long long rowHash[HIRES_POOL_MAX_ROWS]; /* TexPack_LastComposeHash of each resident row; 0 = unknown */
+    unsigned rowTick[HIRES_POOL_MAX_ROWS];      /* pump tick this row was last SAMPLED (LRU key) */
+    short  nativeClutX, nativeClutY; /* disc TIM's real CLUT rect origin; -1 = unknown.
+                                      * Needed to map ABSOLUTE prim cluts onto slot rows
+                                      * (see HiresOverride_RestampValidate). */
+} PoolSlotEntry;
+
+static PoolSlotEntry g_poolSlots[HIRES_POOL_SLOT_MAX];
+
+/* Advanced once per pumped frame. Only the ordering matters, so wrap is
+ * harmless: comparisons below are on age (now - tick) in unsigned arithmetic. */
+static unsigned g_hiresTick = 0;
+
+void HiresOverride_Tick(void) { g_hiresTick++; }
+
+/* Free the least-recently-SAMPLED pack-composed row and credit its bytes back.
+ *
+ * Without this the budget is a one-way ratchet: `PackBudgetExceeded` latches on
+ * and every later row keeps native art for the rest of the session, however far
+ * the player walks from whatever filled it. That is the reported "stops loading
+ * textures after some point", and it is why no single budget number can be
+ * right — too small and textures stop, too large and the driver thrashes. The
+ * CPU-side compose cache has had LRU eviction all along (tp_cache_evict_lru);
+ * this is the missing GPU-side half.
+ *
+ * `minAgeTicks` keeps rows sampled in the last few frames off the table. The
+ * pump runs after PsyX_EndScene, so a texture wanted this frame has already
+ * been submitted, but the margin costs nothing and removes any argument about
+ * GL names baked into prims still being in flight.
+ *
+ * The caller MUST restore native art for the returned row (see
+ * HiresOverride_PoolSlotRestoreNativeRow): a row left at glTexture==0 falls
+ * back to row 0's palette in the lookup, which is visibly wrong on the
+ * multi-CLUT slots eviction targets most. Returns 0 when nothing is evictable
+ * (everything is hot), which is the caller's signal to stop trying. */
+int HiresOverride_EvictColdestPackRow(unsigned minAgeTicks,
+                                      HiresRestorablePredicate canRestore,
+                                      int* outSlot, int* outRow)
+{
+    int      bestSlot = -1, bestRow = -1;
+    unsigned bestAge  = 0;
+    int      i, r;
+
+    for (i = 0; i < HIRES_POOL_SLOT_MAX; i++)
+    {
+        PoolSlotEntry* s = &g_poolSlots[i];
+        for (r = 0; r < HIRES_POOL_MAX_ROWS; r++)
+        {
+            unsigned age;
+            /* Only pack-composed rows are worth evicting: a native row costs
+             * the budget nothing, so dropping one frees no bytes and would
+             * just churn the upload. */
+            if (s->rowPackBytes[r] == 0 || s->glTexture[r] == 0) continue;
+            age = g_hiresTick - s->rowTick[r];
+            if (age < minAgeTicks) continue;
+            /* Never free art that cannot be put back. Slots whose retained TIM
+             * blocks are gone (or were never kept - the chara pool registers no
+             * lazy source) have no way back to their own palette, and the
+             * lookup would serve ROW 0's instead: a monster in another
+             * monster's colours. Those rows simply stay resident. */
+            if (canRestore != NULL && !canRestore(i, r)) continue;
+            if (bestSlot < 0 || age > bestAge)
+            {
+                bestAge  = age;
+                bestSlot = i;
+                bestRow  = r;
+            }
+        }
+    }
+
+    if (bestSlot >= 0)
+    {
+        PoolSlotEntry* s = &g_poolSlots[bestSlot];
+        glDeleteTextures(1, &s->glTexture[bestRow]);
+        s->glTexture[bestRow] = 0;
+        s->rowHash[bestRow]   = 0;
+        pack_credit(&s->rowPackBytes[bestRow]);
+
+        if (outSlot) *outSlot = bestSlot;
+        if (outRow)  *outRow  = bestRow;
+        return 1;
+    }
+
+    /* LAST RESORT: a cold VRAM-entry override (chara / item / HUD / 2D
+     * background pack row).
+     *
+     * These are charged to the same budget but were never eviction candidates,
+     * so they were a permanent floor under it. Measured on a 512 MB budget: 104
+     * VRAM-entry pack registrations, 78 of them 1024x1024 (5.6 MB each with
+     * mips) — enough that no pool row could be freed to make room, the pump
+     * logged "the hot set fills it", and world pack textures stopped for the
+     * rest of the map ("they all suddenly unloaded").
+     *
+     * Ranked BELOW pool rows deliberately, and only reached once no pool row is
+     * evictable, because the two recover differently: a pool row is recomposed
+     * on demand by the very next TexPackLazy pump that sees a prim want it,
+     * whereas the VRAM path only composes inside PostLoadTim, so an evicted
+     * VRAM entry keeps native art until its TIM is uploaded again. Dropping one
+     * is nonetheless SAFE — with no entry the prim samples real VRAM, which
+     * still holds the native art. That is exactly what HiresOverride_-
+     * InvalidateVramRect already does when the game rewrites a rect. */
+    {
+        int      bestEntry = -1;
+        unsigned bestEntryAge = 0;
+
+        for (i = 0; i < g_numEntries; i++)
+        {
+            HiresEntry* e = &g_entries[i];
+            unsigned    age;
+
+            if (e->packBytes == 0 || e->glTexture == 0 || e->pinned) continue;
+            age = g_hiresTick - e->tick;
+            if (age < minAgeTicks) continue;
+            if (bestEntry < 0 || age > bestEntryAge)
+            {
+                bestEntryAge = age;
+                bestEntry    = i;
+            }
+        }
+
+        if (bestEntry < 0) return 0;
+
+        {
+            HiresEntry* e = &g_entries[bestEntry];
+            glDeleteTextures(1, &e->glTexture);
+            pack_credit(&e->packBytes);
+            g_entries[bestEntry] = g_entries[--g_numEntries];
+            g_hiresEntriesGen++;
+        }
+    }
+
+    /* Slot -1 tells the caller there is no pool row to restore: the entry is
+     * gone and native VRAM is already the fallback. */
+    if (outSlot) *outSlot = -1;
+    if (outRow)  *outRow  = -1;
+    return 1;
+}
+
+/* Record the disc TIM's real CLUT origin for a slot (PostLoadTim knows it;
+ * nothing else does). Lets the restamp path relate a prim's ABSOLUTE native
+ * clut to this slot's rows. */
+void HiresOverride_PoolSlotSetNativeClut(int slotId, int clutX, int clutY)
+{
+    if (!g_initialized) HiresOverride_Init();
+    if (slotId < 0 || slotId >= HIRES_POOL_SLOT_MAX) return;
+    g_poolSlots[slotId].nativeClutX = (short)clutX;
+    g_poolSlots[slotId].nativeClutY = (short)clutY;
+}
+
+/* A restamped prim clut must encode a BACKED pool slot. The rebase in
+ * Model_MaterialFlagsApply is pure arithmetic -- field_10 + (prim - field_12)
+ * -- and whenever a prim's carried base disagrees with field_12 (reload /
+ * completion-order desyncs seen only on low-spec machines; deltas of 46, 58
+ * and 505 palette rows in the 2026-08-21 Nowhere logs) the sum encodes a slot
+ * nothing owns. Such a prim is either dropped by the CLUT sanitizer (the
+ * invisible Nowhere elevator) or, where the guard cannot apply, drawn as
+ * palette garbage (the rainbow triangle). Clamping to the material's own base
+ * keeps the object drawn with its row-0 palette, and the log line names the
+ * material so the upstream desync stays visible in user logs. */
+unsigned short HiresOverride_RestampValidate(unsigned short newClut,
+                                             unsigned short baseClut,
+                                             unsigned short oldClut,
+                                             unsigned short oldBase,
+                                             const char* matName)
+{
+    int q, slotId, row, r, backed;
+
+    if ((newClut & 0x8000) == 0)
+        return newClut; /* native clut: real VRAM semantics, nothing to check */
+
+    q      = ((newClut >> 6) & 0x3FF) - HIRES_POOL_CLUT_ROW_BASE;
+    slotId = (q / HIRES_POOL_MAX_ROWS) * 64 + (newClut & 0x3F);
+    row    = q % HIRES_POOL_MAX_ROWS;
+    backed = 0;
+    if (q >= 0 && slotId >= 0 && slotId < HIRES_POOL_SLOT_MAX)
+    {
+        PoolSlotEntry* ps = &g_poolSlots[slotId];
+        for (r = 0; r < HIRES_POOL_MAX_ROWS; r++)
+        {
+            if (ps->glTexture[r] != 0) { backed = 1; break; }
+        }
+    }
+    if (backed)
+        return newClut;
+
+    /* A result decoding PAST the pool entirely (slot beyond the table) can
+     * only be crossed-generation arithmetic -- the poison birth itself. Rare,
+     * so it gets its own budget: the per-material cap below starves exactly
+     * these (the door material burns its lines on benign load stamps). */
+    if (slotId >= HIRES_POOL_SLOT_MAX || q < 0)
+    {
+        static int s_wildLog = 0;
+        if (s_wildLog < 16)
+        {
+            s_wildLog++;
+            SH_DBG("[RESTAMP-WILD] mat '%.8s': %04X = new base %04X + (prim %04X - old base %04X) -> slot %d row %d PAST-POOL",
+                   (matName != NULL) ? matName : "?", newClut, baseClut, oldClut, oldBase, slotId, row);
+        }
+    }
+
+    {
+        /* Per-MATERIAL cap: a global cap burned entirely on one chatty
+         * material's load-time noise (SC2FC2H x24) and the door material --
+         * the one under investigation -- never got a line. */
+        static struct { char name[8]; int n; } s_seen[24];
+        static int s_seenCount = 0;
+        int _k = 0, _log = 0;
+
+        if (matName != NULL)
+        {
+            for (_k = 0; _k < s_seenCount; _k++)
+                if (memcmp(s_seen[_k].name, matName, 8) == 0) break;
+            if (_k == s_seenCount && s_seenCount < 24)
+            {
+                memcpy(s_seen[s_seenCount].name, matName, 8);
+                s_seen[s_seenCount].n = 0;
+                s_seenCount++;
+            }
+            if (_k < s_seenCount && s_seen[_k].n < 2)
+            {
+                s_seen[_k].n++;
+                _log = 1;
+            }
+        }
+        if (_log)
+        {
+            /* oldClut/oldBase expose WHICH state generations crossed: a native
+             * oldClut against a virtual oldBase (or two different virtual
+             * generations) is the reload/bookkeeping desync in one line. */
+            {
+                int nx = -1, ny = -1;
+                int bq = ((baseClut >> 6) & 0x3FF) - HIRES_POOL_CLUT_ROW_BASE;
+                int bslot = (bq >= 0) ? (bq / HIRES_POOL_MAX_ROWS) * 64 + (baseClut & 0x3F) : -1;
+                if (bslot >= 0 && bslot < HIRES_POOL_SLOT_MAX)
+                {
+                    nx = g_poolSlots[bslot].nativeClutX;
+                    ny = g_poolSlots[bslot].nativeClutY;
+                }
+                SH_DBG("[RESTAMP] mat '%.8s': %04X = new base %04X + (prim %04X - old base %04X) -> slot %d row %d unbacked-at-stamp (base slot %d native clut=(%d,%d))",
+                       (matName != NULL) ? matName : "?", newClut, baseClut, oldClut, oldBase, slotId, row, bslot, nx, ny);
+            }
+        }
+    }
+    /* DIAGNOSTIC ONLY -- the value passes through. Clamping here was tried and
+     * destroyed LEGITIMATE early stamps: at load the stamp routinely lands
+     * before the slot's [POOLTEX] registration (THR4001F: slot 0 rows 3/4
+     * stamped moments before slot 0 registered), and clamping erased the row
+     * deltas, wrecking multi-row palettes. Unbacked-at-stamp is not an error;
+     * unbacked-at-DRAW is, and the parse-side CLUT sanitizer already handles
+     * that (drop, never rainbow). */
+    return newClut;
+}
+
+/* Expand one CLUT row of a raw TIM pixel+palette block to RGBA8 at native
+ * resolution and install it as this slot row's texture, UNCHARGED against the
+ * pack budget (native rows never were). Restores an evicted row to correct art
+ * rather than leaving the hole described above. */
+int HiresOverride_PoolSlotRestoreNativeRow(int slotId, int row,
+                                           const unsigned char* pixels, int w16, int h,
+                                           const unsigned short* clutRow, int clutW,
+                                           int bpp, int nativePixelW, int nativePixelH)
+{
+    PoolSlotEntry* s;
+    unsigned char* rgba;
+    int            pixW, x, y, rowBytes, rc;
+
+    if (!g_initialized) HiresOverride_Init();
+    if (slotId < 0 || slotId >= HIRES_POOL_SLOT_MAX) return -1;
+    if (row < 0 || row >= HIRES_POOL_MAX_ROWS) return -1;
+    if (pixels == NULL || clutRow == NULL || clutW <= 0) return -1;
+    if (bpp != 4 && bpp != 8) return -1;
+    if (w16 <= 0 || h <= 0) return -1;
+
+    pixW     = (bpp == 4) ? w16 * 4 : w16 * 2;
+    rowBytes = w16 * 2;
+
+    rgba = (unsigned char*)malloc((size_t)pixW * (size_t)h * 4);
+    if (rgba == NULL) return -1;
+
+    for (y = 0; y < h; y++)
+    {
+        const unsigned char* src = pixels + (size_t)y * (size_t)rowBytes;
+        for (x = 0; x < pixW; x++)
+        {
+            unsigned int idx;
+            if (bpp == 4)
+            {
+                unsigned char b = src[x >> 1];
+                idx = (x & 1) ? (unsigned int)((b >> 4) & 0xF) : (unsigned int)(b & 0xF);
+            }
+            else
+            {
+                idx = src[x];
+            }
+            if ((int)idx >= clutW) idx = 0;
+            bgr555_to_rgba(clutRow[idx], &rgba[((size_t)y * (size_t)pixW + (size_t)x) * 4]);
+        }
+    }
+
+    s  = &g_poolSlots[slotId];
+    rc = upload_rgba(&s->glTexture[row], rgba, pixW, h,
+                     (pixW == nativePixelW && h == nativePixelH));
+    free(rgba);
+    if (rc != 0) return -1;
+
+    s->rowW[row]    = (unsigned short)pixW;
+    s->rowH[row]    = (unsigned short)h;
+    s->rowHash[row] = 0;
+    s->rowTick[row] = g_hiresTick;
+    pack_credit(&s->rowPackBytes[row]); /* native art is not pack-budgeted */
+    if (nativePixelW > 0) s->nativeW = nativePixelW;
+    if (nativePixelH > 0) s->nativeH = nativePixelH;
+    return 0;
+}
+
 void HiresOverride_Init(void)
 {
+    int i;
+
     if (g_initialized) return;
     g_numEntries = 0;
+    g_hiresEntriesGen++;
+    for (i = 0; i < HIRES_POOL_SLOT_MAX; i++)
+    {
+        g_poolSlots[i].nativeClutX = -1;
+        g_poolSlots[i].nativeClutY = -1;
+    }
     g_initialized = 1;
     SH_DBG("[HIRES] override system initialized (capacity=%d)",
            MAX_HIRES_OVERRIDES);
@@ -295,6 +848,15 @@ static int decode_to_rgba(const char* tag,
     return 0;
 }
 
+/* PC minimap: decode a raw TIM (or PNG) blob to RGBA8 without touching PSX VRAM
+ * or the override tables. Caller frees *outRGBA. Returns 0 on success. */
+int HiresOverride_DecodeToRGBA(const unsigned char* data, unsigned int size,
+                               unsigned char** outRGBA, int* outW, int* outH)
+{
+    int bpp = 0;
+    return decode_to_rgba("minimap", data, size, outRGBA, outW, outH, &bpp, 0, NULL);
+}
+
 int HiresOverride_RegisterFromTim(const char* timPath,
                                    const unsigned char* timData,
                                    unsigned int timSize,
@@ -326,6 +888,7 @@ int HiresOverride_RegisterFromTim(const char* timPath,
     free(rgba);
 
     HiresEntry* e = &g_entries[g_numEntries++];
+    g_hiresEntriesGen++;
     e->vramX = targetVramX;
     e->vramY = targetVramY;
     e->vramW = targetVramW;
@@ -338,6 +901,7 @@ int HiresOverride_RegisterFromTim(const char* timPath,
     e->hiresH = hiH;
     e->sourceBitDepth = srcBpp;
     e->packBytes = 0; /* loose user file, not pack-budgeted (recycled slot may hold a stale charge) */
+    e->pinned = 0;
 
     SH_DBG("[HIRES] registered %s: vram=(%d,%d %dx%d cells, %dbpp) "
            "clut=(%d,%d) hires=%dx%d (src %dbpp) tex=%u",
@@ -347,20 +911,6 @@ int HiresOverride_RegisterFromTim(const char* timPath,
     return 0;
 }
 
-/* ---- Chunk-pool virtual slots (resident_textures) -------------------------
- * See hires_override.h for the canonical key encoding. Slot texture content
- * is REPLACED in place when the engine reuses a slot for another TIM. */
-typedef struct {
-    GLuint glTexture[HIRES_POOL_MAX_ROWS]; /* per CLUT row; [0] = base, 0 = empty */
-    int    nativeW, nativeH; /* disc TIM pixel dims — texelSize denominator so
-                              * prim UVs map 0..1 over any replacement size */
-    unsigned rowPackBytes[HIRES_POOL_MAX_ROWS]; /* pack-budget charge per row */
-    unsigned short rowW[HIRES_POOL_MAX_ROWS];   /* GL texture pixel dims per row — */
-    unsigned short rowH[HIRES_POOL_MAX_ROWS];   /* the shader's footprint clamp */
-    unsigned long long rowHash[HIRES_POOL_MAX_ROWS]; /* TexPack_LastComposeHash of each resident row; 0 = unknown */
-} PoolSlotEntry;
-
-static PoolSlotEntry g_poolSlots[HIRES_POOL_SLOT_MAX];
 
 int HiresOverride_PoolSlotRegister(int slotId,
                                    const unsigned char* data, unsigned int size,
@@ -375,13 +925,71 @@ int HiresOverride_PoolSlotRegister(int slotId,
         return -1;
     }
 
+    /* Engine slot reuse: this call rewrites every row of the slot with a
+     * different TIM, so the previous occupant's retained pack-compose inputs
+     * must not outlive it - a stale source would compose the OLD sheet into the
+     * NEW slot's rows. Covers the disc-TIM base registration, the whole-image
+     * loose replacement (which bypasses the pack path entirely and so installs
+     * no new source) and the minimap slot. The pool path re-installs the new
+     * source right after this returns. */
+    TexPackLazy_DropSlot(slotId);
+
     snprintf(tag, sizeof(tag), "pool slot %d", slotId);
+
+    /* BC7 .dds replacement: upload the compressed blocks straight through rather
+     * than expanding to RGBA8. Same 4x VRAM saving the format exists for, and it
+     * keeps a real 8-bit alpha for the override shader's cutout. A whole-image
+     * .dds covers the slot, so it lands on row 0 like any whole-image PNG. */
+    {
+        s_DdsBptc probe;
+        if (Dds_ParseBptc(data, (int)size, &probe))
+        {
+            PoolSlotEntry* ds = &g_poolSlots[slotId];
+            int r2;
+            for (r2 = 0; r2 < HIRES_POOL_MAX_ROWS; r2++)
+            {
+                if (ds->glTexture[r2] != 0)
+                {
+                    glDeleteTextures(1, &ds->glTexture[r2]);
+                    ds->glTexture[r2] = 0;
+                }
+                pack_credit(&ds->rowPackBytes[r2]);
+            }
+            if (Dds_UploadBptc(&ds->glTexture[0], data, (int)size,
+                               s_forceNearestUpload ||
+                               (probe.width == nativePixelW && probe.height == nativePixelH)) != 0)
+            {
+                SH_DBG("[POOLTEX] slot %d: BC7 upload failed — falling back", slotId);
+                return -1;
+            }
+            /* BC7 is 1 byte/texel vs RGBA8's 4; charge the budget accordingly by
+             * quartering the width it accounts for. */
+            pack_charge(&ds->rowPackBytes[0], (probe.width + 3) / 4, probe.height);
+            ds->rowW[0] = (unsigned short)probe.width;
+            ds->rowH[0] = (unsigned short)probe.height;
+            ds->nativeW = nativePixelW;
+            ds->nativeH = nativePixelH;
+            ds->rowHash[0] = 0;
+            SH_DBG("[POOLTEX] slot %d <- BC7 %dx%d (%d mip%s, native %dx%d)",
+                   slotId, probe.width, probe.height, probe.mipCount,
+                   probe.mipCount == 1 ? "" : "s", nativePixelW, nativePixelH);
+            return 0;
+        }
+    }
 
     /* One texture per CLUT row: prims select palette rows with baked +64*row
      * clut deltas (see hires_override.h), so every row a TIM ships must be
      * decodable at draw. PNG replacements have one palette: row 0 only. */
     PoolSlotEntry* s = &g_poolSlots[slotId];
     int rows = 1, r, hiW = 0, hiH = 0;
+    /* A mid-loop failure used to `return` straight out, skipping the stale-row
+     * drop below. On a RECYCLED slot that left rows r+1..15 holding the PREVIOUS
+     * TIM's textures — so the slot rendered a mix of two sheets depending on
+     * which palette row a prim selected — and left the previous occupant's pack
+     * charges on the books. Break into the shared epilogue instead, and drop
+     * from the number of rows actually written rather than the declared count. */
+    int status = 0;
+    int doneRows = 0;
 
     for (r = 0; r < rows; r++)
     {
@@ -389,7 +997,8 @@ int HiresOverride_PoolSlotRegister(int slotId,
         int w = 0, h = 0, srcBpp = 0, timRows = 1;
         if (decode_to_rgba(tag, data, size, &rgba, &w, &h, &srcBpp, r, &timRows) != 0)
         {
-            return (r == 0) ? -1 : 0;
+            status = (r == 0) ? -1 : 0;
+            break;
         }
         if (r == 0)
         {
@@ -433,9 +1042,14 @@ int HiresOverride_PoolSlotRegister(int slotId,
                             w, h, (w == nativePixelW && h == nativePixelH)) != 0)
             {
                 free(rgba);
-                return (r == 0) ? -1 : 0;
+                status = (r == 0) ? -1 : 0;
+                break;
             }
             free(rgba);
+            if (r < HIRES_POOL_MAX_ROWS)
+            {
+                doneRows = r + 1;
+            }
             rowSlot->rowW[rowIdx] = (unsigned short)w;
             rowSlot->rowH[rowIdx] = (unsigned short)h;
             /* This row now holds base/loose content, not a keyed pack composite —
@@ -448,8 +1062,10 @@ int HiresOverride_PoolSlotRegister(int slotId,
         }
     }
 
-    /* Slot reuse with fewer rows: drop stale row textures past the new count. */
-    for (r = rows; r < HIRES_POOL_MAX_ROWS; r++)
+    /* Slot reuse with fewer rows, and any tail a mid-loop failure left behind:
+     * drop stale row textures past what this TIM actually wrote. On a clean run
+     * doneRows == min(rows, HIRES_POOL_MAX_ROWS), so this is the old bound. */
+    for (r = doneRows; r < HIRES_POOL_MAX_ROWS; r++)
     {
         if (s->glTexture[r] != 0)
         {
@@ -470,7 +1086,7 @@ int HiresOverride_PoolSlotRegister(int slotId,
                (unsigned)s->glTexture[0]);
         s_regLog++;
     }
-    return 0;
+    return status;
 }
 
 /* Upload straight RGBA into a slot/entry texture, creating it on demand.
@@ -479,6 +1095,7 @@ int HiresOverride_PoolSlotRegister(int slotId,
  * stay NEAREST with no mips (PSX-exact). Returns 0 on success. */
 static int upload_rgba(GLuint* tex, const unsigned char* rgba, int w, int h, int nearest)
 {
+    if (s_forceNearestUpload) nearest = 1; /* font atlas: point-sample, kill gutterless-cell bleed */
     if (rgba == NULL || w <= 0 || h <= 0) return -1;
     if (*tex == 0)
     {
@@ -487,8 +1104,80 @@ static int upload_rgba(GLuint* tex, const unsigned char* rgba, int w, int h, int
     }
     glBindTexture(GL_TEXTURE_2D, *tex);
     while (glGetError() != GL_NO_ERROR) { } /* drain stale errors */
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0,
-                 GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+
+    /* When this texture object ALREADY has these exact dimensions and format,
+     * no storage is (re)allocated, so the AMD undefined-storage case the
+     * prefill below exists for cannot arise: glTexSubImage2D alone is correct,
+     * ~3x faster, and skips the per-upload VRAM realloc churn that fragments
+     * the driver heap over a long session. The prefill path stays verbatim for
+     * genuine (re)allocations — the only case that workaround was ever about.
+     * The driver is asked rather than a side table kept: GL names are deleted
+     * and recycled throughout this file, and a slot row that last took a BC7
+     * upload reports a COMPRESSED internal format here (a sub-image into it
+     * would fail), so only GL's own answer is trustworthy. */
+    int reuseStorage;
+    if (g_grCaps.texLevelParam)
+    {
+        GLint curW = 0, curH = 0, curFmt = 0;
+        glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_WIDTH, &curW);
+        glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_HEIGHT, &curH);
+        glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_INTERNAL_FORMAT, &curFmt);
+        reuseStorage = (curW == w && curH == h &&
+                        (curFmt == GL_RGBA || curFmt == GL_RGBA8));
+    }
+    else
+    {
+        /* ES 3.0 (the ANGLE-backed backends) has no glGetTexLevelParameteriv —
+         * it arrived in 3.1. With no trustworthy answer available, always take
+         * the full re-specification path: a glTexImage2D is valid whatever the
+         * slot previously held, whereas a sub-image into a mismatched or
+         * compressed level is the exact failure this check exists to avoid. */
+        reuseStorage = 0;
+    }
+
+    if (reuseStorage)
+    {
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h,
+                        GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+    }
+    else
+    {
+        /* Define the storage as fully TRANSPARENT first, then overlay the real
+         * pixels via glTexSubImage2D. On some AMD drivers, under the large
+         * resident_textures working set, glTexImage2D can leave the texture's
+         * storage silently undefined (NO GL error raised — so the error check
+         * below can't catch it): the override shader then samples garbage that
+         * shows as blue/black spike/wedge fills on AMD while NVIDIA reads benign
+         * zeros. This is the residual the school-rainbow fix anticipated
+         * ("silent undefined pool tex needs pre-zero"), now confirmed by the
+         * reporter's resident_textures=0 bisect making it vanish. A zeroed base
+         * means any silent/partial upload failure leaves TRANSPARENT texels
+         * (discarded by the override shader), matching the discrete-GPU result.
+         * On a conformant driver the SubImage overwrite makes the final texels
+         * byte-identical, so working setups are unaffected. Reuses one
+         * grown-as-needed zeroed staging buffer. */
+        static unsigned char* s_zeroFill = NULL;
+        static int            s_zeroBytes = 0;
+        int                   need = w * h * 4;
+        if (need > s_zeroBytes)
+        {
+            unsigned char* nz = (unsigned char*)realloc(s_zeroFill, (size_t)need);
+            if (nz) { s_zeroFill = nz; memset(s_zeroFill, 0, (size_t)need); s_zeroBytes = need; }
+        }
+        if (s_zeroFill != NULL && s_zeroBytes >= need)
+        {
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0,
+                         GL_RGBA, GL_UNSIGNED_BYTE, s_zeroFill);
+            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h,
+                            GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+        }
+        else
+        {
+            /* Zero buffer alloc failed — fall back to the direct upload. */
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0,
+                         GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+        }
+    }
     /* ANY upload error must degrade to a clean miss, never a live-but-undefined
      * texture. Only GL_OUT_OF_MEMORY was handled; but on the Intel HD 4600
      * driver a large resident-texture working set can make glTexImage2D fail
@@ -504,12 +1193,97 @@ static int upload_rgba(GLuint* tex, const unsigned char* rgba, int w, int h, int
         GLenum uploadErr = glGetError();
         if (uploadErr != GL_NO_ERROR)
         {
-            static int s_oomLog = 0;
-            if (s_oomLog < 8) { SH_DBG("[POOLTEX] GL error 0x%X on %dx%d upload — keeping native art", (unsigned)uploadErr, w, h); s_oomLog++; }
-            glBindTexture(GL_TEXTURE_2D, 0);
-            glDeleteTextures(1, tex);
-            *tex = 0;
-            return -1;
+            /* Shrink and retry before giving up.
+             *
+             * Losing the texture here does NOT degrade to native art, which is
+             * what the old comment assumed. The material's prim clut has
+             * already been rebased onto this virtual slot, and a virtual slot
+             * with no GL texture is an UNBACKED bit-15 clut — exactly what
+             * PsyX_GPU.cpp's ClutHasNoPalette drops on sight, because drawing
+             * it folds a negative V onto an arbitrary VRAM palette (permanent
+             * rainbow). So the prim is discarded outright and the object is
+             * simply absent: the missing Nowhere elevator door, reported only
+             * ever from low-VRAM machines, where a big resident-texture working
+             * set is what makes these uploads fail in the first place.
+             *
+             * Halving until it fits keeps the slot BACKED, so nothing is
+             * dropped and nothing can rainbow — the object is drawn, at worst
+             * softer than the pack intended. That is a real graceful degrade,
+             * and it is strictly better than invisible on the machines that hit
+             * it. Downscale is a box filter done in place (dst index never
+             * passes src index at 2:1), so it needs one scratch buffer. */
+            static unsigned char* s_shrink = NULL;
+            static int            s_shrinkBytes = 0;
+            const unsigned char*  src = rgba;
+            int                   sw = w, sh = h;
+            int                   recovered = 0;
+
+            while (sw >= 2 && sh >= 2 && (sw > 32 || sh > 32))
+            {
+                int dw = sw >> 1, dh = sh >> 1;
+                int need = dw * dh * 4, x, y, c;
+
+                if (need > s_shrinkBytes)
+                {
+                    unsigned char* nb = (unsigned char*)realloc(s_shrink, (size_t)need);
+                    if (nb == NULL)
+                        break;
+                    s_shrink = nb;
+                    s_shrinkBytes = need;
+                }
+
+                for (y = 0; y < dh; y++)
+                {
+                    for (x = 0; x < dw; x++)
+                    {
+                        const unsigned char* a = src + (((y * 2) * sw) + x * 2) * 4;
+                        const unsigned char* b = a + 4;
+                        const unsigned char* d = a + sw * 4;
+                        const unsigned char* e = d + 4;
+
+                        for (c = 0; c < 4; c++)
+                            s_shrink[((y * dw) + x) * 4 + c] =
+                                (unsigned char)(((int)a[c] + b[c] + d[c] + e[c]) >> 2);
+                    }
+                }
+
+                src = s_shrink;
+                sw  = dw;
+                sh  = dh;
+
+                glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, sw, sh, 0,
+                             GL_RGBA, GL_UNSIGNED_BYTE, s_shrink);
+                if (glGetError() == GL_NO_ERROR)
+                {
+                    recovered = 1;
+                    break;
+                }
+            }
+
+            {
+                static int s_oomLog = 0;
+                if (s_oomLog < 8)
+                {
+                    if (recovered)
+                        SH_WARN("[POOLTEX] GL error 0x%X on %dx%d upload — recovered at %dx%d",
+                                (unsigned)uploadErr, w, h, sw, sh);
+                    else
+                        SH_WARN("[POOLTEX] GL error 0x%X on %dx%d upload and every shrink — "
+                                "slot left unbacked, its prims will be dropped",
+                                (unsigned)uploadErr, w, h);
+                    s_oomLog++;
+                }
+            }
+
+            if (!recovered)
+            {
+                glBindTexture(GL_TEXTURE_2D, 0);
+                glDeleteTextures(1, tex);
+                *tex = 0;
+                return -1;
+            }
+            w = sw;
+            h = sh;
         }
     }
     if (!nearest && glGenerateMipmap != NULL)
@@ -522,10 +1296,30 @@ static int upload_rgba(GLuint* tex, const unsigned char* rgba, int w, int h, int
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, nearest ? GL_NEAREST : GL_LINEAR);
     }
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, nearest ? GL_NEAREST : GL_LINEAR);
+
+    /* Tell the renderer this one is off-limits to the global filtering setting.
+     * Filtering is applied per BIND now, so without this the mode chosen above
+     * would be overwritten every frame and the gutterless font cells would bleed
+     * into each other again. */
+    if (nearest)
+    {
+        extern void GR_MarkTextureNearest(unsigned int tex);
+        GR_MarkTextureNearest(*tex);
+    }
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     glBindTexture(GL_TEXTURE_2D, 0);
     return 0;
+}
+
+unsigned int HiresOverride_CreateTextureRGBA(const unsigned char* rgba, int w, int h)
+{
+    GLuint texture = 0;
+
+    if (!g_initialized) HiresOverride_Init();
+    if (upload_rgba(&texture, rgba, w, h, 0) != 0)
+        return 0;
+    return (unsigned int)texture;
 }
 
 int HiresOverride_PoolSlotRegisterRGBAKeyed(int slotId, int row,
@@ -563,6 +1357,15 @@ int HiresOverride_PoolSlotRegisterRGBAKeyed(int slotId, int row,
                     (w == nativePixelW && h == nativePixelH)) != 0)
     {
         s->rowHash[row] = 0;
+        /* The uploader zeroes the name when it drops a half-made texture; that
+         * row's charge is then dead weight on the budget, which is consulted
+         * most often precisely when uploads are failing. Credit it back. (An
+         * argument-validation reject leaves the name intact, so it stays
+         * charged - correctly, the texture is still live.) */
+        if (s->glTexture[row] == 0)
+        {
+            pack_credit(&s->rowPackBytes[row]);
+        }
         return -1;
     }
     pack_charge(&s->rowPackBytes[row], w, h);
@@ -571,6 +1374,12 @@ int HiresOverride_PoolSlotRegisterRGBAKeyed(int slotId, int row,
     s->rowH[row] = (unsigned short)h;
     s->nativeW = nativePixelW;
     s->nativeH = nativePixelH;
+    /* Stamp the row live NOW, or it is born cold and the next eviction pass
+     * frees it before a prim ever samples it — a compose/evict loop, because
+     * the want that triggered this compose fires again immediately. The
+     * lookup's sample stamp lands on `useRow`, which is row 0 while this row is
+     * still empty, so it never reaches the row actually being built. */
+    s->rowTick[row] = g_hiresTick;
     return 0;
 }
 
@@ -582,6 +1391,118 @@ int HiresOverride_PoolSlotRegisterRGBA(int slotId, int row,
                                                    nativePixelW, nativePixelH, 0);
 }
 
+/* Pack .dds twin of PoolSlotRegisterRGBAKeyed: upload the BC7 blocks straight to
+ * this slot row (no RGBA expansion, 4x cheaper VRAM). Same redundant-upload skip
+ * and budget bookkeeping; the budget is charged at BC7's 1 byte/texel (quarter
+ * width) like the loose-.dds path in PoolSlotRegister. */
+int HiresOverride_PoolSlotRegisterDdsKeyed(int slotId, int row,
+                                           const unsigned char* ddsBytes, size_t ddsSize,
+                                           int nativePixelW, int nativePixelH,
+                                           unsigned long long contentHash)
+{
+    s_DdsBptc      probe;
+    int            w, h;
+    PoolSlotEntry* s;
+
+    if (!g_initialized) HiresOverride_Init();
+    if (slotId < 0 || slotId >= HIRES_POOL_SLOT_MAX ||
+        row < 0 || row >= HIRES_POOL_MAX_ROWS)
+    {
+        SH_DBG("[POOLTEX] slot %d row %d out of range (DDS)", slotId, row);
+        return -1;
+    }
+    if (!Dds_ParseBptc(ddsBytes, (int)ddsSize, &probe)) return -1;
+    w = probe.width;
+    h = probe.height;
+
+    s = &g_poolSlots[slotId];
+    if (contentHash != 0 && s->rowHash[row] == contentHash && s->glTexture[row] != 0 &&
+        s->rowW[row] == (unsigned short)w && s->rowH[row] == (unsigned short)h)
+    {
+        s->nativeW = nativePixelW;
+        s->nativeH = nativePixelH;
+        return 0;
+    }
+
+    /* Sampling must not depend on the pack's FORMAT: upload_rgba derives
+     * `nearest` from native-vs-upscaled and additionally honours the font
+     * atlas's force-nearest, so the .dds twin has to do both or the same
+     * texture renders differently once converted (a font TIM shipped as .dds
+     * came back bilinear+mipmapped, re-opening the gutterless-cell ghost text
+     * a3e7973cf fixed for .png). */
+    if (Dds_UploadBptc(&s->glTexture[row], ddsBytes, (int)ddsSize,
+                       s_forceNearestUpload ||
+                       (w == nativePixelW && h == nativePixelH)) != 0)
+    {
+        s->rowHash[row] = 0;
+        /* The uploader zeroes the name when it drops a half-made texture; that
+         * row's charge is then dead weight on the budget, which is consulted
+         * most often precisely when uploads are failing. Credit it back. (An
+         * argument-validation reject leaves the name intact, so it stays
+         * charged - correctly, the texture is still live.) */
+        if (s->glTexture[row] == 0)
+        {
+            pack_credit(&s->rowPackBytes[row]);
+        }
+        return -1;
+    }
+    pack_charge(&s->rowPackBytes[row], (w + 3) / 4, h);
+    s->rowHash[row] = contentHash;
+    s->rowW[row] = (unsigned short)w;
+    s->rowH[row] = (unsigned short)h;
+    s->nativeW = nativePixelW;
+    s->nativeH = nativePixelH;
+    s->rowTick[row] = g_hiresTick; /* see the RGBA twin */
+    return 0;
+}
+
+static HiresEntry* find_keyed(int vramX, int vramY, int vramW, int vramH,
+                              int clutX, int clutY, int bitDepth)
+{
+    int i;
+
+    for (i = 0; i < g_numEntries; i++)
+    {
+        HiresEntry* c = &g_entries[i];
+        if (c->vramX == vramX && c->vramY == vramY &&
+            c->vramW == vramW && c->vramH == vramH &&
+            c->clutX == clutX && c->clutY == clutY &&
+            c->originalBitDepth == bitDepth)
+        {
+            return c;
+        }
+    }
+    return NULL;
+}
+
+int HiresOverride_PinVramRect(int vramX, int vramY, int vramW, int vramH,
+                              int clutX, int clutY, int bitDepth, int pin)
+{
+    HiresEntry* e = find_keyed(vramX, vramY, vramW, vramH, clutX, clutY, bitDepth);
+
+    if (e == NULL)
+        return -1;
+    e->pinned = pin ? 1 : 0;
+    return 0;
+}
+
+int HiresOverride_DropVramRect(int vramX, int vramY, int vramW, int vramH,
+                               int clutX, int clutY, int bitDepth)
+{
+    HiresEntry* e = find_keyed(vramX, vramY, vramW, vramH, clutX, clutY, bitDepth);
+
+    if (e == NULL)
+        return -1;
+    if (e->glTexture != 0)
+    {
+        glDeleteTextures(1, &e->glTexture);
+    }
+    pack_credit(&e->packBytes);
+    *e = g_entries[--g_numEntries];
+    g_hiresEntriesGen++;
+    return 0;
+}
+
 int HiresOverride_RegisterRGBAKeyed(const char* label,
                                     const unsigned char* rgba, int w, int h,
                                     int targetVramX, int targetVramY,
@@ -590,26 +1511,15 @@ int HiresOverride_RegisterRGBAKeyed(const char* label,
                                     int originalBitDepth,
                                     unsigned long long contentHash)
 {
-    HiresEntry* e = NULL;
-    int i;
+    HiresEntry* e;
 
     if (!g_initialized) HiresOverride_Init();
 
     /* Replace-in-place on an identical key: the same VRAM rect gets
      * re-uploaded whenever the game reloads that TIM (room transitions),
      * and content-hashed pack composites can change with it. */
-    for (i = 0; i < g_numEntries; i++)
-    {
-        HiresEntry* c = &g_entries[i];
-        if (c->vramX == targetVramX && c->vramY == targetVramY &&
-            c->vramW == targetVramW && c->vramH == targetVramH &&
-            c->clutX == targetClutX && c->clutY == targetClutY &&
-            c->originalBitDepth == originalBitDepth)
-        {
-            e = c;
-            break;
-        }
-    }
+    e = find_keyed(targetVramX, targetVramY, targetVramW, targetVramH,
+                   targetClutX, targetClutY, originalBitDepth);
 
     /* Redundant re-upload skip (see the pool-slot registrar): a found entry
      * whose content is byte-identical (same hash + dims + a live texture) is
@@ -631,11 +1541,19 @@ int HiresOverride_RegisterRGBAKeyed(const char* label,
         e = &g_entries[g_numEntries];
         e->glTexture = 0;
         e->contentHash = 0;
+        /* A recycled table index can still carry the previous entry's charge;
+         * zero it before any failure path below credits it. */
+        e->packBytes = 0;
+        e->pinned = 0;
     }
 
     if (upload_rgba(&e->glTexture, rgba, w, h, 0) != 0)
     {
         e->contentHash = 0;
+        if (e->glTexture == 0)
+        {
+            pack_credit(&e->packBytes);
+        }
         return -1;
     }
     if (e == &g_entries[g_numEntries])
@@ -645,6 +1563,11 @@ int HiresOverride_RegisterRGBAKeyed(const char* label,
     }
     pack_charge(&e->packBytes, w, h);
     e->contentHash = contentHash;
+    /* Stamp it live NOW. Leaving tick at 0 makes a just-registered entry look
+     * maximally cold to the evictor, which would free it before a single prim
+     * ever sampled it. */
+    e->tick = g_hiresTick;
+    g_hiresEntriesGen++;
 
     e->vramX = targetVramX;
     e->vramY = targetVramY;
@@ -665,6 +1588,95 @@ int HiresOverride_RegisterRGBAKeyed(const char* label,
                originalBitDepth, targetClutX, targetClutY, (unsigned)e->glTexture);
         s_rgbaLog++;
     }
+    return 0;
+}
+
+/* Pack .dds twin of RegisterRGBAKeyed: a whole-upload BC7 pack entry uploaded to
+ * a VRAM-rect override without RGBA expansion. Same find-in-place + redundant
+ * skip; dims come from the DDS header, budget charged at BC7's 1 byte/texel. */
+int HiresOverride_RegisterDdsKeyed(const char* label,
+                                   const unsigned char* ddsBytes, size_t ddsSize,
+                                   int targetVramX, int targetVramY,
+                                   int targetVramW, int targetVramH,
+                                   int targetClutX, int targetClutY,
+                                   int originalBitDepth,
+                                   unsigned long long contentHash)
+{
+    s_DdsBptc   probe;
+    int         w, h, i;
+    HiresEntry* e = NULL;
+
+    if (!g_initialized) HiresOverride_Init();
+    if (!Dds_ParseBptc(ddsBytes, (int)ddsSize, &probe)) return -1;
+    w = probe.width;
+    h = probe.height;
+
+    for (i = 0; i < g_numEntries; i++)
+    {
+        HiresEntry* c = &g_entries[i];
+        if (c->vramX == targetVramX && c->vramY == targetVramY &&
+            c->vramW == targetVramW && c->vramH == targetVramH &&
+            c->clutX == targetClutX && c->clutY == targetClutY &&
+            c->originalBitDepth == originalBitDepth)
+        {
+            e = c;
+            break;
+        }
+    }
+
+    if (e != NULL && contentHash != 0 && e->contentHash == contentHash &&
+        e->glTexture != 0 && e->hiresW == w && e->hiresH == h)
+    {
+        return 0;
+    }
+
+    if (e == NULL)
+    {
+        if (g_numEntries >= MAX_HIRES_OVERRIDES)
+        {
+            SH_DBG("[HIRES] table full, ignoring %s", label);
+            return -1;
+        }
+        e = &g_entries[g_numEntries];
+        e->glTexture = 0;
+        e->contentHash = 0;
+        /* A recycled table index can still carry the previous entry's charge;
+         * zero it before any failure path below credits it. */
+        e->packBytes = 0;
+        e->pinned = 0;
+    }
+
+    /* RGBA twin passes 0 here and upload_rgba ORs the font force-nearest in
+     * itself; replicate that so format never changes sampling. */
+    if (Dds_UploadBptc(&e->glTexture, ddsBytes, (int)ddsSize, s_forceNearestUpload) != 0)
+    {
+        e->contentHash = 0;
+        if (e->glTexture == 0)
+        {
+            pack_credit(&e->packBytes);
+        }
+        return -1;
+    }
+    if (e == &g_entries[g_numEntries])
+    {
+        e->packBytes = 0;
+        g_numEntries++;
+    }
+    pack_charge(&e->packBytes, (w + 3) / 4, h);
+    e->contentHash = contentHash;
+    e->tick = g_hiresTick; /* see the RGBA twin */
+    g_hiresEntriesGen++;
+
+    e->vramX = targetVramX;
+    e->vramY = targetVramY;
+    e->vramW = targetVramW;
+    e->vramH = targetVramH;
+    e->clutX = targetClutX;
+    e->clutY = targetClutY;
+    e->originalBitDepth = originalBitDepth;
+    e->hiresW = w;
+    e->hiresH = h;
+    e->sourceBitDepth = 32; /* the override shader samples BC7 as RGBA */
     return 0;
 }
 
@@ -731,6 +1743,27 @@ int HiresOverride_RegisterLoosePngAllRows(const char* label,
     unsigned char* rgba = NULL;
     int w = 0, h = 0, bpp = 0, r, ok = 0;
 
+    /* BC7 .dds whole-image replacement on the VRAM-rect path (regular/map/HUD
+     * textures — the pool/chara path already detects .dds in PoolSlotRegister).
+     * Upload the compressed file at each palette row's clut cell, like the RGBA
+     * loop below, so any palette a prim selects samples it. */
+    {
+        s_DdsBptc probe;
+        if (Dds_ParseBptc(data, (int)size, &probe))
+        {
+            if (rows < 1) rows = 1;
+            for (r = 0; r < rows; r++)
+            {
+                if (HiresOverride_RegisterDdsKeyed(label, data, (size_t)size,
+                        targetVramX, targetVramY, targetVramW, targetVramH,
+                        targetClutX, targetClutY + r, originalBitDepth, 0) == 0)
+                    ok++;
+                if (targetClutX < 0 || targetClutY < 0) break;
+            }
+            return (ok > 0) ? 0 : -1;
+        }
+    }
+
     if (decode_to_rgba(label, data, size, &rgba, &w, &h, &bpp, 0, NULL) != 0)
     {
         return -1;
@@ -756,6 +1789,10 @@ int HiresOverride_RegisterLoosePngAllRows(const char* label,
 void HiresOverride_PoolSlotsReset(void)
 {
     int i, r, live = 0;
+    /* Same range as the loop below, and the map-init signal that arms the lazy
+     * composer's post-load burst budget: a retained source outliving its slot
+     * would compose the OLD map's art into the new occupant. */
+    TexPackLazy_MapReset();
     /* Chara-pool slots (>= HIRES_POOL_CHARA_SLOT_BASE, incl. their row-spill
      * aliases) persist across map loads — pc_chara_pool.c loads each chara
      * TIM exactly once and re-registers only on a region file-idx change. */
@@ -791,6 +1828,10 @@ void HiresOverride_CharaPoolSlotReset(int slotId)
     }
     for (a = slotId; a < HIRES_POOL_SLOT_MAX; a += 64)
     {
+        /* Row-spill aliases never carry a source of their own (only base slots
+         * do, and the pool pack path caps at HIRES_POOL_MAX_ROWS), but dropping
+         * the whole chain keeps this symmetric with the reset above. */
+        TexPackLazy_DropSlot(a);
         for (r = 0; r < HIRES_POOL_MAX_ROWS; r++)
         {
             if (g_poolSlots[a].glTexture[r] != 0)
@@ -811,10 +1852,18 @@ void HiresOverride_InvalidateVramRect(int x, int y, int w, int h)
     while (i < g_numEntries)
     {
         HiresEntry* e = &g_entries[i];
+        int clutW;
+
+        /* Its VRAM home was never its content (see HiresEntry.pinned). */
+        if (e->pinned)
+        {
+            i++;
+            continue;
+        }
         /* Pixel-rect overlap, or the upload stomping the entry's CLUT
          * cells (16 entries at 4bpp, 256 at 8bpp). Either way the entry no
          * longer reflects what a prim keyed to it samples. */
-        int clutW = (e->originalBitDepth == 8) ? 256 : 16;
+        clutW = (e->originalBitDepth == 8) ? 256 : 16;
         int hitPixels = e->vramX < x + w && e->vramX + e->vramW > x &&
                         e->vramY < y + h && e->vramY + e->vramH > y;
         int hitClut = e->clutX >= 0 &&
@@ -835,6 +1884,7 @@ void HiresOverride_InvalidateVramRect(int x, int y, int w, int h)
             }
             pack_credit(&e->packBytes);
             g_entries[i] = g_entries[--g_numEntries];
+            g_hiresEntriesGen++;
             continue;
         }
         i++;
@@ -855,6 +1905,23 @@ unsigned int HiresOverride_LookupByTpageClut(int tpage, int clut,
      * row 0. */
     if (clut & 0x8000)
     {
+        /* Virtual pool slots only ever key 4/8bpp CLUT TIMs. A 16bpp (tp>=2)
+         * tpage cannot legitimately address one: PSX hardware ignores `clut`
+         * in 16bpp mode, so framebuffer-sampling prims (cutscene ghosting
+         * overlays) ship uninitialized clut bytes. Honoring such a garbage key
+         * hijacked a live pool texture = rainbow bar in cutscenes. */
+        if (((tpage >> 7) & 0x3) >= 2)
+        {
+            static int s_fbClutLogged = 0;
+            if (s_fbClutLogged < 8)
+            {
+                SH_DBG("[HIRES] ignored virtual clut 0x%04X on 16bpp tpage 0x%X (framebuffer prim)",
+                       clut, tpage);
+                s_fbClutLogged++;
+            }
+            return 0;
+        }
+
         int q = ((clut >> 6) & 0x3FF) - HIRES_POOL_CLUT_ROW_BASE;
         if (q >= 0)
         {
@@ -865,6 +1932,14 @@ unsigned int HiresOverride_LookupByTpageClut(int tpage, int clut,
                 PoolSlotEntry* s      = &g_poolSlots[slotId];
                 int            useRow = (s->glTexture[row] != 0) ? row : 0;
                 GLuint         tex    = s->glTexture[useRow];
+                /* Demand signal for the on-demand pack composer: this exact
+                 * (slot, row) is being drawn, so it is worth the compose the
+                 * loader no longer pays up front. Keyed on `row`, NOT `useRow` -
+                 * the row a prim ASKED for is what should get the HD art even
+                 * while it falls back to row 0, and keying on useRow would pin
+                 * such a row to the fallback forever. Placed before the spill
+                 * loop below, which rewrites slotId. */
+                TexPackLazy_NoteWanted(slotId, row);
                 /* Chara-range row spill (base+64k): when the alias slot is
                  * empty — a single-palette loose/PNG replacement registered
                  * only rows 0..15 of a >16-row TIM — fall back to the chara
@@ -879,6 +1954,10 @@ unsigned int HiresOverride_LookupByTpageClut(int tpage, int clut,
                 }
                 if (tex != 0)
                 {
+                    /* LRU key: this row is being SAMPLED right now. Stamped on
+                     * the row actually served (useRow), which is the one whose
+                     * texture eviction would delete. */
+                    s->rowTick[useRow] = g_hiresTick;
                     if (outNativePixelW) *outNativePixelW = s->nativeW;
                     if (outNativePixelH) *outNativePixelH = s->nativeH;
                     if (outOffsetX)      *outOffsetX      = 0;
@@ -888,6 +1967,27 @@ unsigned int HiresOverride_LookupByTpageClut(int tpage, int clut,
                     return (unsigned int)tex;
                 }
             }
+        }
+        return 0;
+    }
+
+    /* Same 16bpp reasoning as the virtual-pool guard above, for the REGULAR
+     * entry path: PSX ignores `clut` in 16bpp mode, so the framebuffer-sampling
+     * cutscene overlays (map4_s01 Lisa et al) ship uninitialized clut bytes and
+     * address the display buffers, which live in the left 320 VRAM columns.
+     * The entry loop keys on the tpage window + bit depth, so a 16bpp override
+     * registered anywhere in that band could be hijacked by those prims and
+     * drawn as a big textured rect -- the rainbow block users still saw after
+     * the pool path was guarded. Real 16bpp game textures sit far right in VRAM
+     * (x>=512 in every session log), so this cannot cost a legitimate override. */
+    if (((tpage >> 7) & 0x3) >= 2 && ((tpage & 0xF) * 64) < 320)
+    {
+        static int s_fbTpageLogged = 0;
+        if (s_fbTpageLogged < 8)
+        {
+            SH_DBG("[HIRES] ignored 16bpp tpage 0x%X clut 0x%04X in the framebuffer band (feedback prim)",
+                   tpage, clut);
+            s_fbTpageLogged++;
         }
         return 0;
     }
@@ -910,16 +2010,42 @@ unsigned int HiresOverride_LookupByTpageClut(int tpage, int clut,
      * TIM keep the final coordinate non-negative. */
     int pageCellW = (bd == 4) ? 64 : (bd == 8) ? 128 : 256;
 
-    for (int i = 0; i < g_numEntries; i++)
+    /* The scan below depends only on (tpage, clut) and the entry table, and a
+     * pack-heavy frame repeats the same few keys for thousands of prims while
+     * each miss walks every entry. */
+    int hit;
     {
-        HiresEntry* e = &g_entries[i];
-        if (e->originalBitDepth != bd) continue;
-        if (tpx >= e->vramX + e->vramW || tpx + pageCellW <= e->vramX) continue;
-        if (tpy >= e->vramY + e->vramH || tpy + 256 <= e->vramY) continue;
-        if (e->clutX >= 0)
+        static struct { unsigned key; unsigned gen; int idx; } s_memo[256];
+        const unsigned key = ((unsigned)(tpage & 0xFFFF) << 16) | (unsigned)(clut & 0xFFFF);
+        const unsigned m   = (key * 2654435761u) >> 24;
+
+        if (s_memo[m].gen == g_hiresEntriesGen && s_memo[m].key == key)
+            hit = s_memo[m].idx;
+        else
         {
-            if (cx != e->clutX || cy != e->clutY) continue;
+            hit = -1;
+            for (int i = 0; i < g_numEntries; i++)
+            {
+                HiresEntry* e = &g_entries[i];
+                if (e->originalBitDepth != bd) continue;
+                if (tpx >= e->vramX + e->vramW || tpx + pageCellW <= e->vramX) continue;
+                if (tpy >= e->vramY + e->vramH || tpy + 256 <= e->vramY) continue;
+                if (e->clutX >= 0)
+                {
+                    if (cx != e->clutX || cy != e->clutY) continue;
+                }
+                hit = i;
+                break;
+            }
+            s_memo[m].key = key;
+            s_memo[m].gen = g_hiresEntriesGen;
+            s_memo[m].idx = hit;
         }
+    }
+
+    if (hit >= 0)
+    {
+        HiresEntry* e = &g_entries[hit];
         {
             /* vramX/W are in 16-bit VRAM cells; texels per cell depends on
              * the bit depth. The offset is where this prim's tpage origin
@@ -938,6 +2064,7 @@ unsigned int HiresOverride_LookupByTpageClut(int tpage, int clut,
             if (outHiresW)       *outHiresW       = e->hiresW;
             if (outHiresH)       *outHiresH       = e->hiresH;
         }
+        e->tick = g_hiresTick; /* LRU key: sampled now */
         return (unsigned int)e->glTexture;
     }
     return 0;

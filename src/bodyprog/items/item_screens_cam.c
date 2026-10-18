@@ -9,14 +9,24 @@
 #include "bodyprog/math/math.h"
 
 #ifdef SH_PC_PORT
+#include "pc_modern_mesh.h"
 #include "sh_log.h"
 #include <PsyX/PsyX_public.h>
-/* Inventory item-preview aspect: 0 = PSX-faithful (raw 4:3-display look,
- * vertically squished in interlaced 448), 1 = square (true proportions, default).
- * Toggled by `invaspect`. g_PcInvAspectPct fine-tunes the vertical scale as a
- * percent of the geometric square factor (100 = exactly square); `invscale`. */
+/* Inventory item-preview aspect: 0 = off (raw), 1 = apply the vertical aspect
+ * correction (default). Toggled by `invaspect`; g_PcInvAspectPct scales it live
+ * (`invscale`; 100 = the geometric factor exactly).
+ *
+ * The factor (4/3)*(gsScreenHeight/gsScreenWidth) = (4/3)*(224/320) = 0.9333 is
+ * exactly 224/240. A TV shows the 224-line frame letterboxed inside its 240 lines
+ * (square pixels); the port's Hor+-off ortho stretches those 224 rows to the FULL
+ * 4:3 height, 240/224 = ~7% taller. 100% of the factor undoes precisely that for
+ * the 3D item, which is why 100 matches DuckStation. The shipped 125 was a stale
+ * eyeball tune (it matched the inventory to the world while the world itself was
+ * squashed by the fabricated GsIDMATRIX2 Y scale, since removed); 107 was a wrong
+ * "no net scale" guess that ignored the 224->240 stretch. Shared with the world
+ * pickup screen. Not persisted, so this default reaches everyone on update. */
 int g_PcInvAspectSquare = 1;
-int g_PcInvAspectPct    = 125;
+int g_PcInvAspectPct    = 100;
 /* Slight Y placement match vs Duckstation (view-Y units; + = down). Carousel a
  * touch down, equipped weapon up. Tunable: invcary / inveqy. */
 int g_PcInvCarouselYOff = 50;
@@ -279,11 +289,32 @@ void func_8004BD74(s32 displayItemIdx, GsDOBJ2* arg1, s32 arg2)  // 0x8004BD74
         }
 
         /* Slight Y placement match vs Duckstation: carousel items (idx < 7) a
-         * touch down, equipped weapon (idx 7) a touch up. Translation only. */
-        if (displayItemIdx == 7)
-            localToScreenMat.t[1] += g_PcInvEquipYOff;
-        else if (displayItemIdx < 7)
-            localToScreenMat.t[1] += g_PcInvCarouselYOff;
+         * touch down, equipped weapon (idx 7) a touch up. Translation only.
+         * These nudges are tuned for the inventory/status/save item previews,
+         * which all run in MENU states. The map5_s01 combination-lock puzzle
+         * also renders sub-models at idx < 7 but under GameState_InGame — it
+         * must NOT inherit the +50 carousel drop (it sank the lock reels), so
+         * gate the nudges out of in-game rendering. World pickups use idx 9. */
+        if (g_GameWork.gameState != GameState_InGame)
+        {
+            /* Scale the nudge to the framebuffer instead of applying it raw.
+             *
+             * Both values were tuned against the 448-tall INTERLACED menu
+             * framebuffer, but gsScreenHeight is 224 on the progressive one --
+             * so the same constant is twice the intended fraction of the frame
+             * there and drops the model down into the description text. A
+             * fraction of the frame height lands in the same place at any
+             * framebuffer size, which is what the tuning actually meant. */
+            #define INV_Y_OFF_REF_H 448 /* height the offsets were tuned at */
+
+            s32 frameH = (g_GameWork.gsScreenHeight > 0) ? g_GameWork.gsScreenHeight
+                                                         : INV_Y_OFF_REF_H;
+
+            if (displayItemIdx == 7)
+                localToScreenMat.t[1] += (g_PcInvEquipYOff * frameH) / INV_Y_OFF_REF_H;
+            else if (displayItemIdx < 7)
+                localToScreenMat.t[1] += (g_PcInvCarouselYOff * frameH) / INV_Y_OFF_REF_H;
+        }
     }
 #endif
     GsSetLsMatrix(&localToScreenMat);
@@ -306,7 +337,26 @@ void func_8004BD74(s32 displayItemIdx, GsDOBJ2* arg1, s32 arg2)  // 0x8004BD74
          * model draws (Gfx_PickupItemAnimate sets BgmStatusFlag_Pause). Pairs
          * with the force-item-depth bracket in game_main.c. See libgs_stub.c
          * g_PcItemPreciseDepth. */
-        g_PcItemPreciseDepth = (g_GameWork.gameState == GameState_InventoryScreen) || (arg2 == 2);
+        {
+            extern int g_PcPuzzleItemDepth;
+            g_PcItemPreciseDepth = (g_GameWork.gameState == GameState_InventoryScreen) || (arg2 == 2) ||
+                                   g_PcPuzzleItemDepth;
+
+            /* [ITEMDEPTH] diagnostic (config item_depth_probe, off by default):
+             * announce this model draw so the probe can arm once per item-screen
+             * entry and tag every primitive with its screen + slot. Read-only. */
+            {
+                extern int  g_PsyX_ItemDepthProbe;
+                extern void PsyX_ItemProbeModelBegin(int screen, int slot, int arg2);
+                if (g_PsyX_ItemDepthProbe)
+                {
+                    s32 _probeScreen = (arg2 == 2) ? 1
+                                     : (g_GameWork.gameState == GameState_InventoryScreen) ? 2
+                                     : (g_PcPuzzleItemDepth ? 3 : 0);
+                    PsyX_ItemProbeModelBegin((int)_probeScreen, (int)displayItemIdx, (int)arg2);
+                }
+            }
+        }
 #ifdef SH_XBOX_PORT
         /* Xbox full-resolution OT re-bucketing. Safe ONLY where the ordering
          * table holds the model alone, because re-ordering prims among a live
@@ -337,10 +387,16 @@ void func_8004BD74(s32 displayItemIdx, GsDOBJ2* arg1, s32 arg2)  // 0x8004BD74
     {
         GsClearOt(0, 0, &g_OrderingTable1[g_ActiveBufferIdx]);
         GsSortOt(&g_OrderingTable1[g_ActiveBufferIdx], &g_OrderingTable0[g_ActiveBufferIdx]);
+#ifdef SH_PC_PORT
+        if (!Pc_ModernMesh_Emit(arg1, &g_OrderingTable1[g_ActiveBufferIdx], 1))
+#endif
         GsSortObject4J(arg1, &g_OrderingTable1[g_ActiveBufferIdx], 1, (u32*)PSX_SCRATCH);
     }
     else
     {
+#ifdef SH_PC_PORT
+        if (!Pc_ModernMesh_Emit(arg1, &g_OrderingTable0[g_ActiveBufferIdx], 1))
+#endif
         GsSortObject4J(arg1, &g_OrderingTable0[g_ActiveBufferIdx], 1, (u32*)PSX_SCRATCH);
     }
 

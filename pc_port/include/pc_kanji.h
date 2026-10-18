@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 #ifndef PC_KANJI_H
 #define PC_KANJI_H
 
@@ -22,5 +23,16 @@ int Pc_KanjiCell(unsigned short sjis, unsigned int* outPage, int* outU, int* out
 /* Drop every cached cell and re-upload the atlas CLUT. Call at map load —
  * cheap, and guards against anything having scribbled the margin strips. */
 void Pc_KanjiAtlasReset(void);
+
+/* Draw the Chinese fan translation's glyphs instead of the Japanese ones.
+ * That patch keeps the JIS kuten codes and only redefines what is drawn at
+ * them (ku 16..47, see kanji_font_cn.inc), so this swaps one contiguous run of
+ * the glyph blob and leaves kana and punctuation alone. Cached cells are
+ * dropped so they re-rasterize from the newly selected font. */
+void Pc_KanjiSetChinese(int useChinese);
+int  Pc_KanjiChineseActive(void);
+
+/* The packed CLUT word every kanji/hanzi cell is drawn with. */
+int Pc_KanjiClutId(void);
 
 #endif /* PC_KANJI_H */

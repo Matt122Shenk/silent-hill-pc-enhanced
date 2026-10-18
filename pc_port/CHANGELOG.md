@@ -1,5 +1,2002 @@
 # Silent Hill PC Port — Changelog
 
+## beta-2026.10.16.1 -- 2026-10-16
+- The whole world can finally be seen. The new Fog/World Visibility slider in the launcher controls the thickness of the fog, and if it is set below 1.0 the entire map is drawn in the daylight outdoor parts of the game. I recommend something like 0.85-0.95 for oppressive fog with far away visuals. It needs PGXP, so the launcher will offer to turn it on if you lower the fog without it. Warning: This will impact performance and lowering fog below 1.0 is only recommended on somewhat modern devices. 
+- Lots of optimizations, the game should perform better in general and especially on lower end systems. A background timer no longer eats a whole CPU core, a lot of redundant per-frame graphics and debug work was removed, and texture packs look up their textures faster
+- Dialog Pause now emulates the pauses the original had the same way Duckstation does it. Normal matches the original, Short and Long scale it, and Off removes it. It's in the launcher and the quick menu
+- With thinner fog, monsters outside now spawn and despawn out of the camera's view so they don't pop in and out in plain sight. Indoors and at normal fog spawning is the same as the original
+- Fixed the first boss (Split Head) not hurting Harry with its melee attacks at high frame rates
+- Fixed shadows disappearing in menus, item pickups, doors, and examine screens
+- Fixed Harry running on a black floor and the missing road after the final boss, and the ending cutscenes now keep the normal fog so nothing shows that shouldn't
+- The sewer water and Harry's reflection in look much better than before
+- Fixed the sewer fence dropping before Harry before the Twinfeeler fight
+- Fixed the audio glitch at the start of FMVs
+- Starting a New Game directly on Old Silent Hill (map2_s00) now starts at the cafe door instead of in the void
+- Items on the floor indoors now show up as you get near them instead of only once you're in the same spot
+- Added an FPS counter, turn it on in the quick menu under Debug Actions > FPS Display and pick a corner
+- The mouse cursor now hides while you're using a controller and comes back when you use the mouse
+- Fixed the map and spawn dropdowns in the quick menu, the spawn list no longer shows map names and scrolling with the mouse wheel works properly
+- Aiming is now disabled while using Rear Look in the alternate camera modes
+- Typing in the console no longer triggers quick heal, and the console now supports cursor editing with the arrow keys, Home/End and Delete
+- Free camera has photo mode controls now
+
+Commit summaries:
+- Split Head body damage scaled to the 30 Hz tick; launcher Dialog Pause option
+- Shadows on every live world frame; sewer grating hinge at 30 Hz; STR FMV audio pre-roll and device close
+- docs: Oct 14 user report tracker, items 2/9 dropped, item 10 findings
+- Chunk slots never share the PSX RAM buffer: the map7_s03 ending's DMS loads clobbered the arena chunk
+- Dialogue pause is a CD-seek delay at voice start, not an end-of-line hold
+- docs: Oct 14 report tracker, items 6/8/10 updated
+- Sewer water caustic tile composited in software (bit-exact PSX words)
+- docs: sewer water item resolved
+- Bump PsyCross: dither untextured additive prims (sewer water octagon rings)
+- Bump PsyCross: per-pixel flashlight skips additive prims (sewer water blowout in Modern)
+- Sewer water reflection A/B: ADDSTP console switch + one-shot [WATERVRAM] palette log
+- [WATERREFL] sampled probe for the sewer water reflection sprite (gate, angle, colour)
+- WHOLEMAP console command: render the whole outdoor town, depth-sorted
+- docs: whole-map v5 (far-band z-buffer, wholemap console command)
+- Whole-map: far models no longer wrap to 256u-shifted spots near the player
+- wholemap probe / wholemap depth 0|1: diagnose the PGXP-only far road strips (PsyCross 8734b16)
+- PsyCross eae5954: per-prim depth table sized for whole-map frames, wider far probe
+- Console: caret editing with Left/Right, Home/End and Delete
+- OT clamp leaves room for the model's bucket base: far polys wrote past org[]
+- PsyCross 6a75fb6: whole-map far band uses painter order by default (fixes the white-tiled far road)
+- Whole-map: a depth-sorted far list past the OT instead of one shared bucket
+- Console PGXPDBG for the PGXP-only far ground holes (PsyCross 9043975)
+- PGXPDBG 16/32 help text (PsyCross 8905a98)
+- PsyCross 6b71f85: centroid v_uvlim fixes the PGXP+MSAA holes in distant ground
+- PGXPDBG 64/128 (PsyCross 99ce4d8)
+- PsyCross 63d2500: probe for misattached precise vertices
+- PGXP: world backface on the float projection, not just the whole-map far band
+- [WMPROBE] times the whole-map chunk submission (PsyCross 5e067cb)
+- Console open blocks the action binds: typing no longer quick-heals
+- PsyCross 8e07039: cache-friendly PGXP shadow tables (whole-map frame cost)
+- [WMPROBE] times vertex transform vs mesh emission (PsyCross 60b9b82)
+- Mesh drawer: skip the fog-overlay poly colour the PC never draws
+- docs: whole-map perf numbers and the fast far path plan
+- Whole-map fast far path: distant chunks from a world-space cache
+- [WMPROBE] far-path tallies: chunk builds, clip/backface/emit counts, refused model prims by reason
+- PsyCross: lean whole-map far-quad emitter
+- Whole map: far chunks drawn from GPU-resident meshes (wholemap gpu / layer)
+- Whole map: crossroads cells count as outdoor; freecam faster and carries Harry
+- Whole-map far cache: rebuild on slot reuse/texture moves; free camera photo-mode controls
+- Launcher/game binds: stop rewriting untouched keys, open the live scheme, no config line cap
+- Free camera: Harry stays put (drop bring-Harry and follow)
+- Launcher fog/world visibility slider; whole map auto below fog 1.0; Dialog Pause to quick menu
+- Launcher: user's layout cleanup, Dialog Pause back, fog value readout, cap 1.20
+- Launcher: language flag to the bottom-right corner
+- Whole map requires PGXP; launcher offers to enable it when fog drops below 1.00
+- Launcher: PGXP fog prompt waits for the slider to be released
+- Thinned fog: monsters spawn and despawn out of the camera's view
+- Alt Russian: author's update (hammer renamed, three subtitles trimmed)
+- New Game straight on map2_s00 starts at the cafe door, not in the void
+- PsyCross: PGXP shadow table back to the scattered hash (seams while turning)
+- Common pickups stay drawn near the player, not only in their own map cell
+- Pickups: Harry's cell and the adjacent ones; PsyCross blocked-scatter PGXP tables
+- Whole map: far-chunk cache reclaims slots; pickups widen in interiors only
+- perf-lowend: PsyCross uniform cache, greyprobe console switch
+- perf-lowend: bump PsyCross (depth-table wipe counter, table miss early-outs, sleeping interrupt thread)
+- perf-lowend: grey-flash probes removed, texture-pack lookup memo, timing untouched
+- Remove leftover per-frame probes and empty probe shells
+- Bump PsyCross: sleeping interrupt thread restored (tested, no timing drift)
+- Sewer water closed: addstp console switch and [WATERVRAM] palette log removed
+- Dialog Pause emulates the PSX per-line CD seek instead of a flat 300 ms
+- Quick menu dropdowns: Spawn no longer shows map names; wheel scrolls every notch
+- Ending cutscenes hold fog at the stock 1.0 while they play
+- Mouse cursor hides while a controller is in use, returns on mouse use
+- Rear Look refuses aim while held (TPS/OTS)
+- Thin-fog monster spawn rules apply outdoors only
+- [ROMPER-HOP] landing line only after a logged hop
+- FPS Display: Debug Actions row, counter in any corner
+
+## beta-2026.10.13.1 -- 2026-10-13
+- Mostly just fixes some issues with languages, including them not applying properly. This time the commit summaries are detailed enough that they should be self explanatory.
+
+Commit summaries:
+- Brightness screen: rows moved up so CLASSIC clears the reference bar
+- Language row: both Englishes named by release, item text cleared on every switch
+- Menus filter: Cyrillic glyphs stay point-sampled like kanji
+- Launcher: XA tool names its Englishes by release
+- Spanish (and every language) reaches dialog and examine text
+- Support for HD Cyrillic font at gamedata/load/1ST/FONT16_RU.png, with a template and guide
+
+## beta-2026.10.12.1 -- 2026-10-12
+- Fixed the Konami and KCET logos fading in separately from their white backgrounds, they now fade in together like the original
+- All three versions of the game (USA, PAL, and Japanese) can now be played in any supported language. Pick it with the new Game Language option in the launcher, which is set to Automatic by default and uses the disc's own language. It can also be changed from the Language option in the options menu, which is now on every version and works mid-game on USA and Japanese discs
+- Supported languages:
+  - English (US)
+  - English (PAL)
+  - German
+  - French
+  - Spanish
+  - Italian
+  - Japanese
+  - Chinese
+  - Russian (Team Raccoon's translation, with the PC port's menus translated by Claude)
+  - Polish (thanks to rafalekkB)
+  - Brazilian Portuguese (thanks to StarKillerChief)
+- Languages can now be installed as mods, either by dropping a .lang file into gamedata/lang or through the Mod Manager
+- Accented and Cyrillic letters now display correctly on every version of the game
+- HD font packs now work on every version and in every language. The EU HD font by ivanproff is recommended for everything except US English on a USA disc, and the Mod Manager will offer to download it if you have the US version installed with a different language or version
+- The quick options menu, controls panel, and confirmation boxes now follow the game language, including Japanese and Chinese
+- Added a Native (PSX) resolution option in the launcher that renders every screen at the original game's resolution and switches between them like the original does 
+- UI filtering now actually works on the original menus and art instead of only texture packs, and fixed the lines it left on the loading screen, around the boot logos, and on the mouse cursor. Japanese and Chinese text stays sharp with it on
+- The main menu style (US, EU, or Japanese) can now be picked under Menu Type in the launcher on any version
+- Brightness, contrast, and saturation no longer affect menus and FMVs, and the original console Brightness setting is back 
+- Added a Crosshair Style option in Quick Options > HUD
+- Added a Rest Zoom option to the View page to move the camera closer without changing the FOV
+- A lot more controllers now work out of the box, like the PlayStation Classic controller, and controllers plugged in before launching are now detected
+- Fixed Harry sometimes not responding to input when surrounded by several enemies
+- Fixed voice lines added by voice mods getting cut off when the text box advances
+- The Uncensored option now works on the Japanese version too
+- Fixed a freeze after a few minutes of play on Android
+- Fixed a crash when picking up items in the cafe on macOS, and a black screen on macOS 
+- Fixed enlarged subtitles looking blurry
+- Fixed clicking the left arrow on the Language row going forward instead of back
+- New NOCOL console command to walk through walls and other characters
+
+Commit summaries:
+- Text overrides keep the line's own terminator, so blanked cutscenes still chain
+- Russian as a selectable language, and languages installable as mods
+- NTSC-J: English as a third choice on the Language row
+- NOCOL / NOCOLLIDE: phase a character out of collision but keep the ground
+- Russian: capital Э no longer reads as a control code on a consolgames disc
+- German, French, Spanish and Italian on any disc
+- Title screen style is a setting, not the disc
+- Japanese on any disc: the kanji never needed the Japanese one
+- US atlas: fall back for the three accents the PAL packs lean on
+- The Language row lists what THIS disc can actually offer, and PAL English joins it
+- Three main menus, any of them on any disc
+- Language switch: the glyphs change on the same frame as the advances
+- Import the PAL font atlas, so a language looks the same on any disc
+- A pack's story text installs on a US or Japanese disc too, not just PAL
+- Enlarged subtitles are no longer filtered as if they were scenery
+- Japanese menus travel with the pack, and the two Englishes are both selectable
+- Check the packs before shipping them, and recover 12 menu strings that were lost
+- The Japanese disc's Language row joins the rest, keeping its own three intact
+- Bound the walk/run blend so a swarm cannot kill player input
+- Chinese works on any disc, re-keyed out of zh.pack
+- Brightness screen: bring back the classic console control (#150)
+- Image adjustments stop grading the menus and FMVs (#150)
+- Brightness screen: size the CLASSIC label from the real space advance
+- A de/fr/es/it pack reads the menus and overlays already written for that language
+- Translate 38 menu rows retail left in English, and stop undercounting the rest
+- German, French, Spanish and Italian are complete; nothing falls back to English
+- A missing font atlas falls back instead of pointing FONT16 at empty VRAM
+- Russian and Polish are complete, and 58 story lines were never missing
+- The F10 overlay can draw Japanese and Chinese at all
+- Tool: locate the Japanese menu strings still on the disc
+- A font pack built for either region now works on both
+- Added text-box voices hold the page until the clip finishes
+- No language pack has ever appeared in the row, on any disc
+- A hi-res font pack works on the other region too, not just a raw TIM one
+- Cross-region languages are opt-in, so a release changes nothing by default
+- Launcher: pick the main menu type
+- PAL gets every language by default; the gate is only for discs that must import the atlas
+- Log what the Language row actually offers
+- Say where the pack scan looked when it cannot open the directory
+- Brazilian Portuguese, with the ten letters the PAL font cannot draw
+- A hi-res font pack gets the built letters too, at its own resolution
+- Portuguese reaches zero, and the Language row learns to say its own names
+- The save/load screen was unreachable for every translator
+- Rest Zoom: move the resting camera without touching the FOV
+- Polish and Russian get the save/load screen too
+- Keep the raw template JSON in step with the 18 new strings
+- Every language past the fifth pack was silently becoming English
+- A hi-res font pack follows the atlas when it moves home
+- Revert the hi-res re-read: it corrupted the atlas instead of following it
+- A saved language survives a reboot on the disc it was saved on
+- The Language row says Português
+- A hi-res font pack follows the atlas, this time without touching VRAM
+- Two font faults the methodical pass separated out
+- The re-laid atlas was two rows short, so Russian and Polish had nowhere to build
+- Stop writing the atlas into live map textures; the collision IS the bug
+- The scaled-text exemption was dragging world billboards out of 3D with it
+- Back out tonight's font work to the last state you confirmed good
+- Nothing draws from the PAL cell grid on a disc that keeps other art there
+- Repair twelve NUL bytes that scripted edits left where a backslash-zero belongs
+- Language defaults to automatic, and a refused one goes back to it
+- A US-cut hi-res font is for US English on a USA disc, and nothing else
+- Launcher: pick the game's language, and say where the EU font comes from
+- Say what a disc can actually show, and where the EU font comes from
+- Self-review of the language work: four things that were not right
+- Mod Manager offers the EU HD font when the US one is enabled under the wrong combo
+- Russian with an HD font on PAL, Alt Russian not listed, and the review's real finds
+- Accents on USA and NTSC-J: the PAL grid as a pinned override, never an upload
+- docs: prop physics and wind foliage feasibility (research only)
+- Console: bare kf toggles the keyframe viewer
+- Finish retiring the K key: the Quick Options row and six languages
+- Kanji packs on USA lost the Latin strip: re-lay to the disc's shape, not the layout's
+- Language row: a pack's menu label is drawn in full, not cut at 10 glyphs
+- Ship gamecontrollerdb.txt, so pads SDL doesn't know work out of the box
+- PsyCross e076d4d: pads already plugged in at boot now get opened
+- Quick Options > HUD: a Crosshair Style row
+- NTSC-J languages: pack menus, in-game switching, no switch flash, CJK quick menu
+- Overlay CJK fonts on macOS and Linux, and English instead of boxes without one
+- Filtering options: the in-game row stopped writing a key the loader discards
+- Native (PSX) resolution option (issue #155)
+- Uncensored also uncensors NTSC-J, which was censored too
+- macOS: share the exe's PsyCross with map dylibs, compile overlay shaders on core profile
+- PsyCross 1ea394d: the macOS half of #157
+- Fix the cabinet freeze: Discord IPC leaked ~3 sockets/s through PsyCross close()
+- Language row: the disc's own English is just "English", and names fit the arrows
+- Japanese, Chinese and game-font text stay sharp with the Menus filter on
+- Menus filter smooths the Latin font again; only kanji/hanzi stay sharp
+- Mouse cursor: no green specks on its edges with the Menus filter on
+- Boot logos fade in with their background, not as a dark panel inside it
+- Boot logos stay sharp under the Menus filter, so no outline around them
+- PsyCross: no coloured line on the loading screen's edge with the Menus filter
+- Options: clicking the left arrow steps back, not forward
+
+## beta-2026.10.02.1 -- 2026-10-02
+- Fixed surround sound on the software SPU audio path (current default), now selecting 5.1 or 7.1 will work correctly
+- Added scaling mode and separated dithering from filtering in the launcher, now upscaling from low resolutions can look much better
+- New console commands health, heal, info, goto, bring, and freeze that can all work on a selected npc
+- Fixed results screen movement distance counter
+- Text size option has been added for subtitles, memos, and messages (Still a WIP, looks glitchy in places)
+- Aspect ratio fixes for effects, such as the light after fighting floatstinger and the lighthouse (thanks to thetrexx)
+- Fixed issue where game could briefly speed up after an FMV (also thanks to thetrexx)
+- Fixed hyperblaster audio issue with floatstinger (again thanks to thetrexx)
+- Fixed scale command for bosses (untested on all)
+- Fixed issue where reversing walk/run would break melee aiming in alternate cam modes
+
+Commit summaries:
+- Asking for a surround layout now enables spatial output, and document it
+- hrtf also implies spatial output
+- PsyCross: spatial sink selects and reports its real speaker layout
+- Console: health, heal, info, goto, bring and freeze act on the selection
+- Results screen: count strafe and jump-back distance under the alternate cameras
+- Text Size option for subtitles, memos and messages (100-150%)
+- PsyCross: warn when a requested surround layout is refused
+- Merge cloud session claude/beautiful-edison-8iajdy
+- UI Transition Aspect Ratio Fix
+- Floatstinger Hyperblaster audio fix
+- Post-FMV Cutscene Fast-Forward Fix
+- Console fmv: discard the movie's runtime from the game clock too
+- PsyCross: lighthouse glow fills follow the Hor+ stretch
+- PsyCross: discrete speaker channels for surround output
+- PsyCross: stop re-queueing stale audio buffers in the spatial sink
+- PsyCross: real positional audio on the software SPU surround path
+- PsyCross: real extension check for the multichannel fallback
+- SCALE: scale the drawn bones, so it works on bosses too
+- Scaling dropdown, and Dithering split out of Filtering
+- Launcher: move the language flag down with the new row
+- Alt cams: Reverse walk/run no longer kills melee aim
+
+## beta-2026.09.29.1 -- 2026-09-29
+- Issue related to quick turn that could cause player to get stuck running in place has been fixed (thanks to - Many aspect ratio fixes for effects, such as the light after fighting floatstinger for sharing)
+- Added infinite ammo cheat (unlimited clip), console command infammo
+- NTSC-J: The title menu and inventory now show in the chosen language (Chinese or Japanese)
+- Added new console commands for functions that didn't exist as console commands, meaning they can be bound using the "bind" function. New commands:
+notarget [0|1]  - Enemies do not attack player
+freecam [0|1] - Toggle freecam mode
+collvis [0|1] - Collision visualizer debug tool
+fastforward [0|1] / ff - Make gameplay double speed
+wireframe [0|1] - Turn on wireframe mode
+notex [0|1] - turn on no texture mode
+Example: bind p "freecam; wireframe; notex" - Entering  this command will enable you to press p to toggle free cam with wireframe + no textures.
+
+Commit summaries: 
+- Movement freeze fix attempt 1
+- localization: no-subtitles text override mod for voiced lines
+- Console: type the punctuation bind needs, and commands for six menu-only cheats
+- docs: console punctuation, quoted bind lists, and the six new toggles
+- Infinite ammo cheat (console INFAMMO + Quick Options > Cheats)
+- NTSC-J: title menu and inventory in Japanese and Chinese
+- tools: the Chinese glyph finder behind lang_jpn_ui.inc
+- Capitalized Eugene's name
+
+## beta-2026.09.27.1 -- 2026-09-27
+- Launcher is now almost 100% translated in all places for all 9 additional languages
+- Added ability to select objects by clicking them while in the console. Hold tab with console open to hide the window and click a character in the scene to select it
+- Repurposed kill console command to work with selected npc (or player)
+- Added scale command to resize player, npcs, and props. Scales collision
+- Fixed positional audio spots from being able to play continuously past their original range
+- Added PC port credits after original credits (can be turned off with pccredits command)
+- Removed all of the randomly placed debug and cheat keys that were added during testing, see below bind command to restore what's wanted
+- Added bind (+ unbind / unbindall) commands so that you can bind console commands to custom keys, separate from other keybinds in the config. Multiple commands per key supported    
+- Fix free camera outdoors so that it doesn't display a void
+- Adjusted memory card load so that other regions' saves can be loaded. You can load PAL or NTSC-J Duckstation saves just by renaming the MCD to 0 or 8 and putting it in gamedata\save
+- Save editor tool built into website at https://sh1pc.com/savetool.html - works with port or emulator saves 
+- Stopped excess save files from being created PC, now only 0.MCD and 8.MCD are ever written as they are the only ones used. 
+- PC Options and Quick Menu now support non-English languages and are built into the localization helper file
+- Results screen now displays in every supported language
+- Updated Polish translation from rafalekkb
+
+Commit summaries:
+- docs: modding guide, sound section rewritten around the Audio tool
+- PC port credits block in the staff roll + ABOUT console command
+- Console object picking: click a character to select, SCALE to resize it
+- Document scene selection and SCALE in the console reference
+- SCALE now scales the hitbox too
+- Picking: props, TAB to click through the console, bigger character hit box 
+- SCALE: gate it properly, scale melee reach, keep the player's collision vanilla
+- Retire the cheat/tool debug keys, add a Starting map row to Quick Options
+- Custom key binds: bind / unbind / unbindall
+- Free camera: show the world outdoors; mod manager: unpack "name .zip"
+- tools: Silent Hill save converter (PSX / DuckStation <-> PC port cards)
+- memcard: PC saves get a Shift-JIS title and the real save icon
+- savecard: ask for the target disc instead of defaulting to USA names
+- kill acts on the selection, select nearest, retire the stale numpad keys
+- memcard: read saves under any region's name; new files follow the disc
+- PsyCross: memcard no-multitap + channel mapping + standard directory writes
+- docs: save format notes for no-multitap and standard directory writes
+- Positional SFX loops keep attenuating after their caller stops updating
+- savecard: save editor (flags, inventory, position, stats, slot order)
+- Audio tool: the Sound ids column now matches how the engine picks a sample
+- savecard: version the script URLs so hosts serve fresh copies after an update
+- localization: one translation file with PC Options, Quick Options and Controls
+- savecard: clearer flag editing, Hyper Blaster colour
+- localization: Russian review file pre-filled from the Team Raccoon disc
+- Quick Options, Controls panel and confirm boxes follow the game language
+- Polish: the translator's revised pack, merged with the PC Options rows
+- Results screen translated in every language; Polish September pass
+- localization: results screen gets its own section in every template again
+- Polish: translator's wording for the results screen's melee-kills row
+- Launcher: translate the rest of the UI into all nine languages
+
+## beta-2026.09.19.1 -- 2026-09-19
+- Fixed Alessa antique shop cutscene and Lisa cutscene so that proper dream blur effect applies, intensity can be controlled in Quick Menu
+- Allowed binding of Swap Shoulder to Controller
+- Added controller icons in quick menu for navigation (visible based on last used device)
+- Added option in quick menu to disable DPAD for movement
+
+Commit summaries:
+- PsyCross: feedback captures read the scene target (Alessa/Lisa soft-focus, dream blur)
+- Swap Shoulder can be bound to a controller button
+- PsyCross: scene-scratch capture carries the mask bit (Alessa/Lisa soft focus)
+- OT0 sanitizer walks the whole chain (Alessa/Lisa soft focus was never drawn)
+- PsyCross: [SCRATCHDBG] scene-scratch composite trace
+- PsyCross: [SCRATCHDBG] whole-rect counts
+- PsyCross: mid-pass capture restores the vertex array (Alessa/Lisa soft focus)
+- Revert "OT0 sanitizer walks the whole chain" -- misdiagnosed
+- PsyCross: soft focus spans the widened frame and obeys dream_blur
+- PsyCross: dream_blur_strength scales the Alessa/Lisa soft focus
+- Controls panel: Quick Options row (keyboard + controller)
+- Quick options: cancel pages back on the nav row, hold closes; D-pad row
+- Quick options: page back / hold-to-close is Circle (B), not the cancel set
+- Quick options: D-pad icons on the page row after controller input
+- Disable D-pad for movement: keep the D-pad in the quick options overlay
+- OTS shoulder swap: log only, no on-screen toast
+
+## beta-2026.09.18.2 -- 2026-09-18
+- Fixed black screen in various scenarios when on OpenGL with AA
+
+Commit summaries:
+- PsyCross: std headers outside the _WIN32 block (Linux/macOS CI build fix)
+- PsyCross: MSAA resolve keeps the DRAW framebuffer (black pickup/save screens on GL)
+
+## beta-2026.09.18.1 -- 2026-09-18
+- Fixed distant fog rendering so that object outlines are no longer visible
+- Snowflakes greatly improved and more faithful to the original
+- "Dream blur" effect restored for loading screen, certain cutscenes, and anywhere else it is used. Turn off in the quick menu or with dreamblur console command
+- Cleaned up a lot of spam logging
+- Reworked SFX replacements (Mod Manager > Audio > Sound Banks), now the tools in the mod manager automatically detect all duplicate VABs an audio file is in, and will let you replace the sound in all of them at once. Video guide coming soon
+- SFX Editor now plays replacement audio instead of original after replacing audio
+- Controls: In Game menu to adjust controls, can adjust either classic or alternate camera controls depending on which you are in when the menu is opened
+- Controller Support: Added probes for controllers, if your controller doesn't work please send me a log after running the game with it connected and I will fix
+- Split Head:  Fixed glitchy saliva and issues that could break the boss fight. Background SFX now stops appropriately before Alessa scene
+- Cutscenes now locked to 60 FPS like they used to be
+- Added additional support for Steam Controller
+- Fixed regression where pillarboxing was in ending cutscene always
+- Minimap: Changed behavior so that it is hidden unless you are changing settings, have the map, or have the setting on to show it regardless of the map
+- Quick Heal: Finally fixed healing with no health items (thought this was fixed already, my bad)
+- Fixed parts of other areas showing in boss arenas
+- Save/Load: Made mouse input less trigger happy, easier to navigate without accidentally loading a save
+- Fixed certain effects so they take up the whole screen in widescreen
+- Adjusted Harry running loading screen so that it always lasts at least a couple of seconds, configurable with LOADMIN command
+- Cleaned up quick menu to make it more user friendly to navigate
+- Fixed latent memory bug in sewers that caused crashes on certain platforms
+
+Commit summaries:
+- Texture packs: log one line per page composed, and stop dropping upscaler names
+- Add [SLOWFRAME]: say which phase of a stalled frame took the time
+- Port the two latent memory bugs the Android crash handler caught
+- Publish the 3D-world frame class, and carry v0 fog on character triangles
+- Bump PsyCross: fog eases into full instead of leaving a residue or a wall
+- Console VOIDPROBE: arm the renderer's void/fog readback and print the game-side values
+- VOIDPROBE: mirror the arm line into the log, and record game/sys state with it
+- Fog: objects were fogged with a different formula from the world they stand in
+- Bump PsyCross: Steam Controller and Steam Deck pad support
+- Bump PsyCross: Steam Controller ownership diagnostic
+- Split Head: the eat death never reached Game Over above 30fps, and the blood drops spawned per frame
+- Bump PsyCross: fog ease lands by 0.95 with a sub-half-unit snap; VOIDPROBE reads the window without an internal target
+- Audio tool: a replaced sound is offered to every other bank that carries it
+- Bump PsyCross: VOIDPROBE samples the full frame height
+- Bump PsyCross: VOIDPROBE samples every pixel
+- Audio tool: save is one dialog, and a second round of edits merges into the first
+- Ending cutscene no longer pillarboxes: the palette-protect flag is not a 2D screen
+- Bump PsyCross: fog colour-space snap; VOIDPROBE real histogram
+- Fog: cull world and object faces on the nearest vertex so the drawn world ends beyond full fog
+- PsyCross: smooth dead zone around the fog colour
+- PsyCross: revert the fog dead zone (flattened mid fog into a wall, crushed inventory item shading)
+- PsyCross: plain PSX fog mix, easing curve and colour snaps removed
+- PsyCross: step to the void at 97% fog
+- PsyCross: two-phase VOIDPROBE
+- Item TMDs: zero p1, p2 and pad2 on the GT3 emitters
+- Wide drawer: GT3 carries v0 fog in pad2 with the marker
+- PsyCross: VOIDPROBE frame dump
+- PsyCross: VOIDPROBE dump build fix
+- PsyCross: untextured prims draw their vertex colour exactly (fog void fix)
+- Log cleanup: drop CUTDIAG, PERF every 30 s, silent SFX override probes
+- Interior cell gate samples five points per cell, not the centre (from ios-port cd43e3862)
+- Texture_Get: debugStr is 13 bytes, the missing-TIM path writes [12] (from ios-port 64206b223)
+- Sidestep: hold works under 2D controls, held steps keep travelling, taps age at 30 Hz
+- PsyCross: loop stop reaches the live SPU engine; libmcrd fopen check
+- Revert "Sidestep: hold works under 2D controls, held steps keep travelling, taps age at 30 Hz"
+- Revert "Interior cell gate samples five points per cell, not the centre (from ios-port cd43e3862)"
+- PsyCross: back out the SPU loop-stop routing
+- PsyCross: drop the unused SPUCore loop-stop method
+- Split Head: the mouth strands' endpoint table was 48 bytes short
+- Split Head: a bite Harry escapes ends the eat and the fight resumes
+- [WALL-HIT] probe: once per wall face, repeat after 30 s
+- Minimap: hidden until the area map is found, unless the quick menu is on its settings
+- Split Head: a bite that registers takes Harry; escape only by clearing the mouth first
+- In-game controls panel: rebind keyboard, mouse and controller from Options > Controller Config
+- Split Head: Game Over after the eat actually fires; the kill key kills the boss
+- Keybind panel: nothing drawn behind it; reachable from a new quick menu Controls page
+- Split Head: remove the bite fallback; it froze Harry in the eat
+- Keybind panel: fixed layout rect, and no old controls screen on the way out
+- Boss arenas (map1_s05, map7_s03) draw exactly the player's cell again
+- [QUICKHEAL] log every use with the slot and the live inventory
+- Quick heal: never spend the empty slot (u8 vs NO_VALUE comparison)
+- Quick menu and randomizer panel: one mouse click acts once
+- Snow flakes: draw the sprite box, not half of it
+- PsyCross: additive sprite edges fade by texture coverage (round snow flakes)
+- FMV: stop XA and lingering SFX voices before a movie plays
+- FMV: key the pre-movie audio stop to the Alessa scene only
+- Save list clicks, controls-exit flash, cutscene frame gate
+- Dream screen blur restored, with a switch
+- Dream blur: fills the window, and lands in the quick menu
+- Carousel scene effects fill widescreen
+- Audio tool: Play plays a staged replacement before the bank is saved
+- map7_s03: lift the ending's framebuffer-store guards
+- Audio tool: re-replacing a sound ticks the banks that hold your earlier edit of it
+- PsyCross: widen feedback strips in the UI pass only
+- Audio tool: compare against the real disc extract, and edit either the pristine or the edited bank
+- Loading-screen trail follows the PS1 loop exactly
+- Loading screen visuals step on a console-length frame clock
+- Revert "Loading screen visuals step on a console-length frame clock"
+- Loading trail: short, sharp ghost as on real hardware
+- PsyCross: loading-trail ghost strength default 0.65
+- Harry loading screen: console-paced jog and a 2.5 s minimum
+- Harry loading screen defaults: LOADPACE 2, LOADMIN 3 s
+- PsyCross: sprites ending on the page edge keep their last texel
+- Loading screen: no per-pixel flashlight on Harry; fbdamp 0.8
+- Loading screen minimum time is a config option (load_screen_min)
+- diag: [GREYFRAME] tag each frame for the grey-flash detector
+- Quick options: split the long pages, one text size, clearer page row
+- PC Options: take Dream Blur back out; it lives in the quick menu only
+- Quick options: action rows left-aligned with the option labels
+- Quick options: Edit Keybinds centred at the bottom of Controls
+- Quick options: Spawn draws like any other row
+- diag: [PANELMISS] arm the controls panel for the present-time check
+- PsyCross: swap interval only on change; [PANELMISS] live line
+- PsyCross: native GL always draws the scene offscreen (grey flash, panel blink)
+- Quick options: F10 can no longer strand the controls panel on screen
+- PsyCross: loading-screen blur (fbdamp) defaults to 0.7
+
+## beta-2026.09.11.1 -- 2026-09-11
+- Fixed Rock Drill and Chainsaw attacks not working
+- Fixed sound replacement mods not playing at right pitch in some cases
+- Restored menus to 60 FPS limit as letting them go higher seemed to cause issues. You can put 'menu_fps_unlock = 1' in your config to unlock them again.
+- Fixed issues that would prevent Linux builds from compiling
+
+Commit summaries:
+- Bump PsyCross: whole-bank sound mods play at the right pitch again
+- Rock drill and chainsaw: the attack input was dropped at PC frame rates
+- Menus run at 60fps again, the rate the PSX ran them at
+- CI: the optional ffmpeg header step can no longer hang the Linux build
+- CI: bound the apt install step too, and one Linux run per branch
+
+## beta-2026.09.10.1 -- 2026-09-10
+- Fixed rain effect being oddly slanted in certain conditions
+- Fixed SFX mods like weapon sound replacements so that they work again
+- Set weather back to 60hz by default and added option in quick menu and PC options to set it back to 30hz
+- Fixed PC options pages so none run off the screen
+- Can now have more than one text override file and multiple text override mods installed at once (check the modding guide under docs for details)
+- Fixed issue where real game would show real gameplay frames in the background after warm reset (may not be fully fixed, needs testing)
+- Fixed launcher not showing real resolutions like 2560x1440 and instead showing DPI resolutions
+- You can now select custom experimental builds in the launcher under "Build Settings" - downloading these will replace the current installed build until you switch it back. The experimental builds will contain test features not in the main branch, but they also may never be finished.
+
+Commit summaries:
+- Release script: -Name publishes a custom opt-in build; launcher lists it under "Custom builds"
+- Launcher: custom builds update within their own name, never across mods or into beta
+- docs: document the text_overrides system in the modding guide
+- Text overrides: several text mods at once, mod-list order settles a conflict
+- Release script: custom builds leave the launcher out unless -WithLauncher
+- Rain: the fence clamp moved the streak's head without its tail (issue #134)
+- TEMP [RAINSLANT] probe: dump the terms behind a leaning rain streak (issue #134)
+- [RAINSLANT] probe rewritten so it actually fires, and it now samples the draw too
+- [RAINSLANT] probe v3: spend the budget on the seconds that show the artifact
+- Bump PsyCross: sound replacements work under the software SPU
+- [RAINSLANT] probe: measure the streak in SCREEN PIXELS, where the artifact is
+- Rain: a drop that lands on grating smeared with the camera (issue #134)
+- Fix the main menu drawing over the last gameplay frame
+- Launcher: 1440p missing from the resolution list on scaled displays
+- PC Options: a Weather Rate row for the 30/60 Hz weather simulation
+
+## beta-2026.09.08.3 -- 2026-09-08
+- Fixed regression where fog had sudden hard edge instead of gradient
+- Fixed mod manager issue where it would prompt that you were overwriting files when it was just due to one mod being higher priority than another
+
+Commit summaries:
+- xa_wav.h: include stddef.h for size_t (Linux/macOS build fix)
+- Mod Manager: no "your file" prompt when a higher-priority mod outranks another mod's copy
+- Bump PsyCross: drop the fog snap-to-full (the fog "wall" got harder)
+
+## beta-2026.09.08.2 -- 2026-09-08
+- Fixed support for additional voiced dialog that wasn't originally in the game (tested with locked door text)
+Commit summary: Text-box voice files were mixed into a switched-off CD input
+
+## beta-2026.09.08.1 -- 2026-09-08
+- Mod Manager: Implemented voice (XA) replacements, can be replaced with WAV and mod manager has built in viewer, editor, voice recorder, and mod maker. Fan dubs have never been easier to make. Let me know if you have any questions. (Audio > Voices in Mod Manager)
+- In addition to voice replacements, it is now possible to add voices to lines that never had them. Some things may not work yet and it still needs testing, but these are all listed in a separate tab in the voice editor.
+- Map editor has been updated to support triggers/flag editing and will also display 3D models. Will be posted in Discord.
+
+Commit summaries:
+- xa: voice line replacements from gamedata/load/XA
+- launcher: Voices (XA) tool for voice mods and fan dubs (2026.9.7.1)
+- docs: document trigger/flag editing in the TrenchBroom guide
+- Voice files for unvoiced text boxes (load/XA/msg_<KEY>.wav)
+- Launcher: Voices tool lists text boxes for msg_<KEY>.wav files
+- Launcher: no space before punctuation in the text-box list
+- Launcher: subtitle text and key on the disc voice-line list
+- Voice WAV overrides for the software SPU XA player too
+- Resample loose voice WAVs to 37800 Hz for the software SPU
+- Launcher: record and import voice files at the disc's 37800 Hz
+- Launcher: Voices tool picks the disc and shows the script in its languages
+- Launcher: "Create voice mod" packs load/XA into a mod and hands it to the Mod Manager
+- Launcher: Voices tool tells mod-placed files from the user's own; packing stops at the zip
+- PsyCross -> 5d320bc ([PGXPCLIP] probe); Flashlight self-shadow task doc
+
+## beta-2026.09.06.2 -- 2026-09-06
+- Fixed issue where Harry would get back up very quickly when breaking out of a grab attack
+- Mod manager will now not re-extract files that have already been extracted, and will prompt you before overwriting anything that already exists
+- Added crosshair size adjustment setting to quick Menu
+- Added Big Head cheat to quick Menu
+- Fixed minimap position from being slightly offscreen
+- Quick menu tweaks and fixes, like preventing sound effects from stacking
+- Fix for screens in mall from displaying glyphs in PAL
+- Slightly decreased bullet decal size    
+
+Commit summaries:
+- launcher: Mod Manager applies incrementally, asks before touching the user's own files (2026.9.6.3)
+- combat: stuck-state nets exit on keyframe stillness, not a 0.5 s clock
+- launcher: Mod Manager knows which deployed files you edited (2026.9.6.4)
+- map4_s03: bridge COPY_GT4_DATA into the PGXP shadow (mall big screen holes)
+- crosshair: size option, 25..125%, quick menu + CROSSHAIRSIZE console command
+- cheats: big head mode (Cheats page + BIGHEAD console command)
+- decals: bullet holes three quarters of their original size, not a quarter
+- cheats: big head 2x, and hook it where every character's bones are written
+- minimap: place inside the overlay pass's real visible rectangle
+- quick menu: one press is one press again
+- quick menu: navigation cues like the main options menu
+- quick menu: drop the move beeps, keep the cancel beep on close
+- quick menu: move beep on page changes
+- map4_s03: on EUR lay the TV bank out the way retail SLES does
+- map4_s03: apply the EUR draw table with the bank upload, not in the worm's init
+- map4_s03: drop the [TVSCR3] readback, the EUR bank is verified
+
+## beta-2026.09.06.1 -- 2026-09-06
+- Adjusted default view so that it is not squished. Inventory should also now be accurate and not stretched. (If you have customized your view, it will stay that way)
+- Alternate camera modes can now also be customized in the quick menu's view editor, and you can adjust the firstperson head position, aiming zoom amount, etc. 
+- All camera customization is saved to the config, but users with the default values will automatically update to the new defaults
+- You can control the free cam with a controller now
+- Fixed minimap being cut off in certain modes
+- Fixed menus from going below 60 fps when fps was capped to 30 (they are 60 in the original)
+- Attempted to improve blending of distant objects with the fog
+- Item pickups should now always appear the same regardless of camera mode or FOV
+
+Commit summaries:
+- Free camera: full controller support, matching the alt-camera scheme
+- Fix Linux transition crash + Event_Update NULL walk; macOS lib/Gatekeeper (issues #113, #110, #102)
+- Minimap: don't widen the corner anchor in stretch mode (borderless 4:3 cutoff)
+- Minimap: place against the renderer's real ortho, not a window query
+- Menus no longer follow a sub-60 fps cap down into lag
+- Bump PsyCross: fogged geometry matches the void colour exactly
+- Quick menu: View page follows the active camera (Classic/Thirdperson/FPS)
+- Quick menu: separate TPS/OTS camera pages with aim + position tuning
+- Options menu + launcher: OTS FOV, and widen the FOV range to 40-140
+- OTS aim zoom in options+launcher; vertical FOV default 1.08 (DuckStation)
+- Fix stretched inventory 3D; migrate changed defaults on update
+- Launcher: compact the Controls form instead of growing it
+- Launcher: move the FOV/zoom slider group up as one unit, original pitch
+- Bump PsyCross: pixel-aspect solve gates on Hor+ like the ortho (load screen / inventory stretch)
+- Inventory 3D aspect: invscale default 100, the geometric 224/240 factor
+- Simple aspect trim default 0.98 -> 1.06 so both Control Types match again
+- Item pickup renders at the game's own projection under any camera FOV
+
+## beta-2026.09.04.1 -- 2026-09-04
+- Fixed screen flicking upwards upon confirmation of item pickup
+- Weather now simulated at 30hz (fixes snow speed)
+- Controllers can now be disconnected and reconnected during gameplay
+- Analog running should no longer slow down the player while steering
+
+Commit summaries:
+- Pickup confirm no longer flicks the scene up 8 rows for a frame
+- Weather particles simulate at the original 30 Hz, whatever the framerate
+- Pickup flick, the real fix: the world asserts its own anchor at submission
+- Analog run no longer sheds speed while steering; PsyCross hot-plug fix
+
+## beta-2026.09.01.1 -- 2026-09-01
+- Added cutscene shift to aspect quick settings (like vertical shift but applies in cutscenes)
+- Fix rainbow band appearing on some hardware in place of cutscene effect for Lisa cutscenes
+- Cleaned up some unnecessary logging
+- Fixed some performance issues especially with texture packs
+
+Commit summaries:
+- Quick options: a Cutscene Shift row, saved like the rest of the view knobs
+- Stop dropping geometry at 4096 splits, and stop logging about it every time
+- Lisa cutscene: the soft-focus is back, and the rainbow band with it
+- Texture packs: decode and composite on a worker thread
+- Drop the [BOOT0/TIM] probe: five forced flushes per streamed TIM
+- Revert "Drop the [BOOT0/TIM] probe: five forced flushes per streamed TIM"
+- Remove only the probes this time: 0af770616 deleted 440 lines of post-load
+
+## beta-2026.08.29.1 -- 2026-08-29
+- Fixed rendering issue that was causing issues with displaying the correct aspect ratio and throwing off measurements
+- Set new default FOV and made FOV settings customizable under either simple or advanced settings in the quick menu, and all of it saves to the config
+- The software SPU is now the default for audio playback, which is more accurate to PS1 as far as effects like reverb 
+- Surround support for software SPU 
+- Fixed the radio, and others sounds, playing forever in software SPU
+- Fixed the Konami and KCET logos not showing at all, leaving a black screen until the intro movie
+- Fixed the long black screen before the upscaled FMVs, which was ffmpeg reading far more of the file than it needed before starting
+- Fixed the grey overlay not covering the whole screen in widescreen
+- Fixed picked-up items rendering about 6% too narrow
+- Fixed in-game text stretching under the new aspect ratio settings
+- Translated most of the Options and PC Options screens for Japanese and Chinese 
+- Translated the inventory commands and status line, and shortened the BGM, SE and Vibration labels so they stop running through the volume bar
+- Fixed quick menu values vanishing while you were adjusting them
+- The quick menu no longer takes input during the attract demo at the main menu, which was clicking things on its own
+- "Debug keys (top row)" is now called "Allow console", which is what it actually does
+- Removed the Fog (free cam) row from the quick menu
+- Launcher: Play! is bold and more obvious now
+
+Commit summaries:
+- display_aspect: default to the 4:3 CRT picture, keep the raw one
+- audio_spatial: accurate PSX reverb on surround layouts
+- PsyCross: CRT aspect now lands on 4:3 regardless of the hfov/vfov knobs
+- crtaspect: live trim for the CRT picture, tuned against a real set
+- PsyCross: in-game text no longer stretches under the CRT aspect
+- Quick options: a View & Aspect page, and crt_aspect_trim defaults to 0.9
+- Quick options: the Display Aspect value column does not unescape underscores
+- Quick options: recycle atlas slots, so edited values stop vanishing
+- Quick options: a saved Vertical Shift row, and log every view change
+- Quick options: Control Type Simple/Advanced, and hfov defaults to 0.92
+- GsIDMATRIX2 was not an identity, and it squashed the world 25% vertically
+- Default FOV 1.06, matched against the set
+- [JPPROBE]: two capped probes for the NTSC-J text regression
+- Options and PC Options in Japanese and Chinese; drop the [JPPROBE] probes
+- BGM and SE volume labels no longer run through the bar in Japanese
+- Vibration label clears its value in Japanese too
+- Japanese for the inventory commands and status line
+- Quick options: drop the Fog (free cam) row
+- TEMPORARY: [N64TRACE] capture of PC ground truth for the N64 port
+- Revert the [N64TRACE] capture
+- Launcher: Play! in bold, and the filter row fits again
+- Submodule: [SPUSTUCK] probe for the radio that never stops
+- Radio-forever fix, quick menu out of attract demos, [OVLW] probe
+- Frame-sized overlays and cull bounds follow the CRT aspect solve
+- Submodule: item-take screen no longer renders 5.7% too narrow
+- Submodule: [XAFEED] probe for the tinny voices
+- Submodule: drop the [XAFEED] probe, XA feed ruled out
+- Submodule: fix the XA zigzag coefficients that made voices tinny
+- Submodule: spectral regression test for the XA resampler
+- Ship FOV 1.0 and the authentic software SPU as the defaults
+- Quick options: "Debug keys (top row)" is really "Allow console"
+- FMV: bound the ffmpeg probe, and time it
+- Boot logos are back: the fast drain stands down during them
+- Revert "Boot logos are back: the fast drain stands down during them"
+- TEMPORARY [LOGODBG]: what the Konami logo actually draws, and whether its VRAM survives
+- TEMPORARY [LOGODBG]: capture one frame of the Konami logo at full fade
+- TEMPORARY [SPLITDBG]: arm the split report on the Konami logo
+- [SPLITDBG]: arm at logo frame 5, not 300
+- Boot logos are back: the quick-options GL init leaked its bound program
+
+## beta-2026.08.27.2 -- 2026-08-27
+- Fixed issue where quick menu could become visually corrupted
+- Attempt to fix issues with graphical corruption and artifacts on vulkan and other renderers
+- Stopped certain post processing effects from drifting diagonally  
+
+Commit summaries:
+- Quick options: recreate the atlas when something else deletes its name
+- Quick options: claim the glyph atlas at startup, before framebuffer churn
+- PsyCross: highp int in shaders -- Vulkan/D3D11 texture distortion
+- PsyCross: film grain no longer drifts across the screen
+- PsyCross: film grain back to the original look, drift removed
+
+## beta-2026.08.27.1 -- 2026-08-27
+- Aspect ratio and framing now match the original 1:1. The picture had been sitting 8 rows too high since launch, and the pixel aspect is now the true PSX 35/32, so the image is finally shaped and positioned like the real thing
+- Added the in-game quick options overlay on F10 (can be configured and also set to a controller input). Graphics, HUD, audio, cheats and debug settings, all changeable while you play, with mouse support and a panel you can drag anywhere
+- Fixed the picture squishing and stretching around the inventory, examination screens and menus. Fades now cover the whole 16:9 screen instead of just the 4:3 middle, and the items and Harry's portrait no longer appear squashed while the menu opens
+- Fixed gameplay still showing in the side bars after warm resetting back to the title screen
+- Fixed the rainbow block corruption in the Lisa cutscene reported by several users (let me know)
+- Free camera reworked with mouse look and WASD, and it no longer drops you into an empty untextured world anywhere
+- Fixed Grey Children lunging and grabbing far too early at high frame rates
+- Fixed the idle look-around animation triggering after a couple of seconds instead of 10 to 15
+- Fixed Monster Cybil throwing her attack two to four times per swing at high frame rates
+- Fixed the multi-second freezes when opening and closing the quick menu
+- Fixed the enemies-ignore-Harry cheat, which only worked on a handful of enemy types and expired on its own. It now works on every enemy
+- Fixed god mode and enemies-ignore-Harry doing nothing at all unless debug controls were enabled
+- Fixed a performance problem that could stall the game for several seconds at a time, most noticeably when standing against a wall
+- Added a widescreen camera fix for the return to the alley, turning the shot away from the empty space past the wall (I can fix others too, please report)
+- Added optional low-health red glow, and a PC Options HUD page
+- Added an 8192x8192 flashlight shadow map option
+- Added Ctrl+F5 fast forward, plus wireframe (Ctrl+F1) and no-textures (Ctrl+F2), all can be toggled in the quick menu
+- Removed the bare F5 and F6 keys, which could potentially chang PGXP rendering settings with no way to tell what had happened. All the renderer debug keys now need Ctrl held
+- Fixed the minimap snapping to a different spot after closing the inventory
+- Flashlight shadows now stay on while the game is paused
+- Fixed picked-up items sitting slightly low in widescreen
+- Fixed the cutscene squish that crept back in
+- Fixed quick heal still working with no healing items
+- Fixed jump-back ending in mid-air instead of landing
+- Fixed Polish glyphs folding together after switching language in-game
+- The PSX Screen Position option is now pinned to its default, since the port has its own framing controls
+- README and documentation refreshed for the multi-platform beta
+
+Commit summaries:
+- fix: pickup item back to the zero baseline -- the +20 was my misfix
+- feature: 8192x8192 flashlight shadow map option
+- fix: item pickups no longer sit ~16-20 units low under Hor+
+- fix: cutscene squish regression -- restore the 8/21 framing default
+- fix: Polish glyphs folded together after a live language switch
+- feature: in-game quick options overlay on F9
+- fix: quick options on F10 + in-game only; GL overlays work on ANGLE renderers
+- fix: closing the quick options overlay with Escape no longer exits to title
+- fix: quick options usable at uncapped FPS, right-click decrements; rain no longer drifts with the player
+- feature: Cheats + Debug pages in quick options; free camera reworked (mouse + WASD)
+- fix: quick heal no longer fires off a ghost inventory slot
+- feature: low-health red glow (optional), PC Options HUD page, Spawn row in quick options
+- fix: jump-back no longer ends mid-air (falls backwards on flat ground); straight rain streaks; Spawn row is a button + dropdown
+- console: vcropanchor + par framing knobs; hfov reaches pillarbox too (no default changes)
+- fix: jump-back falls backward on flat ground -- the REAL trigger this time
+- diag: [GREYFLASH] probe on the fog-colour screen clear
+- aspect: true PSX pixel aspect 35/32 + shape-true FOVZOOM pair
+- fix: widescreen edge culling (cull bounds ignored hfov) + consistent vshift
+- fix: world-mesh polys culled at far screen edges in widescreen
+- fix: dark bands down both sides of the screen in widescreen
+- fix: dark side bands in widescreen = unscaled glow/vignette compositor
+- fix: dark side bands = screenBrightness ADDITIVE quad 27 units too narrow
+- diag: [CAMSNAP] per-shot camera snapshot for the vshift riddle
+- fix: vertical cull/overlay bounds tolerate vshift and vfov > 1
+- fix: pin the PSX Screen Position option to default on PC
+- aspect: ship vfov 1.0 / hfov 0.76 defaults + fix 2D-screen hfov squeeze
+- fix: generous screen-edge cull margins + real DISABLECULLING bypass
+- fix: bottom-edge floor decorations culled by the retail subcell near-cull
+- diag: [CAMSNAP] also prints GTE geom offset + draw-env centre
+- diag: [CAMSNAP] prints the render matrix (cam_mat 3x3 + translation)
+- diag: [GREYFLASH] v2 -- gate on near-empty frames, re-arming cap
+- diag: [CAMSNAP] GTE self-test probe
+- diag: [CAMSNAP] prints the live raster anchor (drawEnv ofs - dispEnv xy)
+- diag: [CAMSNAP] gteProbe uses the transposed cam_mat
+- diag: [CAMSNAP] prints GsWSMATRIX for internal-consistency audit
+- fix: the global vertical offset -- GsInit3D anchored at 112, console uses 120
+- fix: the console anchor applies in EVERY state, not just at boot
+- docs: README refresh for the multi-platform beta release
+- docs: reference doc PC Options page count + F10 overlay mention
+- docs: README feature wording per maintainer review
+- hud: low-health glow bands half as deep (27%/20% of the half-extents)
+- quick options: mouse wheel scrolls the spawn dropdown's window
+- psycross: VRAM sub-image upload fixes the ANGLE Lisa-cutscene rainbow + [FBCLEAR] probe
+- psycross: build fix for the [FBCLEAR] probe
+- fix: cutscene rainbow block -- hires override hijacked by framebuffer prims
+- fix(greychild): attack commits were framerate-scaled, firing the grab early
+- fix: 4:3 snap during menu fades -- Hor+ grace period was frame-counted
+- fix: AFK idle look-around fired in seconds at high FPS; probe overlay textures
+- fix: low-health glow stopped short of the screen edges in widescreen
+- fog: distant geometry now dissolves fully; drop the quick-menu hint line
+- quick options: footer is just "* req restart"
+- fix: quick-options overlay self-heals stale GL texture names; fog snap
+- fix: 4:3 frames on inventory exit; keep flashlight shadows while paused
+- fix: minimap no longer starts at the 4:3 spot and snaps after inventory close
+- Revert "fix: minimap no longer starts at the 4:3 spot and snaps after inventory close"
+- fix: minimap follows the WORLD's framing, so it no longer snaps on menu close
+- fix: inventory no longer squishes for a frame while opening
+- fix: quick-options blocks -- the overlay was freeing GL names the game reclaimed
+- revert to c6588ac06 -- baseline for bisecting the console/quick-menu break
+- revert to 7c6394556 -- next bisect step for the console/quick-menu break
+- restore all fixes -- the console was never broken (debug controls were off)
+- quick options: draggable panel, controls footer restored; launcher F10 row
+- Draw full-screen menus 4:3, and make the quick options panel draggable
+- fix: free camera no longer teleports Harry into a void
+- Quick options: the page row goes backwards too
+- Quick options: detect and heal textures re-specified behind our back
+- Quick options: check texture CONTENT, not just its dimensions
+- Quick options: repair the sampler state that made labels draw black
+- Quick options: verify the font memory, and measure the bake
+- Quick options: never ship a saturated bake
+- Quick options: drop the per-frame GPU verification that caused the hitch
+- Quick options: account for the open/close stall
+- Remove per-frame logging probes: WALLSTOP and the overlay timer
+- Free camera: let the widened chunk window actually load
+- Free camera: draw the room you are standing in
+- Free camera: restore the draw cap, fix room visibility instead
+- Free camera: stream the ordinary window, not a 100-cell one
+- Root-cause both: free-cam untextured world, and quick-menu blotches
+- Apply the same UV fix to the other GL overlays
+- Inventory: stop the squish for the whole opening transition
+- Inventory transitions: fade the whole window, keep only the menu 4:3
+- Inventory: end the widescreen hold when the world stops being drawn
+- Fix the quick menu freeze (F10 key collision) and pin mip completeness
+- PsyCross debug keys: Ctrl-gated, PGXP toggles removed, fast-forward back
+- Game keys ignore their bind while Ctrl is held
+- Fast-forward scales the game clock, which is what the port actually uses
+- No-target and god mode: run them at all, and stop the flag expiring
+- High-FPS keyframe audit: all 19 sites classified, one real bug fixed
+- No-target: make it universal at the shared attack resolver
+- Quick options: fast forward, wireframe and no-textures on the Debug page
+- Quick options: one glyph atlas, created once, instead of 25 live textures
+- Quick options: drop the cursor handle when the atlas is recycled
+- Stop the 4:3 stretch after leaving a 2D examination screen
+- Widescreen: rotate the alley fixed shot off the void it was framed against
+- No stretched frames after an examination screen; Ctrl+F5 toggles
+- Menu pillarbox bars cleared; alley reframe measured against true 4:3
+- Alley reframe: rotate the look-at target, before the matrix is built
+
+## beta-2026.08.26.1 -- 2026-08-26
+- fix: pickup item back to the zero baseline -- the +20 was my misfix
+- feature: 8192x8192 flashlight shadow map option
+- fix: item pickups no longer sit ~16-20 units low under Hor+
+- fix: cutscene squish regression -- restore the 8/21 framing default
+- fix: Polish glyphs folded together after a live language switch
+- feature: in-game quick options overlay on F9
+- fix: quick options on F10 + in-game only; GL overlays work on ANGLE renderers
+- fix: closing the quick options overlay with Escape no longer exits to title
+- fix: quick options usable at uncapped FPS, right-click decrements; rain no longer drifts with the player
+- feature: Cheats + Debug pages in quick options; free camera reworked (mouse + WASD)
+- fix: quick heal no longer fires off a ghost inventory slot
+- feature: low-health red glow (optional), PC Options HUD page, Spawn row in quick options
+- fix: jump-back no longer ends mid-air (falls backwards on flat ground); straight rain streaks; Spawn row is a button + dropdown
+- console: vcropanchor + par framing knobs; hfov reaches pillarbox too (no default changes)
+- fix: jump-back falls backward on flat ground -- the REAL trigger this time
+- diag: [GREYFLASH] probe on the fog-colour screen clear
+- aspect: true PSX pixel aspect 35/32 + shape-true FOVZOOM pair
+- fix: widescreen edge culling (cull bounds ignored hfov) + consistent vshift
+- fix: world-mesh polys culled at far screen edges in widescreen
+- fix: dark bands down both sides of the screen in widescreen
+- fix: dark side bands in widescreen = unscaled glow/vignette compositor
+- fix: dark side bands = screenBrightness ADDITIVE quad 27 units too narrow
+- diag: [CAMSNAP] per-shot camera snapshot for the vshift riddle
+- fix: vertical cull/overlay bounds tolerate vshift and vfov > 1
+- fix: pin the PSX Screen Position option to default on PC
+- aspect: ship vfov 1.0 / hfov 0.76 defaults + fix 2D-screen hfov squeeze
+- fix: generous screen-edge cull margins + real DISABLECULLING bypass
+- fix: bottom-edge floor decorations culled by the retail subcell near-cull
+- diag: [CAMSNAP] also prints GTE geom offset + draw-env centre
+- diag: [CAMSNAP] prints the render matrix (cam_mat 3x3 + translation)
+- diag: [GREYFLASH] v2 -- gate on near-empty frames, re-arming cap
+- diag: [CAMSNAP] GTE self-test probe
+- diag: [CAMSNAP] prints the live raster anchor (drawEnv ofs - dispEnv xy)
+- diag: [CAMSNAP] gteProbe uses the transposed cam_mat
+- diag: [CAMSNAP] prints GsWSMATRIX for internal-consistency audit
+- fix: the global vertical offset -- GsInit3D anchored at 112, console uses 120
+- fix: the console anchor applies in EVERY state, not just at boot
+- docs: README refresh for the multi-platform beta release
+- docs: reference doc PC Options page count + F10 overlay mention
+- docs: README feature wording per maintainer review
+- hud: low-health glow bands half as deep (27%/20% of the half-extents)
+- quick options: mouse wheel scrolls the spawn dropdown's window
+- psycross: VRAM sub-image upload fixes the ANGLE Lisa-cutscene rainbow + [FBCLEAR] probe
+- psycross: build fix for the [FBCLEAR] probe
+- fix: cutscene rainbow block -- hires override hijacked by framebuffer prims
+- fix(greychild): attack commits were framerate-scaled, firing the grab early
+- fix: 4:3 snap during menu fades -- Hor+ grace period was frame-counted
+- fix: AFK idle look-around fired in seconds at high FPS; probe overlay textures
+- fix: low-health glow stopped short of the screen edges in widescreen
+- fog: distant geometry now dissolves fully; drop the quick-menu hint line
+- quick options: footer is just "* req restart"
+- fix: quick-options overlay self-heals stale GL texture names; fog snap
+- fix: 4:3 frames on inventory exit; keep flashlight shadows while paused
+- fix: minimap no longer starts at the 4:3 spot and snaps after inventory close
+- Revert "fix: minimap no longer starts at the 4:3 spot and snaps after inventory close"
+- fix: minimap follows the WORLD's framing, so it no longer snaps on menu close
+- fix: inventory no longer squishes for a frame while opening
+- fix: quick-options blocks -- the overlay was freeing GL names the game reclaimed
+- revert to c6588ac06 -- baseline for bisecting the console/quick-menu break
+- revert to 7c6394556 -- next bisect step for the console/quick-menu break
+- restore all fixes -- the console was never broken (debug controls were off)
+- quick options: draggable panel, controls footer restored; launcher F10 row
+- Draw full-screen menus 4:3, and make the quick options panel draggable
+- fix: free camera no longer teleports Harry into a void
+- Quick options: the page row goes backwards too
+- Quick options: detect and heal textures re-specified behind our back
+- Quick options: check texture CONTENT, not just its dimensions
+- Quick options: repair the sampler state that made labels draw black
+- Quick options: verify the font memory, and measure the bake
+- Quick options: never ship a saturated bake
+- Quick options: drop the per-frame GPU verification that caused the hitch
+- Quick options: account for the open/close stall
+- Remove per-frame logging probes: WALLSTOP and the overlay timer
+- Free camera: let the widened chunk window actually load
+- Free camera: draw the room you are standing in
+- Free camera: restore the draw cap, fix room visibility instead
+- Free camera: stream the ordinary window, not a 100-cell one
+- Root-cause both: free-cam untextured world, and quick-menu blotches
+- Apply the same UV fix to the other GL overlays
+
+## beta-2026.08.23.1 -- 2026-08-23
+- Fix pickup items from being at the wrong point
+- Fix minimap so it appears in the actual corner of 16:9
+- Added R to reset to defaults in options menu
+- Adjusted sound options to reflect the same as launcher's modern sound Options
+
+Commit summaries:
+- fix: FOV no longer distorts picked-up item; add cutfov command; pin cutscene vfov
+- plugins: re-add the gameplay plugin channel, config-gated + security-audited
+- minimap: reach the real screen edge in Hor+ (16:9) and menus-only modes; launcher UI label translations
+- fix: picked-up item aligns with its frozen backdrop (+20), not zeroed
+- options: [R] Reset to defaults in PC Options (keeps resolution + window mode)
+- audio: in-game Sound row selects speaker layout (Auto/Stereo/Quad/5.1/7.1); reset dialog gets a solid panel
+- psycross: any connected controller drives Player 1 (pin 0beab37)
+- options: fix reset-to-defaults panel position
+- options: draw reset dialog above the menu, text above the panel
+- options: reset-to-defaults confirm is now a GL overlay message box
+- options: mouse cursor rides above the reset-confirm dialog
+
+## beta-2026.08.22.1 -- 2026-08-22
+- fix: FOV no longer distorts picked-up item; add cutfov command; pin cutscene vfov
+- plugins: re-add the gameplay plugin channel, config-gated + security-audited
+- minimap: reach the real screen edge in Hor+ (16:9) and menus-only modes; launcher UI label translations
+
+## beta-2026.08.21.3 -- 2026-08-21
+- Fixed upscaled FMVs not working
+- Fixed issue preventing Mac/Linux from compiling
+
+Commit summaries:
+- fix(build): define g_DllAllowUnrecognized for POSIX too (Linux/macOS link failure)
+- fix: DLL security audit blocked the game's own FFmpeg DLLs (mp4/mkv FMV overrides dead)
+
+## beta-2026.08.21.2 -- 2026-08-21
+- Fixed filtering past bilinear not staying applied properly
+- Finally fixed long time mesh and geometry corruption issue that would cause missing elevator doors, rainbow artifacts, and more. If you still see any of this please report it. It mainly happened in Nowhere / Nightmare School.
+- Fixed Harry ghosting on load screen
+- Fixed Harry not being out of breath after running in alternate camera modes
+- Fixed item pickups so they are in the right spot vertically
+- Added additional support to launcher for DLL mods that edit the game's source code. It's limited to the map DLL files currently (in maps), and it will make sure they have signatures and data matching a DLL file with game code for extra security. Additional config options or console commands should be supported. It will also give a general warning about loading DLLs, and present anything that could be unusual. Please use these kinds of mods at your own risk. Will add more support if it ends up being neeeded.
+
+Commit summaries:
+- fix: texture filter modes above bilinear reset to bilinear every boot
+- fix: Harry never got tired after sprinting in the alternate cameras
+- psycross: stale per-prim alpha no longer ghosts the load screen (pin 9d27f7b)
+- fix: Nowhere invisible elevator + rainbow triangle -- validate prim clut restamps
+- diag: [WOBJ-POISON] names the object drawn from a reclaimed buffer
+- diag: [RESTAMP] logs the full rebase state (prim clut + both bases)
+- restamp guard: diagnostic only -- the clamp destroyed legitimate early stamps
+- diag: [RESTAMP] reports the base slot's native CLUT origin
+- diag: [RESTAMP] caps per material, not globally
+- diag: [RESTAMP-WILD] -- past-pool stamps get their own log budget
+- diag: reformat forensics -- [IPDREF]/[IPDREF-DR] + pointer identities in [WOBJ-POISON]
+- fix: Nowhere corruption root -- stale world-object models survived chunk reloads
+- fix: item pickups framed low under a non-zero vshift
+- mod manager: DLL mod support with static screening, deploy whitelist, and install consent (PR #104, reworked)
+- dll security: edited-game-code fingerprint enforcement + install-time import naming
+- dll security: proper '\0' escapes (heredoc had embedded raw NULs); 43/43 shipped DLLs pass the strict audit
+- mod manager: post-extraction DLL screening + auto-arm enable_plugins on applied plugin mods
+- cut the runtime plugin channel entirely
+- mod registry: let map DLLs add console commands and read their own config keys
+- dll security: derive the allowlist from the game exe's own imports (fix old-build false positives)
+- launcher: game runtime libs in the static baseline (fix false positives when the exe isn't beside the launcher)
+
+## beta-2026.08.21.1 -- 2026-08-21
+- Fixed FMVs not playing properly on borderless at less than your desktop resolution
+- Bilinear finally fixed and no longer messes up the menu
+- Added Trilinear and Anisotropic 2x-16x filtering
+- Fixed white/black blood discoloration and opaque black blood puddles that showed at any distance
+- Bullet decals now respect fog and also improved the asset slightly
+- Added setting to enable minimap even when the map hasn't been found, works on maps without a defined map like the intro
+- Fixed issue where ingame settings would not save properly
+- Fixed double firing in alternate camera modes
+- SFX replacement bug fixed and they should play at the replacement's sample rate
+- Moved achievement text on main menu slightly down in PAL so that it is not inside the copyright text
+- Removed bullet decal option from controls menu since it was a duplicate
+- Added console commands drawdist/fogdist/bright
+
+Commit summaries:
+- psycross: [BILINDIAG] instrument the bilinear 3D marker
+- psycross: bilinear 3D marker is now per-primitive
+- psycross: correct the bilinear half-texel bias
+- psycross: [BILINDIAG] report primitive classification
+- fix: FMV black in borderless; blood pools ignore fog
+- filtering: Off / Dithering / Bilinear / Trilinear / Anisotropic
+- launcher: anisotropic strength picked from the dropdown
+- psycross: fix the fragment shader failing to compile (u_anisoTaps)
+- fix: bullet decals ignore fog; one value for filter mode + anisotropic strength
+- psycross: internal textures never filtered; gate instrumentation
+- psycross: remove the half-texel UV nudge corrupting glyphs under any filter
+- fix: launcher no longer clobbers in-game settings; drawdist/fogdist/bright
+- psycross: clamp filter taps to per-poly UV bounds (pants-seam bleed)
+- diag: [FXDIAG] identify the drawer behind the fog-immune black corpse pool
+- fix: the last unfaded blood emit -- the far-LOD corpse pool
+- diag: [BLOODDIAG] dump the spray's drawn colours
+- diag: [BLOODCLUT] dump the palette the spray multiplies
+- fix: unfaded blood clone layers; decals fade toward fog, not black
+- diag: [BLOOD4] dump all four spray layers as emitted
+- fix: white spray edges (glow imbalance); decals skip when fully fogged
+- fix: bullet decals fade to genuinely invisible in fog
+- psycross: per-prim alpha survives the colour builders
+- fix(decals): fade against the fog as RENDERED, not the raw ramp
+- fix(decals): the fog keep was fed a QUARTER of the true depth
+- options: Minimap Reqs Map row on the last page
+- minimap: works in the intro street when set to always draw
+- fix(minimap): the placement query rejects any index the savegame disagrees with
+- diag: [MMDIAG] the intro-minimap substitution chain
+- diag: [MMGATE] above every minimap gate
+- diag: [MMDRAW] -- the intro carries paperIdx=1 and passes every gate
+- Minimap: place intro street (map0_s00) via map2_s00's Old Town case
+- sfxmod: replacements play at their authored rate for low-rate bank samples too
+- strip session diagnostics: [MMGATE]/[MMDRAW]/[MMDIAG]/[BLOOD4]/[BLOODDIAG]/[BLOODCLUT]/[FXDIAG]
+- fix: releasing aim mid-recoil fired and deducted a second bullet (TPS/OTS)
+- fix: PAL title achievements hint drew through the copyright line
+- fix: FMVs black in borderless below desktop resolution, for real this time
+
+## beta-2026.08.20.1 -- 2026-08-20
+- Fixed N appearing in Japanese inventory descriptions
+- Blood partially fixed and affected by fog (still need to do blood puddles)
+- Borderless: Now stretches chosen resolution to your desktop resolution instead of just running at your desktop resolution. The resolution setting is now effectively the rendering resolution as well. 
+- Pillarboxing: Selecting YES for pillarboxing will now cause 4:3 resolutions stretched to desktop size to have the correct aspect ratio and pillarboxing. For example, if you select a 4:3 resolution and set borderless/fullscreen with a 16:9 desktop, with pillarboxing YES the game will take up your whole screen but have black bars, OFF will strech
+Note: Menus only should still be the default when playing with a widescreen (16:9+) resolution! This will prevent menus from stretching but allow the world to render natively widescreen.
+- 320x240 has been added as a resolution option, works best Windowed/Borderless
+
+Still trying to fix bilinear, will get it in with more bug fixes next update.
+
+Commit summaries:
+- fix: Japanese item-description N, for real this time; PSX-native resolutions
+- psycross: bilinear via the real 3D marker; borderless internal resolution (unfixed)
+- psycross: borderless honours the chosen render resolution, MSAA included
+- psycross: pillarbox the borderless stretch when pillarboxing is on
+- psycross: fix MSAA+borderless black screen (single-sampled scene target)
+- psycross: fix MSAA+borderless black screen (multisample default framebuffer)
+- fix: console and toasts were invisible in borderless
+- launcher: last tooltip translated; psycross MSAA in borderless
+
+## beta-2026.08.19.2 -- 2026-08-19
+- More Romper fixes
+- Finally actually fixed Nurse\Doctor damage and other NPC damage
+- Added shadow resolution setting in launcher and console command (shadowres)
+- Fixed flashlight brightness in alternate rendering modes
+- Fixed flashlight shadows disappearing when game is paused
+- Added minimap setting in Launcher
+- Translated launcher tooltips (still WIP, controls and mod manager tooltips not translated yet)
+
+Still WIP: Working on fixing N appearing in Japanese. Also fixing Bilinear. Will update again with these fixes soon.
+
+Commit summaries:
+- revert(romper): anim-time tests are exact == in the original -- restore them
+- fix: blood ignores fog; stray N in Japanese item descriptions
+- psycross: flashlight zero-direction NaN guard + [FLVAL]
+- fix(nurse): knife damage stopped after the first swing
+- fix(combat): re-arm the one-hit-per-swing latch on a genuinely new swing
+- revert: the swing-latch theory was wrong -- probe the nurse damage instead
+- console: shadowres, plus the PsyCross pause/resolution shadow fixes
+- fix(nurse): re-arm the swing latch -- confirmed by the damage probe
+- fix(nurse): the knife's damage scaler was frame-rate dependent for enemies
+- launcher: shadow-map resolution and minimap dropdowns
+- launcher updates, new shadow resolution and minimap settings. Also translated a lot of tooltips.
+
+## beta-2026.08.19.1 -- 2026-08-19
+- Fixed regression that caused parts of sky to get dark in certain cutscenes (and sorry for leaving that one for so long!)
+- Fixed one potential cause of the invisible elevator doors issue
+- Added new rendering options, please try a different one if you experience any odd graphical issues
+- Fixed sound replacements so that all sounds should be able to be replaced properly now
+- Added bullet decals to launcher options (still need some work, but they look alright)
+- Fixed empty weapons not clicking in alternate cameras
+- Fixed puppet doctors and puppet nurses dealing no damage
+- Attempted to fix romper animation and sliding issues, some work may still be needed
+- Framerate fixes to make enemies more framerate independent 
+- Added config menu to randomizer mode (map key) and basic lua scripting layer for randomizer, but both are unfinished! (randomizer=1 in config if you want to test it)
+
+Commit summaries:
+- ipd: guard the used-in-place model arrays, and stop the clobber warning crying wolf
+- fix: a failed hi-res upload no longer makes geometry vanish (invisible elevator)
+- rando: runtime-tunable knobs + enemy-HP / weapon-damage scaling
+- rando: move tunables to their own gamedata/randomizer.cfg + raise caps
+- rando: in-game settings panel, opened by the Map button (tap = settings)
+- rando: barebones Lua 5.4 scripting layer (randomizer only)
+- docs: randomizer settings panel + Lua scripting guide
+- rando: "Reload area" action + Lua spawn_item / give_item pickups
+- docs: scripting guide — spawn_item/give_item/on_item + Reload area
+- Update README with Linux and Mac support information
+- render: renderer= config option for the D3D11/Vulkan backends
+- Revert "fix: cutscenes clear to black, so voids stop reading as fog grey"
+- sfxmod: every bank load says what it is, so a mod can be aimed correctly
+- launcher: warn when a sound bank is one the game never loads
+- sfxmod: MAP000_005.wav now works — SND ships MAP/MEP twins and the game loads MEP
+- fix: black clear for the map3_s02 Alessa scene, gated to that scene alone
+- fix: Puppet Nurse and Doctor grabs deal no damage — drain read the grab slot
+- launcher: renderer selection and a Bullet Decals row
+- fix: launcher crashed on launch — comboRender populated after LoadConfig
+- launcher: move the flag under the Level row, translate Renderer and Bullet Decals
+- fix: empty weapon clicks in the alternate cameras
+- launcher: drop the Automatic renderer entry — it was a second name for OpenGL
+- psycross: bump for the GLES GL-error diagnostic
+- psycross: bump for the GLES MSAA fix (black screen)
+- diag: report the clear colour on frames that draw no world (street fog flicker)
+- fix: whole-scene lighting flicker, and ambience that looped forever
+- cutscene: live vertical framing knob (`cutshift`)
+- fix(romper): restore the hop -- five anim events that stopped firing on PC
+- fix(romper): delta-scale the roam acceleration -- the actual slide
+- fix(romper): write RomperFlag_2 to romperProps, not the chara flags
+- diag: watch the env OUTPUT for the rare remaining lighting flicker
+- revert: RomperFlag_2 does belong in the chara flags -- the asm says so
+- fix(romper): per-frame dice rolls are frame-rate dependent
+
+## beta-2026.08.15.2 -- 2026-08-15
+- Fixed Chinese so that you do not need the fan translation patch for it to work, it now works in NTSC-J out of the box. Set the language in options. If you see issues you can always still use the fan translation. Original translation is by goro / 十三月
+- Fixed issue where sound replacements were not working with MAP banks (level sounds)
+- Fixed issue with flashlight during hospital bottle liquid scene
+- Nowhere: Reports of corruption issues coming back but it is hardware specific. Please share your log if you ecounter this. New logging has been added to help identify the issue.
+- Fixed gray void instead of black in transparent areas of some cutscenes
+- Fixed one frame white flash that happened when opening the inventory 
+
+Commit summaries:
+- fix: loose sound replacements now work for MAP banks (every town/map sound)
+- fix: per-pixel flashlight no longer turns lit rooms to night
+- fix: Chinese stands down when the disc carries no Chinese text
+- diag: the packet-arena overrun check was dead code — make it report
+- lang: detect the Chinese-patched NTSC-J disc instead of trusting the menu
+- fix: cutscenes clear to black, so voids stop reading as fog grey
+- lang: ship the Chinese text, so NTSC-J switches to it with no disc patch
+- fix: switching to Chinese in the options menu now changes the text
+- fix: one-frame white flash when opening the inventory
+- lang: the options and save screens follow Chinese too (zh.pack v2)
+
+## beta-2026.08.15.2 -- 2026-08-15
+- Fixed Chinese so that you do not need the fan translation patch for it to work, it now works in NTSC-J out of the box. Set the language in options. If you see issues you can always still use the fan translation. Original translation is by goro / 十三月
+- Fixed issue where sound replacements were not working with MAP banks (level sounds)
+- Fixed issue with flashlight during hospital bottle liquid scene
+- Nowhere: Reports of corruption issues coming back but it is hardware specific. Please share your log if you ecounter this. New logging has been added to help identify the issue.
+- Fixed gray void instead of black in transparent areas of some cutscenes
+- Fixed one frame white flash that happened when opening the inventory 
+
+Commit summaries:
+- fix: loose sound replacements now work for MAP banks (every town/map sound)
+- fix: per-pixel flashlight no longer turns lit rooms to night
+- fix: Chinese stands down when the disc carries no Chinese text
+- diag: the packet-arena overrun check was dead code — make it report
+- lang: detect the Chinese-patched NTSC-J disc instead of trusting the menu
+- fix: cutscenes clear to black, so voids stop reading as fog grey
+- lang: ship the Chinese text, so NTSC-J switches to it with no disc patch
+- fix: switching to Chinese in the options menu now changes the text
+- fix: one-frame white flash when opening the inventory
+- lang: the options and save screens follow Chinese too (zh.pack v2)
+
+## beta-2026.08.15.1 -- 2026-08-15
+- Russian fan translations now work, covers 10 releases including ViT Co, Metallist, Consolgames, Kudos, Golden Leon, FireCross, Paradox, RGR, Playbox and Rusversii. May still have issues, have not been thoroughly tested!
+- Chinese language support when running NTSC-J (pick it in options) - Thanks to catabridge for the foundation
+- NTSC-J menus and save locations are actually in Japanese now
+- Fixed Japanese inventory text being garbled, it was showing unrelated kanji (also fixes Chinese on an unpatched Japanese disc)
+- Russian and Polish translations for the PC options menu, and Polish save names are centered properly now
+- Launcher is translated into 10 languages, click the flag in the bottom right to change it, the Mod Manager and Controls are translated too
+- Fixed Twinfeeler still being visible while he's underground
+- Fixed items with see-through parts drawing solid, the unknown liquid bottle has liquid in it again
+- Fixed no footsteps when moving while aiming in the alternate cameras
+- You can sprint forward while aiming in the alternate cameras now, he used to run in place
+- Added bullet decal option to launcher controls menu and in game PC options menu                     
+- Fixed the beam of light in the amusement park going over Alessa's head instead of striking her
+- Fixed Larval Stalkers never disappearing, they faded out fine on classic flashlight but every other mode kept lighting them back up
+- Fixed the camera jumping when examining doors, puzzles and key items, and when opening the inventory or going through a door
+- Fixed the match in Harry's hand being offset after the alley cutscene, it only happened on fixed camera angles
+- Star/ranking achievements (Harry the Okay/Good/Great/Best) unlock now, they were reading the wrong memory and were never being checked on the results screen anyway
+- Achievements are checked on menus and screens now instead of only during gameplay, this should fix others that unlock on a screen
+- rawhy console command lists every achievement and dumps real conditions instead of the same 3 every time, use this to report broken achievements
+- Sound replacements play at whatever sample rate your wav is, no need to match the original anymore (big deal for the low rate MAP sounds)
+- Sound replacements also accept the filename the Audio tool exports, so MAP000_005.wav works as well as MAP000.005.wav
+- Fixed rock drill smoke and chainsaw sound carrying on after using the quick weapon switch key
+- Main menu, options, map screens and puzzles run at your FPS setting instead of being locked to 60, inventory and cutscenes stay at 60 (set menu_fps_unlock = 0 in config.cfg to put it back)
+- Groundwork for iOS, Android, and Xbox 360 ports which now all have branches in the repo. OG Xbox port is fully playable with minimal glitches.
+
+Commit summaries:
+- release: stop `gh run watch` output riding out as the return value
+- Russian fan-translation support: menu text, PAL atlas + kerning
+- Fix lowercase o on the consolgames PAL charset
+- Russian: charsets for the seven 1999-2003 repacks, and FireCross item text
+- decomp: un-nest the four GCC nested functions so Clang can build the tree
+- map7_s03: give the boss-pool asm aliases the Mach-O underscore prefix
+- Chinese on NTSC-J: runtime font selection, language row, disc item text
+- maps: add SH_STATIC_MAPS, overlays linked in via per-map symbol prefixing
+- Keep the Language row available in-game on NTSC-J
+- decomp: make the tree Clang-clean, and add a CI gate to keep it that way
+- NTSC-J menu text from the disc: Japanese fixed, Chinese for free
+- psycross: bump to 193a45f (iOS GLES selection + GLES noperspective guard)
+- ci: fix the PsyCross iOS header check, and assert it really picked GLES
+- Fan PC-options translations (RU/PL), and centre save text by measuring it
+- Launcher: pick its UI language from a flag button
+- Launcher: draw the flags instead of typing them
+- launcher: translate dropdown values, fit every language to its control
+- fix: hide Twinfeeler's buried segments, and stop item TMDs drawing opaque
+- fix(altcam): footsteps while aiming, and forward sprint that actually moves
+- diag: capture the inputs for the Alessa beam and the Nowhere elevator doors
+- docs: index this batch's fixes
+- fix(map6_s04): Alessa's beam struck above her head — MulRotMatrix transposed
+- diag: find which gate stops Larval Stalkers vanishing
+- diag: track the Larval Stalker vanish by transition, not by sample
+- diag: does the Larval Stalker fade actually reach the draw?
+- fix: Larval Stalkers now vanish under every flashlight mode
+- fix: Japanese item names and descriptions were UTF-8, not Shift-JIS
+- fix: hold the fixed-cam vshift through event callbacks too, not just memos
+- ra: make rawhy usable, and resolve the msgIdx read the set was missing
+- fix: stop enumerating states for the fixed-cam vshift — hold it across all of InGame
+- ra: name the D_<address> globals so the star achievements can read their score
+- sfxmod: accept the Audio tool's own export name, and report the WAV rate
+- sfxmod: play a replacement at its own sample rate
+- ra: evaluate for a whole session, not only the frames that are gameplay
+- fix: keep the fixed-cam vshift off during cutscenes — regression from bca9303ff
+- fix: match flame no longer sits below Harry's hand on a fixed-angle camera
+- fix: quick weapon switch shuts the gas weapons down, so drill smoke stops
+- fix: quick weapon switch silences the outgoing weapon's sound too
+- fps: let the menus, map and puzzle screens follow the fps cap
+- config: document menu_fps_unlock in the shipped template
+- lang: report when a fan disc has dubbed a line and dropped its subtitle
+- feat: expose bullet decals in the launcher and the in-game PC options
+- launcher: translate the Controls window and the alt-cam help dialog
+- launcher: nudge checkBox1 2px right on the main window
+- fix: move Bullet_Decals to the Controls page — Graphics overflowed
+- fix: bullet decals no longer show through Harry — OT bucket was on blood's scale
+
+## beta-2026.08.14.1 -- 2026-08-14
+- Added achievement viewer to main menu, press map key 
+- Added text to main menu to show achievement button (only visible when they're enabled)
+- Fixed inventory text to be in Japanese in NTSC-J
+- Fixed issues where items were invisible in some cases (may be more, please report)
+- Fixed regression that caused gray puzzle screen for eclipse door
+- Finally actually fixed single frame of classic camera being visible when opening the inventory while in another camera mode
+- Fixed single flame flickering of gray when pausing while it's dark outside
+- Hash spoof option to support achievements in fan translations\NTSC-J0
+- Added audio editing support in the Mod Manager, supports editing and playing audio in VAB files, full VAB replacements, and individual WAV replacements
+- Move inventory pickups based on resolution and not by a fixed amount
+- Fixed resolution detection in launcher and sorted from highest to lowest
+- Released Trenchbroom fork level editor in Discord and game now supports map editing and replacements (maps go in gamedata\load\BG, only replacements work for now)
+
+Commit summaries:
+- inventory: cover the screen before handing over, like the map screen does
+- combat: time-exit the release and get-up states like DamageTorso already does
+- achievements: browse the whole set from the title screen with Map
+- achievements: fix the browser's black backdrop, badges, close and polish
+- achievements: hold off the attract reel and the game cursor while browsing
+- achievements: close the panel with the same swish, 25% quieter
+- achievements: hover, click-through detail cards, PC-direction scrolling
+- achievements: make clicking work, and navigate the list without a mouse
+- achievements: stop the panel re-firing every input, every frame
+- launcher: Audio tool — browse, preview and export sounds from a VAB bank
+- launcher: show each sound's real in-game pitch instead of guessing 44100
+- assets: commit the achievement UI/unlock cues
+- launcher: replace and repack samples in a VAB sound bank
+- audio: replace individual sounds with loose files, no repacking needed
+- docs: say plainly that this is a port, not a recompilation
+- Refine README content for better readability
+- NTSC-J: Japanese inventory names and descriptions
+- achievements: never toast RA's informational pseudo-achievements
+- NTSC-J: the item-text getters rejected the Japanese tables
+- audio: invalidate sound overrides by SPU slot, and honour a loose whole bank
+- achievements: fix the RA_MAP capacity guard dropping every entry
+- achievements: optional disc-hash override so unmatched discs can load a set
+- achievements: add the verified USA hash alias
+- clear: gate the FOG assignment on a drawn world, not the whole branch
+- docs: TrenchBroom level editor - port support, data model, trigger reference
+- inventory: keep applying the alt camera across the gameState handover
+- achievements: make the RAWHY dump read what the condition actually reads
+- title: show which button opens the achievement browser
+- title: drop the achievement hint below the copyright line
+- launcher: RA hash-bypass toggle, no sign-in prompt, and detect ultrawide modes
+- map5_s03: name the shelf pickups so they are not invisible
+- items: scale the inventory Y nudge to the framebuffer, not a fixed 50
+- map5_s03: the shelf shotgun ammo used the rifle model
+- inventory: apply the alt camera on the debug-controls path too
+- Bump PsyCross: pause-entry grey flash (shadow gate latched at BeginScene)
+- shadows: keep them on the pause-entry frame, which still draws the world
+- Revert "shadows: keep them on the pause-entry frame, which still draws the world"
+- pause: don't arm the freeze on a tick that still renders the world
+
+## beta-2026.08.10.1 -- 2026-08-10
+- Quick heal: No longer works or flashes green without health items. It also notifies you what was used.
+- Levels: Can now load larger IPD files for map editing purposes.
+- Launcher: Fixed small issue where it added extra empty launcher blocks to the config.
+- Fixed fog strength setting in config not being applied until adjusting the fog ingame.
+- Fixed issue where a single frame of the classic camera would show when opening the inventory while using an alternate camera.
+- Fixed issue where pressing warm reset key (default esc) while in brightness menu kept brightness bar on screen.
+
+Commit summaries:
+- quick heal: require a real healing item, and report what was used
+- ipd: load loose map chunks bigger than the original file
+- fix: apply fog_strength at boot, and stop the launcher stacking empty blocks
+- launcher 2026.8.10.1 — stop stacking empty "## Launcher" blocks
+- inventory: no classic-camera frame when opening on an alternate camera
+- Revert "inventory: no classic-camera frame when opening on an alternate camera"
+- inventory: carve the screen gameStates out of the alt-camera stand-down
+
+## beta-2026.08.08.1 -- 2026-08-08
+- Door transitions now properly fade to black. Loading is  also much faster.
+- Examining things now pauses the game the way it does on PSX. Before this only memos and
+  item pickups froze the world.
+- New Fog Strength slider in the in-game options (PC Options) so that it doesn't need the console.
+- Added a draw distance setting to go with it — `draw_distance_pct` in config.cfg, 100 is
+  vanilla and 200 roughly doubles how far you can see. Lower the fog and raise this
+  together, either one on its own won't do much. At higher settings
+  distant buildings can occasionally sort in front of each other.
+- Play as: nine more characters, 14 total. Each one uses its own body proportions now
+  instead of being stretched onto Harry's skeleton, characters with extra bones sit
+  correctly, and the female characters have an optional voice pitch shift (sound effects
+  only, on by default). 
+- Item models can be replaced with modern glTF models now — full colour, no PSX vertex
+  limits. A texture embedded in the model takes priority over a texture pack, slightly
+  out-of-range UVs get clamped instead of the model being rejected, and the size limit
+  comes from the file itself. Also fixed the models rendering
+  see-through on the pickup and take screens.
+- Mod Manager: TMD <-> OBJ converters added, so item models can be edited in Blender and
+  converted back. Added a TMD replace path that works out the correct texture bank itself
+  instead of asking you. Fixed character OBJ exports coming out with wrong UV scaling —
+  they were being scaled to a fixed 256x256 instead of the character's own texture.
+- Texture packs: the VRAM limit is worked out from your actual GPU now, textures you
+  haven't used get evicted instead of the budget filling up, and zip readers are cached.
+  Fixed a bug where the budget could deadlock and leave you stuck on native textures for
+  the rest of the session.
+- Fixed monsters grabbing you in a map that doesn't have their reaction animations and
+  freezing you in place permanently — mostly hit when spawning monsters into maps they
+  don't belong in. Also fixed the Romper pin dropping you through the floor.
+- Fixed the alt cameras (FPS/TPS/OTS) dropping back to the classic camera whenever you
+  opened a menu or examined something.
+- Fixed the minimap running off the edge of the screen when pillarboxed.
+- Preload Chunks moved out of the in-game options since it needs a map reload anyway and
+  the launcher still has it; Disable Culling took its place.
+- Launcher no longer overwrites settings in config.cfg that it doesn't own. It was
+  reverting things like resident_textures and deleting keys you'd added by hand.
+- Launcher will warn you if resident_textures is set to 0, which can cause graphical glitches (like rainbow bars in a couple of cutscenes) and is recommended to be 1 unless you have issues with it on.
+
+Commit summaries:
+- clear: only use the fog color on a frame that actually drew the world
+- alt cameras: stop standing down for menus and examines
+- texpack: derive the VRAM budget from the GPU, evict LRU, cache zip readers
+- docs: record the texpack budget/LRU/zip-reader fixes
+- minimap: keep the panel inside the frame when pillarboxed
+- playas: give each swapped character its own skeleton proportions
+- playas: restore Harry's own skeleton on swap-back, and cover the load screen
+- map7_s03: record that the lightning off-screen branch is retail-faithful
+- tools: verify the reconstructed map7_s03 boss tables against the retail disc
+- overlay: target core-profile GLSL, and stop shader failures being silent
+- playas: nine more characters, and generic support for extra bones
+- playas: mark which characters are female
+- playas: seat extra bones at their authored pose, and un-ghost the player
+- playas: optional voice-pitch shift for the female characters (SFX only)
+- playas: default the female voice pitch on
+- playas: lift the female voice further, but not the breathing with it
+- playas: raise the female voiced pitch to 140, hold breath at 118
+- Bump PsyCross: arm/lapse logging for the cutscene rainbow bar
+- texpack: report live pack GL bytes against the budget in the cache stats line
+- launcher: TMD <-> OBJ converters — item models are editable
+- launcher: TMD replace path + derive the page-14 bank instead of asking
+- launcher: stop clobbering config.cfg settings the launcher does not own
+- launcher: warn at Play when resident_textures is off
+- playas: stop an oversized skin TIM overrunning the chara CLUT shelf
+- docs: record the PsyCross PR triage (5 PRs: 3 adapted, 2 closed)
+- items: modern glTF item models (adapted from PR #97 + PsyCross PR #16)
+- docs: record the completed glTF adaptation
+- docs: correct the glTF item scope -- it already covers the bank TMDs
+- items: an embedded glTF texture now outranks a pack override
+- items: tolerate and clamp small UV overhang instead of rejecting the model
+- items: run the UV-area test on authored UVs, not clamped ones
+- items: derive the glTF geometry cap from the buffer, not a guessed 8192
+- items: report the glTF texture source per surface, not once per item
+- ILM->OBJ: scale UVs by the character's own TIM, not a fixed 256x256
+- launcher 2026.8.8.1 - ILM->OBJ UV scaling fix
+- items: stop the OT0 sanitizer stripping the glTF modern-mesh packet
+- docs: index the OT0 sanitizer packet-whitelist fix and the chara UV scaling fix
+- PsyCross: modern item mesh depth-comparison fix (see-through back faces)
+- console: CULL toggles chunk visibility culling live
+- items: fix the fully see-through glTF model on the pickup take screen
+- playas: draw one face on the puppet nurse and doctor, not all three
+- docs: record the puppet nurse/doctor triple-face fix
+- texpack: stop the pack budget deadlocking into permanent native art
+- combat: don't enter a grab the current map has no reaction anims for
+- docs: record the foreign-monster grab freeze and its guard
+- combat: guard the Romper pin too, and stop it dropping you through the floor
+- fix: freeze the world for every examine, and stop doors cutting to black
+- console: FBDAMP tunes the framebuffer-feedback gain live
+- fix: fade doors to black BEFORE the blocking load, not during it
+- perf: drain blocking loads at disk speed, not one sector per vblank
+- transitions: halve the door out-fade, make it tunable, add a timing probe
+- transitions: halve the load-screen minimum hold (60 -> 30 frames)
+- options: draw-distance scale + Fog Strength row (replaces Disable Culling)
+- options: swap Preload_Chunks for Disable_Culling on the System page
+- options: correct the Fog_Strength comment — Disable_Culling is back on the page
+
+## beta-2026.08.05.1 -- 2026-08-05
+- Fix flickering when opening map or pausing, and also reduced time to open map.
+- Allow hopping backwards when sprint + back is pushed in tps and ots camera modes
+
+Commit summaries:
+- pause/map: kill the grey flash on exit, and stop the map open crawling
+- backstep: allow the sprint+back hop on TPS/OTS, gated on the run control
+- backstep: restore the landing double-step sound on TPS/OTS
+
+## beta-2026.08.04.1 -- 2026-08-04
+- Texture packs: the stutter while walking around with a pack installed should be
+  largely gone. The game was rebuilding HD textures in bulk in the middle of a frame —
+  a doorway could cost over a second in one frame. It now builds them a few at a time,
+  only for what is actually on screen, spread across frames.
+- Texture packs: much lower VRAM. The game was building every colour variant of each
+  texture (about 9) when only 2-3 are ever used, and the memory limit was a fixed 6 GB
+  regardless of your card. It now builds only what is drawn and scales the limit to the
+  VRAM your GPU reports, which should stop issues on cards under 12 GB.
+  NOTE: There may be pop-in, please let me know if it is severe. Converting to DDS is advised if you haven't already.
+- Borderless: the mouse no longer wanders onto your other monitor while you are picking
+  up items, in the inventory or in menus. Alt+Tab and the Windows key still get you out.
+  Set `confine_cursor = 0` in config.cfg for the old behaviour.
+- Fixed a texture-pack bug where a slot could end up rendering a mix of two different
+  textures.
+- Quick save is now blocked during a boss fight (Split Head, Twinfeeler, Floatstinger,
+  Bloodsucker, Cybil, Incubus/Incubator).
+- Added playas console command that allows you to change characters between Lisa, Cybil, Kaufmann or Dahlia. Persists in config. Has some issues with some characters that will be fixed later (mainly just odd proportions). Can also toggle in while in the animation viewer mode (press k, then - and = with debug controls enabled)
+- Mod manager has been updated with an improved model viewer that can now view every model type in the game, as well as convert them. Improved OBJ > ILM automatic conversion and character replacements are much more doable. The game supports larger TMDs as well now so those can be replaced more easily too.
+- Fixed some issues that caused corruption in tree billboards or other aspects of the game in a long session after certain points in the game.
+
+Commit summaries:
+- playas: play as Lisa, Cybil, Kaufmann or Dahlia — character swap groundwork
+- main_pc: replace a literal NUL byte with the '\0' escape
+- big TMD: oversized loose item models for UNQ close-ups and IT packs
+- launcher: Model Viewer 2.0 — props, TMDs, ANM playback, editable ANM JSON
+- converters: seam lint, atlas gutters, and eight review fixes
+- v7 welds: cross-part joints for high-poly models — the CJ seam root fix
+- launcher: one reusable Model Viewer window + per-material texture atlas
+- launcher: surface the weld count in the high-poly success dialog
+- Fix EUR tree billboards turning to garbage squares after TV room
+- launcher: put the Model Viewer button back where it can be seen
+- launcher: size the Mod Manager tool column to its labels, not to 78px
+- docs: record the EUR BG_ETC/TV2 stomp diagnosis
+- borderless: keep the pointer inside the window while the game has focus
+- texpack: size the VRAM budget to the GPU, and fix three budget/slot defects
+- texpack: compose pack rows on demand instead of eagerly during the load
+- quicksave: refuse to quick save while a boss is alive
+
+## beta-2026.08.02.1 -- 2026-08-02
+- Fixed bug that could cause inventory to be replaced when going through a door after a weapon was unequipped.
+- Fixed bugs that could cause PAL to freeze at certain parts of the game.
+
+Commit summaries:
+- PAL documents: render ten lines like retail, and page instead of locking
+- PAL documents: carry the ~C colour and ~M/~T alignment across a page break
+- PAL documents: correct the line count and alignment origin of a broken page
+- docs: index the PAL document line-cap soft-lock fix
+- inventory: stop the starting-loadout block from eating live inventories
+
+
+## beta-2026.07.31.2 -- 2026-07-31
+- Fixed issue with pink menu text caused by controller settings menu fix.
+
+Commit summary:
+- fix pink menu text: queue FONT8NOC before FONT16, not after
+
+
+## beta-2026.07.31.1 -- 2026-07-31
+- Attract videos enabled! These are the videos that play if you sit AFK at the main menu. They may desync but they work. Set attract_demos = 0 in your config to disable them.
+- Skip intros added back to launcher (by popular demand), replaces "Disable Culling" which can still be adjusted ingame or via the config.
+- Skip intros can also be set to go straight to the game. Thanks to keylimesoda for the PR this came from (#84).
+- The controller configuration screen works again, kind of. For now, TYPE 1 is USER and shows what you actually have bound in the launcher. Will figure out what to do with the others. One will probably be used to show alternate controls.
+- Fixed chunks of character models disappearing
+- Fixed the community center TV screens sliding around on their own if you were using any camera other than the default
+- Fixed the achievement popup showing up as a black box. It would only look right in some casese if you happened to be aiming.
+- Fixed cancelling out of the quick load screen dumping you back at the main menu, which also left half the menu as garbage and made OPTION play a random sound effect
+- Fixed Harry standing in the fire in the hospital instead of backing away from it before he kneels
+- Fixed walking and running distance not being counted on the results screen unless you were on the classic camera
+- 2D controls were quietly making Harry run 25-40% slower than he should. Fixed, he runs at the proper speed now.
+- Flashlight lens flare was going full brightness across almost the entire range instead of only when the light turns toward the camera. It ramps smoothly now.
+- Minimap position setting no longer runs off the edge of the screen (Top L, Top R, Bottom L, Bottom R)
+Note: A few of these are untested, like the fire scene. Let me know if any of them are still wrong.
+
+Commit summaries:
+- bones: keep hide-list terminators in the same object as the list
+- Alt cameras: apply before the map hook; toast: pin the blend equation
+- docs: index the alt-camera ordering + toast blend-equation fixes
+- launcher: swap the Disable Culling option for Skip Intros
+- stats: count walk/run distance on the PC movement shim path
+- saveload: back out of the load screen to wherever it was opened from
+- 2D control: run at the authored speed; cutscenes: stop overriding the heading
+- controls screen: restore the labels, rename TYPE 1 to USER, report the binds
+- attract mode: enable the recorded gameplay demos on PC
+- options: abbreviate the minimap corner labels; demos: keep their recorded state
+- skip_intros becomes a level; launcher gets a Skip Intros dropdown
+- flare: drop the stale facing-knee compensation
+- launcher: nudge the Skip Intros row into alignment
+
+
+## beta-2026.07.30.1 -- 2026-07-30
+- Fixed gray void in door transitions
+- Fixed see-through item faces for items the player can pick up
+- Minimap no longer shows areas where you don't have a map, config option "minimap_require_map" can be set to 0 for old behavior
+- Added givemap command to give current map for the area you're in
+- Made blue minimap markers red
+- Added minimap size setting (60-120%)
+- Minimap player arrow now scales with the minimap size instead of staying the same size
+- Minimap option now controls shape as well, so Minimap = Off, Square, Circle. (Apologies, you may have to set your shape again if it's wrong)
+- Fixed menus being blurry or having artifacts with HD texture packs even with menu filtering turned off
+- Potential fixes for permanent rainbow texture corruption, this time on every kind of surface instead of just one
+- Texture pack log now tells you which palette rows a pack didn't replace, so mixed HD/original models are easier to track down
+Note: If you're on an AMD gpu and want to test the corruption fix, search your config for resident_textures and remove the line if it exists.
+
+Commit summaries:
+- Fix Linux build: RTLD_DEFAULT needs _GNU_SOURCE
+- minimap: red markings, and fold shape into Minimap to free a row for scale
+- minimap: only show the map once it has been found
+- minimap: scale range 60-120%
+- take-screen see-through FIXED; [ITEMDEPTH] probe hooks
+- console: add givemap to grant the area map Harry is standing in
+- bump PsyCross: unbacked bit-15 clut guard on all textured prims
+- texpack: name the CLUT rows a pack does not replace
+- minimap: scale the player arrow with the panel, not just the map
+- bump PsyCross: menus honour menu_filter for HD-replaced art
+
+
+## beta-2026.07.29.2 -- 2026-07-29
+- Minimap: honour HD texture replacements, like the map screen does
+- FMV replacements work again with any of ffmpeg 6, 7 or 8 instead of one exact version
+- Launcher reports which ffmpeg you have or can download it for you
+- Fixed rainbow lines flashing between rooms in widescreen
+- Cutscenes no longer take the per-pixel flashlight dim or a custom FOV
+- Pickup take-screen items no longer render see-through (radio antenna, shotgun shells)
+
+## beta-2026.07.29.1 -- 2026-07-29
+- RetroAchievements support (RA button in launcher) softcore only for now
+- 2D Controls Fix
+- Fix for minimap wrong direction in places and no map markers 
+- Water effects added and fix for flashlight on water effect
+- Fix garbled numbers in menus in some cases
+- Full DDS support for texture packs and load texture replacements
+- Fixed mod manager DDS converter
+- Full extraction support for textures with composite images for almost all textures, now there is one image to work with for texture replacements
+- Fix for rainbow cutscene corruption that still appeared in some places
+- Plate of Queen object rotation fixed
+- Fix for Incubus lightning
+- Fix for bottle throw scream 
+- Dahlia teleport effects Restored
+- VHS Subtitles fixed
+- Lisa FMV music fix
+- Fix for puzzle objects like Indian Runner padlock having see through faces
+- Fix flashlight lens flare flicker
+- Fix for FOV affecting cutscenes
+- Elevator door fix
+Note: Some are untested and I may be forgetting some. Please let me know if anything listed is still not fixed or if you've reported an issue that is fixed now.
+
+Commit summaries:
+- water: revert func_8008D990 changes — restore chest lens flare (regression fix)
+- water: restore caustic generator — animated water surface via VRAM scratch
+- stubs: give D_8002B2CC its real bytes ("DWAVE") — water caustic material name
+- water: restore reflective octagon in all modes (blowout fixed engine-side)
+- map3_s04: local zero rotation for D_800CB35C (Plate of Queen stood on edge)
+- gfx: cancel armed one-shot SZ payload at every Gfx_MeshDraw exit (depth Step 2)
+- hires: reject virtual-clut lookups from 16bpp tpages (cutscene rainbow bar)
+- flare: fix Q12/Q8 unit mismatch in chest lens-flare facing factor
+- map7_s03: force sp10/sp18 adjacency in Incubus lightning drawer
+- map7_s03: remove the bottle-throw shriek lead (premise disproven)
+- map6_s04: fix 64-bit FX pool offset (Dahlia teleport FX never rendered)
+- map-msg: exempt J2 single-audio-file pages from pcVoiceHold (VHS subs)
+- fmv: model PSX SsSetSerialVol movie-audio attenuation (Lisa FMV music)
+- items: extend the see-through depth fix to full-screen puzzle models
+- fov: restore current projection, not gameplay default, on FOV release
+- docs: index the 0727 user-report batch fixes
+- Bump PsyCross: PSX polygon size rule (elevator/stair wedge fix) + wiring
+- altcam: re-base orbit yaw to the spawn heading on area loads
+- pgxp: depth Step 3 decomp side — OT viewZ-shift registration + console knobs
+- Bump PsyCross: depth Step 4 — per-vertex world depth (distant-gap fix)
+- Bump PsyCross: per-vertex item-pass depth (ammo-box take-screen fix)
+- Bump PsyCross: [PGXPDEPTH] probe upgrade (depth Step-4 anomaly hunt)
+- pgxp: depth Step 6 — PGXPDEPTHSTATS console cmd + Port_Fixes_Index entry
+- map _strdup to strdup on non-Windows platforms (#77)
+- launcher: DDS converter survives huge packs and long paths (v2026.7.27.1)
+- fmv: threaded decode-ahead pipeline + correct colorspace (4K HEVC)
+- texpack: prefer .dds over .png on every loose/pack load path
+- Bump PsyCross: [ITEMDEPTH] item-pass discriminator probe
+- control2d: real release-to-neutral basis latch (fix camera-cut ping-pong)
+- build: stop shipping -O0 (default RelWithDebInfo + decomp UB guards)
+- launcher: fix DDS gamma (--ignore-srgb) + safer delete-source (v2026.7.27.3)
+- texpack: kill the room-entry hitch (blit fast path, upload realloc, scan, budget)
+- launcher: refuse to wreck DuckStation packs on DDS convert (v2026.7.28.1)
+- texpack: composite BC7 sub-rect entries (converted packs were ~99% inert)
+- png: route stb_image's IDAT inflate through miniz (-22% decode)
+- docs: index the BC7 compositing + PNG inflate work
+- launcher: converting a whole pack is now the right answer (v2026.7.28.2)
+- launcher: cut the convert dialogs down to what matters (v2026.7.28.3)
+- launcher: say nothing-to-convert instead of encoding 0 files (v2026.7.28.4)
+- build: vendor rcheevos as a submodule for RetroAchievements support
+- RetroAchievements: softcore client with PSX-address translation
+- launcher: RetroAchievements sign-in (v2026.7.28.5)
+- texpack: dump every replaceable texture as a loadable pack entry
+- RetroAchievements: gate to the USA disc (address table is region-specific)
+- tools: composite reference images for 995 of 996 TIMs (was 43)
+- RetroAchievements: PAL/NTSC-J via spectator mode instead of a hard region block
+- launcher: reference composites for every texture, not just characters (v2026.7.28.6)
+- tools: warn when a sheet is too palette-shared for a composite (v2026.7.28.7)
+- text: fix garbled numbers >= 10 everywhere (save time read "4 : 0F : 0K")
+- texpack: same sampling for .dds as .png, and don't blit exact twins twice
+- texdump: dump per-object crops instead of whole sheets, + twin dedupe
+- launcher: ask before auto-extracting, and Cancel on every long op (v2026.7.28.8)
+- launcher: wire btnRA to the RetroAchievements dialog (v2026.7.28.10)
+- config: everyone on the resident-texture pool, including AMD
+- config: restore ra_unverified_region (HEAD did not compile)
+- region: loose overrides reach PAL-renamed files, fan discs work everywhere
+- launcher: reject NTSC-J first prints, extract patched discs (v2026.7.28.9)
+- launcher: fix RA dialog layout — privacy line was clipped (v2026.7.28.11)
+- RetroAchievements: log diagnostics to SilentHill.log, not stdout
+- log: SH_LOG/SH_WARN persist to SilentHill.log; RA diagnostics stop toasting
+- RetroAchievements: map the 9 further globals the live set reads
+- RetroAchievements: submit unlocks on every region (address map verified)
+- RA: animated achievement toast (badge, outlined text, trophy sound)
+- RA: fetch badge art for the unlock toast
+- RA: rebuild the PSX address map automatically from the symbol files
+- RA: infer symbol spans from the next address, not a 4-byte default
+- RA: RAWHY — dump an achievement's conditions next to the values we serve
+- RA: report all PSX RAM as readable — one unmapped byte was disabling the set
+- RA: RAWHY was only dumping the core group, hiding the real conditions
+- RA: answer the set's region probe with the USA boot serial
+- RA: correct the synthesized boot serial — probes are big-endian
+- RA toast: keep all GL work on the render thread
+- Show a real error when no disc image is present (PR #80, all platforms)
+- RA toast: load fonts and sound game-side, not from the GL hook
+- RA toast: stop gl_init leaking its bindings into PsyCross
+- minimap: correct per-area heading, and draw the paper map's annotations
+- control2d: basis from the camera's look axis, not the bearing to Harry
+
+## beta-2026.07.28.1 -- 2026-07-28
+- Fix for rainbox cutscene corruption that still appeared in some places
+- Fix Plate of Queen object rotation being OFF
+- Fix for Incubus lightning (untested)
+- Fix for bottle throw scream 
+- Dahlia teleport effects Restored
+- VHS Subtitles fixed
+- Lisa FMv music Fix
+- Fix for puzzle objects and handgun ammo having see through faces
+- Fix flashlight lens flare flicker
+- Fix for FOV affecting cutscenes
+
+- water: revert func_8008D990 changes — restore chest lens flare (regression fix)
+- water: restore caustic generator — animated water surface via VRAM scratch
+- stubs: give D_8002B2CC its real bytes ("DWAVE") — water caustic material name
+- water: restore reflective octagon in all modes (blowout fixed engine-side)
+- map3_s04: local zero rotation for D_800CB35C (Plate of Queen stood on edge)
+- gfx: cancel armed one-shot SZ payload at every Gfx_MeshDraw exit (depth Step 2)
+- hires: reject virtual-clut lookups from 16bpp tpages (cutscene rainbow bar)
+- flare: fix Q12/Q8 unit mismatch in chest lens-flare facing factor
+- map7_s03: force sp10/sp18 adjacency in Incubus lightning drawer
+- map7_s03: remove the bottle-throw shriek lead (premise disproven)
+- map6_s04: fix 64-bit FX pool offset (Dahlia teleport FX never rendered)
+- map-msg: exempt J2 single-audio-file pages from pcVoiceHold (VHS subs)
+- fmv: model PSX SsSetSerialVol movie-audio attenuation (Lisa FMV music)
+- items: extend the see-through depth fix to full-screen puzzle models
+- fov: restore current projection, not gameplay default, on FOV release
+- docs: index the 0727 user-report batch fixes
+- Bump PsyCross: PSX polygon size rule (elevator/stair wedge fix) + wiring
+- altcam: re-base orbit yaw to the spawn heading on area loads
+- pgxp: depth Step 3 decomp side — OT viewZ-shift registration + console knobs
+- Bump PsyCross: depth Step 4 — per-vertex world depth (distant-gap fix)
+- Bump PsyCross: per-vertex item-pass depth (ammo-box take-screen fix)
+- Bump PsyCross: [PGXPDEPTH] probe upgrade (depth Step-4 anomaly hunt)
+- pgxp: depth Step 6 — PGXPDEPTHSTATS console cmd + Port_Fixes_Index entry
+- map _strdup to strdup on non-Windows platforms (#77)
+- launcher: DDS converter survives huge packs and long paths (v2026.7.27.1)
+- fmv: threaded decode-ahead pipeline + correct colorspace (4K HEVC)
+- texpack: prefer .dds over .png on every loose/pack load path
+- Bump PsyCross: [ITEMDEPTH] item-pass discriminator probe
+- control2d: real release-to-neutral basis latch (fix camera-cut ping-pong)
+- build: stop shipping -O0 (default RelWithDebInfo + decomp UB guards)
+- launcher: fix DDS gamma (--ignore-srgb) + safer delete-source (v2026.7.27.3)
+- texpack: kill the room-entry hitch (blit fast path, upload realloc, scan, budget)
+
+## beta-2026.07.26.2 -- 2026-07-26
+- Fixed flashlight lens flare not working in flashlight modes other than classic.
+
+## beta-2026.07.26.1 -- 2026-07-26
+- Implemented PGXP fixes from PR 50/51, courtesy of nikizhy - Part could not be implemented yet without breaking non-PGXP, but will be done in the future.
+- Adjusted thirdperson\over the shoulder cameras so that camera is oriented to Harry's head, makes using with collision much more tolerable
+- The game should now support DDS BC7 in texture packs and replacements, but hasn't been tested
+- Also added DDS conversion tools to Launcher
+- Fixed sewer flashlight glare that happens with non-default flashlight or PGXP (WIP, reflection needs more work)
+- Added/fixed ability to skip credits
+- Fixed a major issue with certain types of prims, was the likely source behind many of the corruption issues 
+- Fixed clock still counting when paused 
+- Fixed repeated text in important newspaper article
+- Restored puppet doctor SFX
+- Adjust crosshair reticle slightly so that it's more accurate to where bullets land (full aiming fix coming)
+- Added early WIP model replacement tool to launcher's mod manager. Please note that mod manager tools are a WIP and absolutely will have issues until I can focus on them, especially for models.
+
+Resuming bug fixing tonight, more updates in the coming days.
+
+Commit summaries:
+- TPS/OTS: frame Harry's head, not his back, when the camera collides
+- Free-aim: land bullets on the crosshair (fix vertical offset + far-shot drop)
+- launcher: multi-texture atlas prep for high-poly models (AtlasPrep.cs)
+- launcher: one-click high-poly + auto-atlas in OBJ -> Mo
+- texpack: BC7 .dds support for DuckStation packs + per-CLUT-row loose sets
+- launcher: geometry pre-passes for high-poly — winding fix + L/R mirror
+- launcher: run geometry pre-passes in the high-poly chain
+- launcher(mod-manager): PNG<->BC7 .dds converter (texconv) + DDS button
+- launcher: seam-collar geometry pass (opt-in, rough)
+- launcher: high-poly replacement dialog (browse + checkboxes + Help)
+- texpack: whole-image loose BC7 .dds on the VRAM path too (not just pool/chara)
+- launcher: OBJ -> Model opens the high-poly dialog directly + Simple button
+- launcher: anchor FixWinding to vertex normals, not signed volume
+- Bug batch: pause clock, Nowhere newspaper repeat, puppet doctor SFX, credits skip
+- Bump PsyCross: harden ParsePrimitive against zeroed NOP prims (diff=-4 flood)
+- crosshair: nudge TPS/OTS reticle down to center the bullet drop
+- Bump PsyCross: integrate PGXP exact-transform twins (drop unfinished depth channel)
+- Bump PsyCross: flashlight v_viewpos screen-linear (fix PGXP sewer-water glare)
+- water: opt reflective octagon out of per-pixel flashlight (fix PGXP sewer glare)
+- Bump PsyCross: cap per-pixel flashlight under PGXP (sewer-water white blowout)
+- water: dim chest-light flare under PGXP+per-pixel (fix sewer-water white blob)
+- water: skip reflective octagon under PGXP+per-pixel (decisive fix for white blob)
+- water: remove animated gray reflection rectangle (func_8008E794)
+- water: restore Harry-reflection blob (E794), remove gray-rectangle flare (D990)
+- water: skip func_8008E5B4 (removes leaked animated gray rectangle)
+
+
+## beta-2026.07.23.1 -- 2026-07-23
+- New Polish language option in PAL thanks to rafalekkB!
+- Also able to choose "uncensored" PAL in launcher now
+- Added optional minimap (still needs an update for marked locations)
+- Fixed black flash when opening Menus
+- Fixed some crashes
+- Model viewer and WIP model support in mod manager
+- Added brightness, saturation, and contrast menu over original brightness Menu
+- Adjusted 2D controls to be like SH2
+- Discord Rich Presence support added (will show map and difficulty you're playing on in Discord if you add it)
+- Fixed ultrawide culling and other ultrawide issues
+- Fixed jumping camera when examining items and item positioning
+- Fixed Cybil boss fight
+- Added MP4/MKV and multiple codec support for replacement FMVs
+- Uncompressed ZIP support for texture packs
+- FMV replacements recognized in mod manager by archives containing video files
+- Resizable controls Window
+- Multiple crosshairs added, cycle with backspace ingame or in launcher
+- Fixed some manual reload issues
+- Support for DDS BC7 for replacement textures
+- Restore pauses between some voice lines
+- Fixed Lisa cutscene and Cybil cutscene issue (may still need to fix Kaufmann scene, to do next update)
+- Added exit button to main menu
++ more probably, check commits
+
+Commit summaries:
+- Restore baseline HD-font rendering: revert no-mipmap + glyph advance-clip
+- fsqueue: stop stale loose-override stash bleeding onto reused chunks (BFLU-on-building)
+- docs: index the BFLU-on-building + HD-font ghost regression fixes
+- docs: correct HD-font ghost entry — pre-existing bilinear atlas bleed, not our regression
+- hires: point-sample the HD font atlas to kill gutterless-cell bilinear ghost
+- map7_s03: fix ~8.5s freeze-at-impact in the Good+ ending bottle scene
+- fmv: optional ffmpeg fallback for h264/h265/vp9/av1 + mp4/mkv/webm
+- combat: manual reload — don't reload a full clip / re-fire (fixes controller double-up)
+- combat: stop free-aim reload double-SFX when the camera is flipped mid-reload
+- minimap: config-only top-right overlay — SPIKE (pipeline + Harry tracking)
+- minimap: fix crash on enable + move option to next page
+- minimap: draw the real per-area paper map + Harry's marker (PC-native GL)
+- minimap: GL checkpoint trace + two real hardening fixes for the enable-crash
+- minimap: fix crash — texture upload clobbered PsyX's texture binding
+- minimap: fix save-load crash (Fs read injected mid-load) + top-left circular panel
+- minimap: draw to the default framebuffer (was rendering into PsyX's bound FBO)
+- fix: kill the one-frame black-sky flash when opening the status menu / map
+- minimap: square panel, much smaller marker, and stop clobbering PsyX's scissor box
+- npc: spawned human actors loop their idle animation instead of freezing
+- minimap: never pump the FS queue — non-blocking, deferred map read
+- minimap: rewrite on PSX primitives — drop the raw-GL overlay entirely
+- fsqueue: key loose-override stash by FILE, not recycled queue pointer
+- minimap: draw the real area map, zoomed on Harry, via a hires-override pool slot
+- minimap: round again, with a black outline (triangle-fan discs)
+- minimap: add Shape, Corner and Opacity options on the last options page
+- cutscene: restore the PSX inter-line voice pause (minimum gap, Flauros-safe)
+- log: flush at most once per second to bound crash tail loss
+- reload: fix the frozen input edge cache + latch the request
+- docs: index the manual-reload edge-cache + latch fixes (5d94ae12f)
+- decals: match the blood-splat drawer so they stop showing through objects
+- clut_tool/ClutComposer: edge-bleed padding instead of copying the background
+- tools: ilm_obj.py -- ILM -> OBJ exporter
+- tools: ilm_obj.py import -- edited OBJ + original ILM -> new ILM
+- tex: BC7 .dds loose-texture support (4x cheaper than the RGBA8 path)
+- docs: s_GteScratchData2 array lengths are decomp artifacts, not a bug
+- launcher: in-process C# ILM<->OBJ converter + Mod Manager buttons
+- cybil(diag): log aim state at fire + reposition spot-pick (aims-away investigation)
+- cybil(diag): also log the scripted fixed-fire path (control 11) aim state
+- fix(cybil): compose the gun-elevation onto the arm pose instead of overwriting it
+- minimap: fix north-drift tracking + widescreen corner placement + 4:3 size
+- tools: fix ILM export geometry — rest pose, quad order, normals
+- banner: point the log header at our repo, not the upstream decomp
+- launcher: port the six ILM export geometry fixes to the C# converter
+- launcher: software-rendered model viewer in the Mod Manager
+- docs: staged plan for larger-than-original character models
+- Bump PsyCross: fix SetDrawOffset malformed OT prim (cutscene diff=-4 corruption)
+- Bump PsyCross: scene VRAM-scratch feedback fix (Lisa dream rainbow/atlas)
+- map4_s01: self-load AQRM.DMS in the Cybil-hole cutscene (func_800D3420)
+- Report PSX display-buffer origins so framebuffer feedback works
+- Revert the PSX display-buffer framebuffer store (RGBA vs RG8 corruption)
+- models: Stage 1 support for larger-than-original character models
+- Report PSX display-buffer origins for the framebuffer-feedback store
+- Bump PsyCross: feedback capture reads the presented viewport
+- fmv: load ffmpeg at runtime so the port ships enabled with no bundled DLLs
+- Bump PsyCross: damp loading-screen blur feedback to hardware strength
+- flashlight: stop the glow-mask subtractive blend leak + config fingerprint
+- chore: ignore transient .claude/worktrees
+- launcher: grow-mode in the Mod Manager + accept Milkshape `g` groups
+- Bump PsyCross: self-protecting framebuffer-feedback store
+- Menu QoL: rebalance PC options pages, drag sliders, stop hover-scroll
+- fmv: target ffmpeg 8 so Windows users can grab a current build
+- ipd: registry eviction + heap-lm leak fix — the cascading corruption class
+- Add an Exit row to the main menu, under Option
+- Closing the window during an FMV now actually quits
+- tools: --replace for full mesh replacement, with automatic seam welding
+- Aim Zoom to 200, and make the save list scroll bar draggable
+- Save list: pointer owns the scroll, so hover only highlights
+- ipd: validate the whole header + LM tail sentinel before reformatting
+- tools: warn when replacement geometry lands in the wrong part
+- Fix walking through walls when strafing in the alt cameras
+- Save list: thumb tracks the window, and the highlight stays in view
+- Bump PsyCross: per-read CD cursor (frankenbuffer root fix)
+- launcher: --replace and auto-weld in the C# converter + Mod Manager
+- Action binds: accept trigger axes, matching the PSX-button binds
+- perf: [PERF] frame telemetry — avg/worst ms + vblanks/frame every 256 frames
+- Bump PsyCross: remove per-frame dead 2MB readback + DrawOTag glFinish (Intel 10fps)
+- launcher: Model -> OBJ writes a textured MTL for Blender
+- 2d-control: SH2-style fast turn-in-place replaces the walk-while-turn arc
+- fps: suppress the AFK look-around idle while in first person
+- Bump PsyCross: [PGXP-SPIKE] guard-band clamp diagnostic
+- Fix manual reload never firing (aim-state gate wiped the request)
+- Fix the blue triangle on the brightness screen (out-of-bounds arrow)
+- Brightness screen: restore brightness + add contrast/saturation + color bar
+- Brightness screen: move the rows up and drop the stray bracket glyph
+- Bump PsyCross: Nowhere spike affine-drop + near-caster wedge reject
+- Brightness screen: anchor the value knobs to the selected row
+- Brightness screen: nudge the value knobs right to bracket the number
+- map7_s03: lead the Good+ bottle shriek to cancel PC XA startup latency
+- map7_s03: [INCUB] probe — bad/bad+ Incubator "stands there, no attack"
+- fix(build): include sh_log.h in unknown23.c for the [INCUB] SH_DBG probe
+- map7_s03: [INCUB-CUT] companion probe in Incubator_Update
+- map7_s03: [INCUB-ATK] probe at the boss projectile-spawn point
+- pc_port: v7 high-poly ILM path + wide-prim material bake
+- pc_port: moddable map-message text overrides (gamedata/load/text_overrides.txt)
+- items: freeze world-pickup at interaction start, not model-load end
+- map7_s03: fix bad-ending Incubator not attacking — arm its boss-FX pool
+- hires: pre-zero pool texture storage — fix AMD resident-texture garbage
+- config: default resident_textures OFF on AMD GPUs (known corruption)
+- modtext: capture the full ~J0(n) timing cue so overrides actually show
+- texpack: scale HD-pack memory budgets to system RAM (APU crash fix)
+- Integrate selectable PsyCross SPU backends
+- Isolate software SPU integration
+- Rename software SPU modes
+- Document software SPU output rates
+- Merge PR #70: selectable PsyCross SPU backends
+- PsyCross: repoint submodule at locally merged software-SPU branch
+- PsyCross: pick up lazy software-SPU construction
+- PsyCross: pick up reverb work-area reservation + audio test wiring
+- fmv: init SDL audio in the ffmpeg path so container FMVs aren't silent
+- Merge software SPU backends (PR #70 + PsyCross PR #13)
+- PsyCross: point submodule at merged master
+- localization: re-import tooling + Polish language pack
+- localization: runtime Polish language pack (EUR), 6th language slot
+- config: document language = pl (Polish PC-side pack, EUR only)
+- Merge PR #64: fix black inventory item models on LP64 (GsMapModelingData TMD header)
+- Merge PR #63: fix Air Screamer invisible on LP64 (GsCOORDINATE2.flg 4-byte layout)
+- lang: re-upload FONT16 on live language switch so pack glyphs appear
+- options: nudge volume bars right so long translated labels don't collide
+- 2d-control: lock the fixed-cam basis while held (fixes run-in-circles / veer)
+- localization: fix Polish options title "OPCJE S" -> "OPCJE"
+- localization: tool to add Polish glyphs to an HD FONT16.png pack
+- docs: RetroAchievements integration feasibility study
+- pc: Discord Rich Presence (current area on Discord profile)
+- pc: Discord presence — bake app id, journal/cheryl icons, difficulty line
+- 2d-control: travel along the move vector, not the lagging facing (fix circles)
+- options: align Contrast value column + tighten brightness-screen arrows
+- 2d-control: lock world move-heading on input change (fix hold-a-direction circle)
+- content: add `uncensored` toggle to restore Grey Children on PAL/EUR
+- fix: harden Puppet Nurse field_124 guard (Nowhere elevator crash)
+- options: drop the in-game 2D_Snap toggle (config-only now)
+- launcher: make the Controls window resizable + proportionally scaled
+- fix(cull): ultrawide interior edge void — the 6th, chunk-level cull site
+- fix(lock): center the map5_s01 combination-lock puzzle at wide aspect
+- fix(font): EUR mall FONT16 corruption — reclaim the tpage-12 font page
+- feedback: restrict the framebuffer blur to the loading screen
+- Revert "2d-control: lock world move-heading on input change"
+- fmv: slave ffmpeg video to the audio clock (fix mp4/mkv stutter)
+- launcher(mod-manager): detect mp4/mkv/webm/mov video archives as FMV mods
+- feat(crosshair): selectable reticle shapes (cross / dot / circle / dashes)
+- fix(aim): free-aim shots land on the reticle at any distance
+- launcher(mod-manager): read fully-stored .zip texture packs in place (no extract)
+- launcher(controls): drop the Immersive FPS head-tracking toggle (config-only)
+- feat(crosshair): Backspace cycles styles + launcher style dropdown
+- 2d-control: detect room cuts by camera-position jump, not bearing swing
+- Revert "fmv: slave ffmpeg video to the audio clock" — mp4s stopped playing
+- Bump PsyCross: Alt+Enter fullscreen on live modifier state (fix Enter alt-tab)
+- Bump PsyCross: take foreground on launch (fix Enter spawning extra game copies)
+- fmv: keep mp4 playback responsive + skippable when decode falls behind
+- fix: Air Screamer invisible on LP64 - narrow GsCOORDINATE2.flg to 4 bytes
+- ci: guard the Linux build against LP64 layout/render regressions
+- fix: black inventory item models on LP64 - read TMD header as 32-bit
+
+## beta-2026.07.18.1 -- 2026-07-18
+- Fixed more cutscene issues
+- Added 360 degree movement and snap turning option for 2d controls
+- Fix for cybil shooting awkwardly during boss fight (untested)
+- Fix for air screamers not dying properly
+- Cycle pc options pages with L1\R1
+- Option to enable bilinear filtering in menus
+- Add new control options: reload on controllers, quick heal and cycle weapons for both pc and controllers. Option to disable dpad movement so it can be bound to other things. Quick turn and rear look have also been added.
+- Fix for hd texture pack stuttering and crash after extended playtime
+- Added mod manager functionality to extract textures with CLUTs as a unified composite texture. Can then rebuild the cluts from the modified composite texture, and supports upscaled textures
+- Potential fix for school corruption on older hardware
+
+Commit summaries:
+- game: case-insensitive loose-file lookup (fixes loose mods on Linux)
+- Bump PsyCross: PGXP coplanar z-fighting fix (GL_ALWAYS static world)
+- Fix map6_s04 Flauros cutscene voice desync: resume-not-restart voice index
+- docs: Port_Fixes_Index entry for the Flauros voice-index resume-not-restart fix
+- docs: clean up and reorganize pc_port/docs
+- docs: fix inner CLAUDE.md keybinds + Enemy audit mojibake
+- tools: add clut_tool.py (compose/split character CLUT textures)
+- launcher: CLUT texture Build Reference / Rebuild tools in Mod Manager
+- map_msg: no-op the spurious PC restart of a multi-page cutscene chain (Lisa "temporary thing" double)
+- lang/region: mirror disc-region + JP map-text install decisions to SilentHill.log
+- texpack: skip redundant GL re-uploads (content-keyed) + graceful VRAM-OOM fallback
+- localization: extract the full English script for translation (1646 strings)
+- docs: add HDR / RTX HDR feasibility note
+- fix(clut): triangle prims bled a streak to UV (0,0) in the composite
+- localization: separate PC-options menu string file for translation
+- feat(clut): high-resolution Rebuild — accept HD reference edits
+- feat(launcher): "Build character reference composites" on Extract BIN
+- feat(2d-control): full 360 analog turning + optional snap-to-direction
+- fix(cybil): frame-scale her yaw so the gun doesn't swing at high FPS
+- fix(air-screamer): kill fires without a menu toggle (relocate death gate)
+- feat(options): L1/R1 (LB/RB) skip PC-options pages
+- feat(input): config binds for reload/cycle-weapons/quick-heal + disable-dpad (part 1)
+- feat(#1): optional bilinear filtering for menus / 2D screens
+- feat(#2): reload-to-controller + Cycle Weapons + Quick Heal (part 2)
+- feat(#2): wire disable_dpad_movement (part 3)
+- pc-port: reinstate [ / ] position markers as LOGA/LOGB console commands
+- fix(school rainbow): degrade any pool-texture upload error to a clean miss
+- fix(#1 launcher): commit checkBox1/lblMenu Designer scaffolding
+- feat(#2 launcher): Reload/Cycle/Heal binds + Disable-D-pad + controls layout
+- feat(controls): per-scheme Change Cam / Reload / Cycle / Heal + 2D_Snap option
+- feat(launcher): per-scheme Change Cam / Reload / Cycle / Heal binds
+- feat(controls): input plumbing for reload-2 / quick-turn / rear-look
+- feat(controls): Rear Look — camera swings behind Harry + head turn (TPS/OTS)
+- feat(controls): Quick Turn — animated 180 (classic native state + TPS/OTS shim)
+- feat(launcher): Reload keyboard row (+alt) + Quick Turn + Rear Look rows
+- fix(controls): quick-turn stale-request + edge-cache size (review findings)
+- fix(controls): move Map to Camera page + D-pad still navigates menus
+- fix(controls): Quick Turn now works in the shim (2D / TPS / OTS), not just camera-snap
+- feat(controls): quick-switch swaps the held model live + green heal flash
+
+## beta-2026.07.16.2 -- 2026-07-16
+- Fixed missing SFX/BGMs including sewer drip audio
+- Added surround sound support and audio option to Launcher
+- Enhanced mod support including extracting individual CLUTs that can be replaced individually or all at once
+- Added 7z mod support and fixed zips
+- Fixed cutscene timing issue and out of sync cutscenes. Still some issues being worked on (like amusement park scene)
+- Fixed character brightness issue
+- Fixed certain scenes being black when using FPS camera
+- Fixed misc crash with puppet nurses
+
+Commit summaries:
+- PsyCross: sewer drip fix — wide-stereo (negative-volume) voices no longer silent
+- Cutscene timing overhaul: lossless game clock + audio catch-up (any-fps sync)
+- docs: Port_Fixes_Index entry for the cutscene timing overhaul
+- Voice pacing: restore PSX end-of-voice rhythm + freeze XA with the console
+- audio: surround sound (5.1/7.1) + true 3D positional SFX
+- Trigger sweep fixes: dt-scale frame-counted cutscene pacing + voice-table hardening
+- docs: Port_Fixes_Index entry for the trigger sweep + voice pacing batch
+- audio: close every azimuth-latch leak found by review
+- debug: [LIGHTCMP2] cutscene character-lighting probe (dark-characters report)
+- Fix characters rendering darker than PSX: remove double fog on character prims
+- docs: Port_Fixes_Index entry for the character double-fog fix
+- Fix Puppet Nurse crash after the Stone of Time puzzle (stale field_124)
+- debug: remove [LIGHTCMP2] probe (character double-fog fix confirmed)
+- docs: Port_Fixes_Index entry for the Puppet Nurse stale-field_124 crash
+- whole-map stopgap: un-throttle the draw count (packet arena 2MB->16MB)
+- game: per-CLUT-row loose texture overrides + zip-extract coordination
+- launcher: per-palette TIM->PNG extraction + unified zip/7z extract backend
+- tools: cross-platform tim2png.py (per-palette TIM->PNG, no deps)
+- docs: note p00.png is the per-palette-set trigger for loose overrides
+- docs: modding guide — per-palette textures, zip/7z packs, Linux/macOS, fan discs
+- Fix map6_s04 Flauros cutscene desync: unpad the subtitle page-advance gate
+- docs: Port_Fixes_Index entry for the map6_s04 Flauros desync fix
+- game: a single whole-image loose PNG replaces ALL of a texture's CLUT rows
+- docs: whole-reskin — a lone NAME.png replaces every CLUT of a texture
+- Fix cutscenes rendering black in FPS mode: gate the FPS flashlight aim
+- release: ship the 7-Zip LGPL notice as licenses/LICENSE-7zip.txt
+
+
 ## beta-2026.07.16.1 -- 2026-07-16
 - Added BIN extraction tool to Mod Manager in Launcher, extracts game data to match expected folder structure (for potential mods)
 - Also added individual and bulk TIM > PNG converter in same window (can also convert when extracting BIN)

@@ -1,4 +1,9 @@
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "lang_text.h"
+#include "lang_pack.h"
+#include "lang_ru.h"
+#include "lang_jpn.h"
+#include "pc_kanji.h"
 
 #include <string.h>
 
@@ -37,6 +42,10 @@ static const s_MenuTranslation s_MenuTr[] = {
     { "CONTINUE", { "WEITER", "CONTINUER", "CONTINUAR", "CONTINUA"  } },
     { "START",    { NULL,     "COMMENCER", "EMPEZAR",   "INIZIA"    } },
     { "OPTION",   { "OPTIONEN", "OPTIONS", "OPCIONES",  "OPZIONI"   } },
+    /* Port-added main-menu row that closes the game. Distinct key from the
+     * mixed-case "Exit" below, which is the options screen's BACK button
+     * (German "Zur\xFC" "ck") — these must not share a translation. */
+    { "EXIT",     { "BEENDEN", "QUITTER",  "SALIR",     "ESCI"      } },
     { "EASY",     { "LEICHT", "FACILE",    "FACIL",     "FACILE"    } },
     { "NORMAL",   { NULL,     NULL,        NULL,        "NORMALE"   } },
     { "HARD",     { "SCHWER", "DIFFICILE", "DIFICIL",   "DIFFICILE" } },
@@ -184,6 +193,9 @@ static const s_MenuTranslation s_MenuTr[] = {
     { "Antialiasing",      { NULL,                 "Anticr\xE9nelage",    "Antialias",          "Antialias"      } },
     { "Post_Process",      { "Nachbearbeitung",    "Post-traitement",     "Postproceso",        "Post-processo"  } },
     { "Tone_Mapping",      { NULL,                 NULL,                  "Mapeo_tonal",        NULL             } },
+    /* Graphics page: its value column sits at x=196, so a label has ~132px from
+     * x=64 — kept at or under "Texture_Filter", the widest English row there. */
+    { "Bullet_Decals",     { "Kugell\xF6" "cher",  "Impacts_balles",      "Marcas_de_bala",     "Fori_proiett."  } },
     { "Next_Page",         { "N\xE4" "chste_Seite", "Page_suivante",      "Sig._p\xE1gina",     "Pagina_succ."   } },
     { "Prev_Page",         { "Vorherige_Seite",    "Page_pr\xE9" "c.",    "P\xE1gina_ant.",     "Pagina_prec."   } },
     { "Back",              { "Zur\xFC" "ck",       "Retour",              "Atr\xE1s",           "Indietro"       } },
@@ -218,6 +230,78 @@ static const s_MenuTranslation s_MenuTr[] = {
     { "Cinematic",         { "Kino",               "Cin\xE9ma",           "Cine",               "Cinema"         } },
     { "Filmic",            { "Filmisch",           "Filmique",            "F\xEDlmico",         "Filmico"        } },
 
+    /* Rows and values added to PC Options since the block above. Label budgets
+     * are the widest English row each page already fits: 15 glyphs on System,
+     * 17 on Controls/Camera/HUD. Value budgets: 11 on System, 8 on HUD. */
+    { "Flashlight",        { "Taschenlampe",       "Lampe",               "Linterna",           "Torcia"          } },
+    { "Fog_Strength",      { "Nebelst\xE4rke",     "Brouillard",          "Intens._niebla",     "Intens._nebbia"  } },
+    { "Weather_Rate",      { "Wetter-Takt",        "Fr\xE9q._m\xE9t\xE9o", "Frec._clima",       "Freq._meteo"     } },
+    { "Third_Person_FOV",  { "3.-Person-FOV",      "FOV_3e_pers.",        "FOV_3ra_pers.",      "FOV_3a_pers."    } },
+    { "OTS_FOV",           { "OTS-FOV",            "FOV_OTS",             "FOV_OTS",            "FOV_OTS"         } },
+    { "Aim_Zoom",          { "Ziel-Zoom",          "Zoom_vis\xE9" "e",    "Zoom_apuntar",       "Zoom_mira"       } },
+    { "OTS_Aim_Zoom",      { "OTS-Ziel-Zoom",      "Zoom_vis\xE9" "e_OTS", "Zoom_apunt._OTS",   "Zoom_mira_OTS"   } },
+    { "OTS_Aim_In_TPS",    { "OTS-Zielen_in_TPS",  "Vis\xE9" "e_OTS_en_TPS", "Apuntar_OTS_TPS", "Mira_OTS_in_TPS" } },
+    { "Camera_Collision",  { "Kamerakollision",    "Collision_cam\xE9ra", "Colisi\xF3n_c\xE1mara", "Collisione_cam." } },
+    { "Minimap",           { "Minikarte",          "Mini-carte",          "Minimapa",           "Minimappa"       } },
+    { "Minimap_Scale",     { "Minikarte_Gr\xF6\xDF" "e", "Taille_mini-carte", "Escala_minimapa", "Scala_minimappa" } },
+    { "Minimap_Corner",    { "Minikarte_Ecke",     "Coin_mini-carte",     "Esquina_minimapa",   "Angolo_minimappa" } },
+    { "Minimap_Opacity",   { "Minikarte_Deckkr.",  "Opacit\xE9_minicarte", "Opacidad_minimapa", "Opacit\xE0_minimappa" } },
+    { "Minimap_Reqs_Map",  { "Nur_mit_Karte",      "Carte_requise",       "Requiere_mapa",      "Serve_la_mappa"  } },
+    { "Low_HP_Glow",       { "Warnung_wenig_LP",   "Alerte_PV_bas",       "Aviso_vida_baja",    "Avviso_vita_bassa" } },
+    { "Crosshair_Size",    { "Fadenkreuzgr\xF6\xDF" "e", "Taille_r\xE9ticule", "Tama\xF1o_ret\xED" "cula", "Dim._mirino" } },
+    { "Text_Size",         { "Textgr\xF6\xDF" "e",  "Taille_du_texte",     "Tama\xF1o_del_texto", "Dim._testo"      } },
+    { "Dither",            { NULL,                 "Tramage",             "Tramado",            "Retinatura"      } },
+    { "Trilinear",         { NULL,                 "Trilin\xE9" "aire",   "Trilineal",          "Trilineare"      } },
+    { "Classic",           { "Klassisch",          "Classique",           "Cl\xE1sico",         "Classico"        } },
+    { "C_+_Shadows",       { "K+Schatten",         "C_+_ombres",          "C_+_sombras",        "C_+_ombre"       } },
+    { "Modern",            { NULL,                 "Moderne",             "Moderno",            "Moderno"         } },
+    { "M_+_Shadows",       { "M+Schatten",         "M_+_ombres",          "M_+_sombras",        "M_+_ombre"       } },
+    { "Top_L",             { "Oben_L",             "Haut_G",              "Arr._Izq",           "Alto_S"          } },
+    { "Top_R",             { "Oben_R",             "Haut_D",              "Arr._Der",           "Alto_D"          } },
+    { "Bottom_L",          { "Unten_L",            "Bas_G",               "Ab._Izq",            "Basso_S"         } },
+    { "Bottom_R",          { "Unten_R",            "Bas_D",               "Ab._Der",            "Basso_D"         } },
+    { "Square",            { "Quadrat",            "Carr\xE9",            "Cuadrado",           "Quadrato"        } },
+    { "Circle",            { "Kreis",              "Cercle",              "C\xEDrculo",         "Cerchio"         } },
+
+    /* --- Inventory screen (Gfx_Inventory_ItemDescriptionDraw); the labels
+     * are drawn with a 10-glyph budget. --- */
+    { "Can't_use_it_here.",  { "Hier_nicht_nutzbar.", "Inutilisable_ici.", "No_se_puede_usar.", "Non_usabile_qui." } },
+    { "Too_dark_to_look_at\n\t\tthe_item_here.",
+        { "Zu_dunkel,_um_das\n\t\tDing_anzusehen.",
+          "Trop_sombre_pour\n\t\tvoir_l'objet.",
+          "Demasiado_oscuro\n\t\tpara_ver_el_objeto.",
+          "Troppo_buio_per\n\t\tvedere_l'oggetto." } },
+    { "Stock:",            { "Vorrat:",            "Stock_:",             "Reserva:",           "Scorta:"         } },
+    { "==On==",            { "==Ein==",            "==Oui==",             "==S\xED==",          "==S\xEC=="       } },
+    { "==Off==",           { "==Aus==",            "==Non==",             "==No==",             "==No=="          } },
+    { "Fuel:",             { "Benzin:",            "Essence_:",           "Gasolina:",          "Benzina:"        } },
+
+    /* --- Results screen (ranking.c Results_DisplayInfo). Labels start at
+     * x=24 and their values are drawn at fixed x, so each stays inside the
+     * room before its value: Total_time 13 glyphs, the distances and Items
+     * 16, the shot rows (from x=72) 19, the rank 13 (its stars share the
+     * line), the Defeated rows 23. --- */
+    { "GAME_RESULT",        { "SPIELERGEBNIS",      "R\xC9SULTATS",        "RESULTADOS",         "RISULTATI"          } },
+    { "Mode",               { "Modus",              NULL,                  "Modo",               "Modalit\xE0"        } },
+    { "Saves",              { "Speicherungen",      "Sauvegardes",         "Partidas_guardadas", "Salvataggi"         } },
+    { "Continues",          { "Fortsetzungen",      "Reprises",            "Continuaciones",     "Continue"           } },
+    { "Total_time",         { "Gesamtzeit",         "Temps_total",         "Tiempo_total",       "Tempo_totale"       } },
+    { "Walking_distance",   { "Strecke_gehend",     "Distance_march\xE9" "e", "Dist._andada",   "Distanza_a_piedi"   } },
+    { "Running_distance",   { "Strecke_rennend",    "Distance_courue",     "Dist._corrida",      "Distanza_corsa"     } },
+    { "Items",              { "Gegenst\xE4nde",     "Objets",              "Objetos",            "Oggetti"            } },
+    { "Game_clear",         { "Durchgespielt",      "Parties_finies",      "Partidas_completadas", "Partite_completate" } },
+    { "Ending",             { "Ende",               "Fin",                 "Final",              "Finale"             } },
+    { "==Your_rank==",      { "==Rang==",           "==Rang==",            "==Rango==",          "==Grado=="          } },
+    { "Defeated_\x01\x01" "enemy_\x01\x01" "by_\x01\x01shooting",
+                            { "Gegner_erschossen",  "Ennemis_abattus_(tir)", "Abatidos_a_tiros", "Nemici_uccisi_(sparo)" } },
+    { "Defeated_\x01\x01" "enemy_\x01\x01" "by_\x01\x01" "fighting",
+                            { "Gegner_im_Nahkampf", "Ennemis_abattus_(m\xEAl\xE9" "e)", "Abatidos_a_golpes", "Nemici_uccisi_(lotta)" } },
+    { "Shooting_style",     { "Schie\xDFstil",      "Style_de_tir",        "Estilo_de_tiro",     "Stile_di_tiro"      } },
+    { "Short_range_shots",  { "Nahdistanz",         "Courte_port\xE9" "e", "A_corta_distancia",  "Corto_raggio"       } },
+    { "Middle_range_shots", { "Mitteldistanz",      "Moyenne_port\xE9" "e", "A_media_distancia", "Medio_raggio"       } },
+    { "Long_range_shots",   { "Ferndistanz",        "Longue_port\xE9" "e", "A_larga_distancia",  "Lungo_raggio"       } },
+    { "No_aiming_shots",    { "Ohne_Zielen",        "Sans_viser",          "Sin_apuntar",        "Senza_mirare"       } },
+
     /* --- Paper-map prompts --- */
     { "Too_dark_to_look_at\n\t\tthe_map_here.",
         { "Zu_dunkel,_um_die\n\t\tKarte_zu_lesen.",
@@ -229,18 +313,141 @@ static const s_MenuTranslation s_MenuTr[] = {
           "Je_n'ai_pas_la_carte\n\t\tde_ce_lieu.",
           "No_tengo_el_mapa\n\t\tde_este_lugar.",
           "Non_ho_la_mappa\n\t\tdi_questo_posto." } },
+
+    /* --- Language row values --- */
+    { "English",
+        { "Englisch", "Anglais", "Ingl\xE9s", "Inglese" } },
+    { "German",
+        { "Deutsch", "Allemand", "Alem\xE1n", "Tedesco" } },
+    { "French",
+        { "Franz\xF6sisch", "Fran\xE7" "ais", "Franc\xE9s", "Francese" } },
+    { "Spanish",
+        { "Spanisch", "Espagnol", "Espa\xF1ol", "Spagnolo" } },
+    { "Italian",
+        { "Italienisch", "Italien", "Italiano", "Italiano" } },
+    { "Japanese",
+        { "Japanisch", "Japonais", "Japon\xE9s", "Giapponese" } },
+    { "Chinese",
+        { "Chinesisch", "Chinois", "Chino", "Cinese" } },
+
+    /* --- Inventory: whether the item can be used here (max ~10) --- */
+    { "==Use_OK==",
+        { "==Geht==", "==OK==", "==S\xED==", "==S\xEC==" } },
+    { "==Use_OK?==",
+        { "==Geht?==", "==OK?==", "==S\xED?==", "==S\xEC?==" } },
+    { "==Use_NG==",
+        { "==Nein==", "==Non==", "==No==", "==No==" } },
+
+    /* The other memory-card messages were already here; this one was not. The
+     * leading \x07 is the colour byte every message in that box carries. */
+    { "\x07You_removed_the_MEMORY_CARD!",
+        { "\x07MEMORY_CARD_entfernt!", "\x07MEMORY_CARD_retir\xE9" "e_!",
+          "\x07\xA1MEMORY_CARD_retirada!", "\x07MEMORY_CARD_rimossa!" } },
+
+    /* --- Results screen (a value follows each label) --- */
+    { "Defeated_enemy_by_fighting",
+        { "Im_Kampf_besiegt", "Vaincus_au_combat", "Vencidos_luchando", "Sconfitti_in_lotta" } },
+
+    /* --- PC Options rows (max ~14..17) --- */
+    { "[R]_Reset",
+        { "[R]_Zur\xFC" "cksetzen", "[R]_R\xE9init.", "[R]_Reiniciar", "[R]_Ripristina" } },
+
+    /* --- Setting values (max ~11). A technical term keeps its English. --- */
+    { "VSync",                           { NULL, NULL, NULL, NULL } },
+    { "PGXP",                            { NULL, NULL, NULL, NULL } },
+    { "Aniso_2x",                        { NULL, NULL, NULL, NULL } },
+    { "Aniso_4x",                        { NULL, NULL, NULL, NULL } },
+    { "Aniso_8x",                        { NULL, NULL, NULL, NULL } },
+    { "Aniso_16x",                       { NULL, NULL, NULL, NULL } },
+    { "CRT",                             { NULL, NULL, NULL, NULL } },
+    { "PSX_Retro",                       { NULL, NULL, NULL, NULL } },
+    { "Reinhard",                        { NULL, NULL, NULL, NULL } },
+    { "ACES",                            { NULL, NULL, NULL, NULL } },
+    { "30_Hz",                           { NULL, NULL, NULL, NULL } },
+    { "60_Hz",                           { NULL, NULL, NULL, NULL } },
+
+    /* --- Save/load screen (raw literals, not table rows) --- */
+    { "\x07________\x01New_save",
+        { "\x07______Neu_speichern", "\x07_____Nouvelle_partie", "\x07_____Nueva_partida", "\x07____Nuovo_salvataggio" } },
+    { "\x07____Crea\x01t\x01" "e_\x01n\x01" "e\x01w_\x01" "fi\x01le",
+        { "\x07____Datei_erstellen", "\x07____Cr\xE9" "er_un_fichier", "\x07____Crear_archivo", "\x07____Crea_file" } },
+    { "\x07____Fil\x01" "e_\x01\x01is_\x01\x01" "da\x01ma\x01g\x01" "ed",
+        { "\x07____Datei_besch\xE4" "digt", "\x07____Fichier_endommag\xE9", "\x07____Archivo_da\xF1" "ado", "\x07____File_danneggiato" } },
+    { "\x07Out_of_blocks",
+        { "\x07Keine_Bl\xF6" "cke_frei", "\x07Plus_de_blocs", "\x07Sin_bloques_libres", "\x07" "Blocchi_esauriti" } },
+    { "\x07No_data_file",
+        { "\x07Keine_Datei", "\x07" "Aucun_fichier", "\x07Sin_archivo", "\x07Nessun_file" } },
+
+    /* --- Save-point name --- */
+    { "Bus",
+        { "Bus", "Bus", "Autob\xFAs", "Autobus" } },
+
+    /* --- Brightness screen. The trailing spaces are the layout. --- */
+    { "BRIGHTNESS_",
+        { "HELLIGKEIT_", "LUMINOSITE_", "BRILLO_", "LUMINOSITA_" } },
+    { "CONTRAST_____",
+        { "KONTRAST_____", "CONTRASTE____", "CONTRASTE____", "CONTRASTO____" } },
+    { "SATURATION_",
+        { "SATTIGUNG_", "SATURATION_", "SATURACION_", "SATURAZIONE_" } },
+
+    /* --- Controller presets --- */
+    { "USER",
+        { "BENUTZER", "PERSO", "USUARIO", "UTENTE" } },
+    { "TYPE_1",
+        { "TYP_1", "TYPE_1", "TIPO_1", "TIPO_1" } },
+    { "TYPE_2",
+        { "TYP_2", "TYPE_2", "TIPO_2", "TIPO_2" } },
+    { "TYPE_3",
+        { "TYP_3", "TYPE_3", "TIPO_3", "TIPO_3" } },
 };
 
 const char* Pc_LangMenuText(const char* str)
 {
-    int lang = g_PcConfig.language;
     int i;
+    int col;
+
+    if (str == NULL)
+        return str;
+
+    /* NTSC-J serves these from the disc's own overlays — Japanese on a retail
+     * disc (which is what retail draws), Chinese on the fan-translated one.
+     * Not under a pack: the pack is the language then, and this branch
+     * answered first, so every menu stayed English while the story was not. */
+    if (g_GameRegion == Region_JPN && !Pc_LangPackActive())
+    {
+        const char* jp = Pc_JpnMenuText(str);
+        return jp ? jp : str;
+    }
+
+    /* A Russian fan-translated disc wins over the language setting: its font
+     * has no Latin letters left, so English (or German, or Polish) menus are
+     * unreadable on it no matter what the config says. */
+    if (Pc_RuActive())
+    {
+        const char* ru = Pc_RuMenuText(str);
+        if (ru != NULL)
+            return ru;
+    }
+
+    /* PC-side pack language (Polish): menu strings come from the pack, keyed
+     * by this same US literal. A key the pack lacks keeps English. */
+    if (Pc_LangPackActive())
+    {
+        const char* tr = Pc_LangPackMenu(str);
+
+        if (tr != NULL)
+            return tr;
+        /* Not in the pack: a de/fr/es/it pack still has a column below. */
+    }
 
     /* EUR discs always; USA only when a fan-translated disc is active (its
      * story/item text comes from the disc, these tables cover the menus the
-     * patch can't reach — the port renders menus from compiled strings). */
-    if (!(g_GameRegion == Region_EUR || (g_GameRegion == Region_USA && Pc_FanTextActive())) ||
-        lang < 1 || lang > 4 || str == NULL)
+     * patch can't reach — the port renders menus from compiled strings). And
+     * any disc for a pack with a column, which is the same language. */
+    col = Pc_LangPalColumn();
+    if (col < 0 ||
+        !(g_GameRegion == Region_EUR || Pc_LangPackActive() ||
+          (g_GameRegion == Region_USA && Pc_FanTextActive())))
     {
         return str;
     }
@@ -249,7 +456,7 @@ const char* Pc_LangMenuText(const char* str)
     {
         if (s_MenuTr[i].us[0] == str[0] && strcmp(s_MenuTr[i].us, str) == 0)
         {
-            return s_MenuTr[i].tr[lang - 1] ? s_MenuTr[i].tr[lang - 1] : str;
+            return s_MenuTr[i].tr[col] ? s_MenuTr[i].tr[col] : str;
         }
     }
 
@@ -258,6 +465,29 @@ const char* Pc_LangMenuText(const char* str)
 
 /* Pixel width of a (single-line prefix of a) menu string, for the centered
  * title/difficulty entries whose US x-offsets are hardcoded constants. */
+/* The glyph budget Gfx_StringDraw spends on `str`. That drawer stops on a
+ * COUNT, never on the terminator, and only glyph-emitting bytes count: spaces
+ * and control bytes pass for free and a Shift-JIS pair is one. Retail passes
+ * fixed counts for its fixed strings; a string whose length nobody fixed, such
+ * as a language pack's own menu label, has to be counted the same way or it is
+ * cut (10 drew "PAL Englis" and "Russki (al") or, over-counted, read past its
+ * end. Counted on the translated form, which is what the drawer walks. */
+int Pc_LangMenuGlyphCount(const char* str)
+{
+    const unsigned char* p = (const unsigned char*)Pc_LangMenuText(str);
+    int                  n = 0;
+
+    for (; *p != 0; p++)
+    {
+        if (*p == '_' || *p < GLYPH_TABLE_ASCII_OFFSET)
+            continue;
+        if (Pc_LangSjisActive() && Pc_KanjiIsLead(*p) && p[1] != 0)
+            p++;
+        n++;
+    }
+    return n;
+}
+
 int Pc_LangMenuTextWidth(const char* str)
 {
     int         width = 0;
@@ -290,12 +520,23 @@ int Pc_LangMenuTextWidth(const char* str)
         if (c < 0x08)
             continue; /* color codes */
 
+        /* NTSC-J draws SJIS pairs as one 12px kanji cell (Gfx_StringDraw), so
+         * measuring their bytes separately would roughly double the width. */
+        if (Pc_LangSjisActive() && Pc_KanjiIsLead(c) && str[1] != '\0')
+        {
+            width += FONT_12X16_GLYPH_SIZE_X;
+            str++;
+            continue;
+        }
+
         if (c == '!')
             c = '\\';
         else if (c == '&')
             c = '^';
 
-        if (c >= GLYPH_TABLE_ASCII_OFFSET && (c <= 'z' || c >= 0x80))
+        /* Same range as the drawer (see Gfx_StringDraw): the EUR atlas has cells
+         * past the US strip's 'z', so measuring must not stop there either. */
+        if (c >= GLYPH_TABLE_ASCII_OFFSET)
         {
             count = Font_MapChar(c, emits);
             for (k = 0; k < count; k++)
@@ -306,4 +547,52 @@ int Pc_LangMenuTextWidth(const char* str)
     }
 
     return width;
+}
+
+/* Which column of the compiled de/fr/es/it tables this language reads.
+ *
+ * Those tables were written for the PAL disc, where German is language 1. The
+ * PACK called "de" is the same language and wants the same menus, overlays and
+ * prompts -- it carries the story and the items, and nothing else -- so it maps
+ * to the same column rather than falling back to English on a US disc. Packs
+ * with no column (Polish, Russian, Japanese, Chinese) carry their own and are
+ * unaffected. Returns -1 when there is no column to read. */
+int Pc_LangPalColumn(void)
+{
+    int lang = g_PcConfig.language;
+    int i;
+
+    if (lang >= 1 && lang < LANG_PACK_FIRST && lang != LANG_EN_US)
+        return lang - 1;
+
+    if (Pc_LangPackActive())
+    {
+        const char* code = Pc_LangIdForSlot(lang);
+
+        for (i = 1; i < LANG_PACK_FIRST; i++)
+        {
+            if (i != LANG_EN_US && strcmp(code, s_LangIds[i]) == 0)
+                return i - 1;
+        }
+    }
+    return -1;
+}
+
+const char* Pc_LangMenuPal(const char* us, int lang)
+{
+    int i;
+
+    /* `lang` 1..4 is the retail numbering; a pack passes -1 and the column is
+     * resolved from its code instead. */
+    int col = (lang >= 1 && lang <= 4) ? (lang - 1) : Pc_LangPalColumn();
+
+    if (us == NULL || col < 0)
+        return NULL;
+
+    for (i = 0; i < (int)(sizeof(s_MenuTr) / sizeof(s_MenuTr[0])); i++)
+    {
+        if (s_MenuTr[i].us[0] == us[0] && strcmp(s_MenuTr[i].us, us) == 0)
+            return s_MenuTr[i].tr[col];
+    }
+    return NULL;
 }

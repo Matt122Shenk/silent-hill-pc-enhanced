@@ -69,6 +69,7 @@ if [ -z "$SH_NO_CLEAN" ]; then
     fi
     rm -rf "$SCRIPT_DIR/bin"
     mkdir -p "$SCRIPT_DIR/bin"   # linker writes bin/default.map into it
+    rm -rf "$SCRIPT_DIR/build/gte"
     find "$SCRIPT_DIR/../src" "$SCRIPT_DIR/../pc_port/src" "$SCRIPT_DIR/src" \
          \( -name '*.obj' -o -name '*.c.d' -o -name '*.cpp.d' \) \
          -not -path '*dsound_objs*' -delete 2>/dev/null

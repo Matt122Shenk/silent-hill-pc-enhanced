@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 #ifndef FONT_REGION_H
 #define FONT_REGION_H
 
@@ -36,6 +37,27 @@ typedef struct {
 
 extern const s_FontLayout* g_FontLayout;
 
+/* Rendered-line cap of the map-message renderer (Gfx_MapMsg_CalculateWidths /
+ * Gfx_MapMsg_StringDraw). One PC binary serves every region, so retail's
+ * per-region constant has to be a runtime value. 9 on NTSC-U and NTSC-J; retail
+ * PAL lays messages out over TEN lines and its localizations use that tenth line
+ * (the tallest single entry on the PAL disc is exactly 10). Read out of the
+ * decrypted retail overlays (EUR sha1 f748528af6da66184978a08c4bcbf924a306eaba ==
+ * configs/EUR/bodyprog.yaml, USA sha1 eb118537b0c3c1e5cccfa2c5d283b3119c5ec7a3 ==
+ * configs/USA/bodyprog.yaml):
+ *   CalculateWidths bound  EUR 0x8004ACFC 28C2000A  USA 0x8004AF04 28C20009
+ *   widths[] clear         EUR 0x8004AA40 a2=9,+36  USA 0x8004ACF4 a2=8,+32
+ *   StringDraw bound       EUR 0x8004A42C 241E000A (beq $s0,$fp)
+ *   StringDraw {E}/{S}     EUR 0x8004A58C/0x8004A5CC 2410000A
+ * Rendered at nine, a ten-line PAL page's parse ends on the line bound before it
+ * reaches the page's ~E or NUL — the only three writers of the renderer's return
+ * code — so Gfx_MapMsg_Draw never reaches FINISH_MAP_MSG and the document cannot
+ * be dismissed at all (GitHub #85).
+ * NOT applied to the positionIdx-4 box anchor (text_draw.c): that constant is
+ * retail PAL's centre in a 256-scanline field, and the port renders PAL content
+ * in the NTSC 240-line frame with its own g_PsxMsgVShift compensation. */
+extern int g_PcMapMsgLineMax;
+
 /* Map a text byte (already '!'/'&'-remapped by the caller) to 0..2 glyph
  * emissions. Bytes >= 0x80 resolve through the retail EUR accent scheme and
  * yield nothing on the US layout. */
@@ -45,10 +67,96 @@ int Font_MapChar(unsigned int charCode, s_GlyphEmit emits[2]);
  * EUR STRING_COLORS[6] tint. Call once after Fs_InitFileTableForRegion. */
 void Font_ApplyRegionPatches(void);
 
-/* Replace the active layout's kerning table (fan-translation discs retune the
- * BODYPROG widths to match their repainted FONT16 glyphs). Copies the first
- * glyphCount entries; call after Font_ApplyRegionPatches. */
-void Font_SetGlyphWidths(const unsigned char* widths);
+/* Polish ships as a PC-side language pack rather than on a disc, so its
+ * letterforms are built into the FONT16 pixel block just before upload (all
+ * reload sites covered) and selected by a widened layout. Both are no-ops
+ * unless the Polish pack is the active language. */
+void Font_PatchPolishGlyphs(void* pixels, int widthWords, int height);
+void Font_UsePolishLayout(void);
+
+/* Portuguese: the 126-cell layout plus its accented capitals, whose combining
+ * marks are built into the cells Polish would otherwise use. */
+void Font_UsePortugueseLayout(void);
+void Font_PatchPortugueseGlyphs(void* pixels, int widthWords, int height);
+
+/* The same built letters on a hi-res font pack, which replaces the atlas
+ * through the override path and so never sees the 4bpp patch. Whole-cell
+ * copies, so `scale` (pixels per atlas pixel) is all it needs. */
+int  Font_PatchPackGlyphsHires(unsigned char* rgba, int w, int h, int scale);
+int  Font_HiresAtlasScale(int w, int h);
+
+/* Russian replaces the whole atlas with the Cyrillic one (font_ru.inc). */
+void Font_UseRussianLayout(void);
+
+/* Build the active pack's letterforms into freshly-read FONT16 pixels, before
+ * upload. No-op when the active pack needs no glyphs of its own. */
+void Font_PatchPackGlyphs(void* pixels, int widthWords, int height);
+
+/* Re-read and upload FONT16 immediately, so a language switch's glyphs and its
+ * advances change on the same frame. */
+void Font_AtlasReloadNow(void);
+
+/* Draw from the PAL 126-cell grid on a disc that does not carry it, so a pack
+ * language gets real accents instead of base letters. The grid itself is a
+ * pinned override there (Font_HiresGridSync). No-op on a PAL disc. */
+void Font_UseEurAtlas(void);
+
+/* Re-lay a FONT16 atlas between the US strip and the PAL grid so a font pack
+ * built for either region works on both. A pack already in the right shape is
+ * untouched. Updates *pixels/*w/*h in place; non-zero if it converted. */
+int  Font_FitAtlasToLayout(void** pixels, int* w, int* h);
+
+/* Same for a hi-res (RGBA) font pack, whose shape identifies its region by
+ * which atlas size divides it evenly. Returns the scale and a malloc'd image
+ * the caller frees, or 0 to use the pack as it is. */
+int  Font_FitHiresAtlasToLayout(const unsigned char* rgba, int w, int h,
+                                unsigned char** out, int* outW, int* outH,
+                                int* outUnits, int* outRows);
+
+/* Whether a draw pointed at the PAL cell grid (768,128) finds the PAL atlas:
+ * VRAM on a PAL disc, a pinned override built from eur16.tim elsewhere. The
+ * single owner of that rule; nothing may draw from that grid while it is 0. */
+int  Font_EurGridBacked(void);
+
+/* Bring the pinned grid override in line with the layout in force (register,
+ * rebuild for a new pack, or drop); Pc_LangInit calls it last. */
+void Font_HiresGridSync(void);
+/* The pinned grid override is registered and carries the pack's cells, so
+ * the loader leaves the disc's own strip unpatched. */
+int  Font_HiresGridLive(void);
+
+/* The Cyrillic atlas is in force. It replaces every cell, so no Latin hi-res
+ * pack can stand in for any of them. */
+int  Font_RussianLayoutActive(void);
+
+/* gamedata/load/1ST/FONT16_RU.png decoded (loaded once, owned here), or NULL
+ * when none is installed or it is not PAL-grid shaped. */
+const unsigned char* Font_RuHiresImage(int* outW, int* outH);
+
+/* What a hi-res font pack was cut for, from its pixel size alone. */
+#define FONT_PACK_SHAPE_UNKNOWN 0
+#define FONT_PACK_SHAPE_US      1
+#define FONT_PACK_SHAPE_PAL     2
+int  Font_HiresPackShape(int w, int h);
+
+/* Whether a pack of that shape may be used for the language now active. */
+int  Font_HiresPackUsable(int shape);
+
+/* Return g_FontLayout to the region base (drops any fan-patch override or the
+ * Polish layout). Pc_LangInit calls it first so every language switch derives
+ * its layout from a clean slate. */
+void Font_ResetLayout(void);
+
+/* Widest atlas the drawer supports: retail PAL's 21x6 grid. Retail declares
+ * only 120 of those cells; a fan repaint can fill all 126. */
+#define FONT_ATLAS_CELL_MAX 126
+
+/* Replace the active layout's kerning table AND glyph count (fan-translation
+ * discs retune the BODYPROG widths to match their repainted FONT16 glyphs, and
+ * a Cyrillic PAL repaint also claims the six cells retail leaves blank).
+ * Copies `count` entries, clamped to FONT_ATLAS_CELL_MAX; call after
+ * Font_ApplyRegionPatches. */
+void Font_SetGlyphWidths(const unsigned char* widths, int count);
 
 /* Implemented in text_draw.c (the color table is file-local there): replaces
  * StringColorId_LightGrey — retail EUR dims it (100,100,100)->(64,64,64). */

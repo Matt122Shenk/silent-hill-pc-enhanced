@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 /* Camera / control-style system — see control_style.h.
  *
  * Replaces the old debug-only Numpad-2 TPS toggle. The active style comes from
@@ -11,6 +12,7 @@
 #include "sh_log.h"
 #include "pc_config.h"
 #include "control_style.h"
+#include <PsyX/PsyX_public.h> /* PsyX_LookupGameControllerMapping / RawControllerBindHeld */
 
 #include <SDL.h>
 #include <string.h>
@@ -131,12 +133,12 @@ void Pc_ControlStyleInit(void)
 }
 
 /* PC port: the Change-Camera PAD bind is read from the PHYSICAL controller via
- * SDL (PsyX_RawControllerButtonHeld below + SDL_GameControllerGetButtonFromString),
+ * SDL (PsyX_RawControllerBindHeld below + PsyX_LookupGameControllerMapping),
  * NOT the keyboard-merged PSX pad word. The keyboard's bind is the separate
  * key_change_cam read from the keyboard. This keeps the two input sources
  * independent: a keyboard key mapped to the same PSX button (e.g. [ / ] = L3/R3)
  * no longer triggers a controller-only action like the camera switch. */
-extern int PsyX_RawControllerButtonHeld(int sdlGameControllerButton);
+extern int PsyX_RawControllerBindHeld(int buttonOrAxis);
 
 /* "Mouse1".."Mouse5" -> SDL mouse button number (else 0 = it's a key). */
 static int SwapShoulder_MouseButton(const char* name)
@@ -158,15 +160,34 @@ static int SwapShoulder_MouseButton(const char* name)
     return 0;
 }
 
+/* Menus force the classic scheme into the input layer (see the block at the
+ * end of Pc_ControlStyleUpdate); kept at file scope so a runtime bind edit can
+ * re-apply whichever scheme is live right now. */
+static int s_forcedClassic = 0;
+
+void Pc_ControlStyle_ReapplyBinds(void)
+{
+    extern void Pc_ApplyClassicControlScheme(void);
+    extern void Pc_ApplyActiveControlScheme(void);
+
+    if (s_forcedClassic)
+        Pc_ApplyClassicControlScheme();
+    else
+        Pc_ApplyActiveControlScheme();
+}
+
 void Pc_ControlStyleUpdate(void)
 {
     static SDL_Scancode scCam[2] = { SDL_SCANCODE_UNKNOWN, SDL_SCANCODE_UNKNOWN };
     static int          scPad[2] = { -1, -1 }; /* [scheme] SDL_GameControllerButton, -1 = unbound */
-    static int          resolved = 0;
+    static int          resolved = 0; /* g_PcBindsGen + 1 when resolved */
     static int          prevKey  = 0;
     static int          prevPad  = 0;
 
     extern int g_PcConsoleInputActive;
+    extern int Pc_ConsoleIsOpen(void);
+    extern int g_PcQuickOptionsActive;
+    extern int g_DebugCamEnabled;
 
     const Uint8* keys;
     int          curKey, curPad;
@@ -175,7 +196,7 @@ void Pc_ControlStyleUpdate(void)
 
     /* Resolve BOTH schemes once; index by the live camera mode each frame so a
      * classic<->altcam switch takes effect immediately. */
-    if (!resolved)
+    if (resolved != g_PcBindsGen + 1)
     {
         const ControlScheme* sc[2];
         int i;
@@ -185,21 +206,21 @@ void Pc_ControlStyleUpdate(void)
         {
             scCam[i] = SDL_GetScancodeFromName(sc[i]->keyChangeCam);
             scPad[i] = (sc[i]->padChangeCam[0])
-                           ? (int)SDL_GameControllerGetButtonFromString(sc[i]->padChangeCam)
+                           ? (int)PsyX_LookupGameControllerMapping(sc[i]->padChangeCam, SDL_CONTROLLER_BUTTON_INVALID)
                            : SDL_CONTROLLER_BUTTON_INVALID;
         }
-        resolved = 1;
+        resolved = g_PcBindsGen + 1;
     }
 
     inGameplay = (g_GameWork.gameState == GameState_InGame &&
                   g_SysWork.sysState   == SysState_Gameplay &&
-                  !g_PcConsoleInputActive);
+                  !Pc_ConsoleIsOpen() && !g_PcQuickOptionsActive);
 
     keys   = SDL_GetKeyboardState(NULL);
     {
         int sch = g_DebugThirdPersonCam ? 1 : 0; /* which scheme's Change-Camera bind is live */
         curKey = (keys && scCam[sch] != SDL_SCANCODE_UNKNOWN) ? keys[scCam[sch]] : 0;
-        curPad = PsyX_RawControllerButtonHeld(scPad[sch]); /* physical controller only */
+        curPad = PsyX_RawControllerBindHeld(scPad[sch]); /* physical controller only */
     }
 
     /* Edge-toggle the active style — gameplay only. */
@@ -220,7 +241,6 @@ void Pc_ControlStyleUpdate(void)
      * world but isn't a menu — keep the alternate-camera scheme so the player's
      * configured confirm/cancel binds still dismiss the description. */
     {
-        static int s_forcedClassic = 0;
         int examining = (g_SysWork.sysState == SysState_ReadMessage);
         int wantForceClassic = (!inGameplay && !examining && g_DebugThirdPersonCam) ? 1 : 0;
         if (wantForceClassic != s_forcedClassic)
@@ -239,21 +259,27 @@ void Pc_ControlStyleUpdate(void)
     {
         static SDL_Scancode scSwap   = SDL_SCANCODE_UNKNOWN;
         static int          mbSwap   = 0;
-        static int          swapRes  = 0;
+        static int          padSwap  = SDL_CONTROLLER_BUTTON_INVALID;
+        static int          swapRes  = 0; /* g_PcBindsGen + 1 when resolved */
         static int          prevSwap = 0;
         int                 curSwap  = 0;
 
-        if (!swapRes)
+        if (swapRes != g_PcBindsGen + 1)
         {
             mbSwap = SwapShoulder_MouseButton(g_PcConfig.keySwapShoulder);
-            if (mbSwap == 0) scSwap = SDL_GetScancodeFromName(g_PcConfig.keySwapShoulder);
-            swapRes = 1;
+            scSwap = (mbSwap == 0) ? SDL_GetScancodeFromName(g_PcConfig.keySwapShoulder) : SDL_SCANCODE_UNKNOWN;
+            padSwap = (g_PcConfig.padSwapShoulder[0])
+                          ? (int)PsyX_LookupGameControllerMapping(g_PcConfig.padSwapShoulder, SDL_CONTROLLER_BUTTON_INVALID)
+                          : SDL_CONTROLLER_BUTTON_INVALID;
+            swapRes = g_PcBindsGen + 1;
         }
 
         if (mbSwap != 0)
             curSwap = (SDL_GetMouseState(NULL, NULL) & SDL_BUTTON(mbSwap)) != 0;
         else if (keys && scSwap != SDL_SCANCODE_UNKNOWN)
             curSwap = keys[scSwap];
+        if (PsyX_RawControllerBindHeld(padSwap))
+            curSwap = 1;
 
         /* Thirdperson borrows the shoulder-swap bind too when tps_ots_aim is on —
          * it uses the OTS framing while aiming, so the player needs to be able to
@@ -263,20 +289,36 @@ void Pc_ControlStyleUpdate(void)
              (g_ControlStyle == ControlStyle_Tps && g_PcConfig.tpsOtsAim)))
         {
             g_OtsSide = -g_OtsSide;
-            SH_DBG_ECHO("[CTRLSTYLE] OTS shoulder: %s", g_OtsSide > 0 ? "right" : "left");
+            SH_DBG("[CTRLSTYLE] OTS shoulder: %s", g_OtsSide > 0 ? "right" : "left");
         }
         prevSwap = curSwap;
     }
 
-    /* Backspace: toggle the alternate-camera (TPS/OTS) aim crosshair — gameplay
-     * only. Drives g_PcConfig.crosshair, the same gate the draw checks. */
+    /* Backspace: cycle the alternate-camera (TPS/OTS) aim crosshair — gameplay
+     * only. Steps off -> cross (+) -> dot -> circle -> dashes -> off, driving
+     * g_PcConfig.crosshair + crosshairStyle, the same gates the draw checks. */
     {
+        static const char* const s_chNames[] = { "cross (+)", "dot", "circle", "dashes" };
         static int prevCh = 0;
         int        curCh  = (keys) ? keys[SDL_SCANCODE_BACKSPACE] : 0;
         if (inGameplay && curCh && !prevCh)
         {
-            g_PcConfig.crosshair = !g_PcConfig.crosshair;
-            SH_DBG_ECHO("[CTRLSTYLE] Crosshair: %s", g_PcConfig.crosshair ? "ON" : "OFF");
+            if (!g_PcConfig.crosshair)
+            {
+                g_PcConfig.crosshair      = 1;
+                g_PcConfig.crosshairStyle = 0;
+            }
+            else if (g_PcConfig.crosshairStyle < 3)
+            {
+                g_PcConfig.crosshairStyle++;
+            }
+            else
+            {
+                g_PcConfig.crosshair = 0;
+            }
+            SH_DBG_ECHO("[CTRLSTYLE] Crosshair: %s",
+                        !g_PcConfig.crosshair ? "off"
+                                              : s_chNames[g_PcConfig.crosshairStyle & 3]);
         }
         prevCh = curCh;
     }
@@ -287,7 +329,7 @@ void Pc_ControlStyleUpdate(void)
      * not the 3D camera, regardless of the active camera mode). */
     {
         extern int Pc_MouseCursor_PuzzleActive(void);
-        wantCapture = (g_DebugThirdPersonCam && inGameplay && !Pc_MouseCursor_PuzzleActive());
+        wantCapture = ((g_DebugThirdPersonCam || g_DebugCamEnabled) && inGameplay && !Pc_MouseCursor_PuzzleActive());
     }
     if ((SDL_GetRelativeMouseMode() == SDL_TRUE) != (wantCapture != 0))
     {
@@ -295,5 +337,28 @@ void Pc_ControlStyleUpdate(void)
         /* Drain any accumulated relative motion on the capture transition so the
          * first TPS/OTS frame doesn't jerk the camera by the cursor's menu travel. */
         SDL_GetRelativeMouseState(NULL, NULL);
+        /* Leaving relative mode hands the pointer back, so re-apply the window
+         * confinement it was standing in for (GitHub #87). */
+        PsyX_UpdateMouseConfinement();
     }
+}
+
+/* Is any SDL game controller attached? Used by the title screen to decide
+ * whether a button hint should name the pad bind as well as the key one. Not a
+ * "which device is active" signal -- SDL has no cheap answer for that -- so
+ * callers that need one show both binds and let the player read the relevant
+ * half. */
+int Pc_ControllerAttached(void)
+{
+    int i;
+    int n = SDL_NumJoysticks();
+
+    for (i = 0; i < n; i++)
+    {
+        if (SDL_IsGameController(i))
+        {
+            return 1;
+        }
+    }
+    return 0;
 }

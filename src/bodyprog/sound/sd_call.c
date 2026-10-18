@@ -3,6 +3,9 @@
 #ifdef SH_PC_PORT
 #include "sh_log.h"
 #include "xa_player.h"
+#include "pc_audio_config.h"
+#include "pc_config.h"
+#include "pc_playas.h"
 #include <stdio.h>
 #endif
 
@@ -69,6 +72,22 @@ static s_800C15F0 D_800C15F0[4];
 
 /** @brief `e_SfxId` | Stores the index of the currently playing SFX. */
 static u16 g_AudioPlayingIdxList[24];
+
+#ifdef SH_PC_PORT
+/* The positional-loop sustain in 3d_audio.c needs to know whether a sfx still
+ * owns a voice. The list stays private to this file. */
+bool Pc_Sd_SfxHasVoice(u16 sfxId)
+{
+    s32 i;
+
+    for (i = 0; i < (s32)ARRAY_SIZE(g_AudioPlayingIdxList); i++)
+    {
+        if (g_AudioPlayingIdxList[i] == sfxId)
+            return true;
+    }
+    return false;
+}
+#endif
 
 /** @brief Stores the pitch of currently playing SFX.
 * Shares the same index of where the SFX is stored in `g_AudioPlayingIdxList`.
@@ -420,6 +439,57 @@ static inline void WriteVolume(s16* left, s16* right, s16 vol)
     *right = vol;
 }
 
+#ifdef SH_PC_PORT
+/* Harry vocalising — the only sounds the play-as voice pitch may touch. Each of
+ * these owns its (VAB program, tone) outright, so no other sound shares a
+ * sample with them. Written as a switch on purpose: 1321/1322 in the middle of
+ * the range are the radio loops, which key onto reserved voices.
+ *
+ * Returns 1 for VOICED sounds (vocal cords: cries and screams) and 2 for the
+ * low-HP BREATHING, which is unvoiced noise. They do not respond alike — the
+ * same shift that turns a grunt feminine turns breath into small fast lungs —
+ * so the breath takes a gentler fraction of it (Sd_PlayerVoicePitchPct). */
+#define SD_VOICE_SFX_VOICED 1
+#define SD_VOICE_SFX_BREATH 2
+
+static int Sd_IsPlayerVoiceSfx(u16 sfxId)
+{
+    switch (sfxId)
+    {
+        case Sfx_Unk1317:          /* landing grunt          */
+        case Sfx_Unk1318:          /* death scream, early    */
+        case Sfx_Unk1319:          /* death scream, late     */
+        case Sfx_Unk1326:          /* hurt cry               */
+        case Sfx_Unk1327:          /* hurt cry, attack class */
+        case Sfx_Unk1328:
+        case Sfx_Unk1329:
+            return SD_VOICE_SFX_VOICED;
+
+        case Sfx_HarryHeavyBreath: /* low-HP breathing       */
+            return SD_VOICE_SFX_BREATH;
+
+        default:
+            return 0;
+    }
+}
+
+/* Breath stops gaining once it sounds like a smaller chest; past this it just
+ * sounds fast, so the cries can keep climbing without dragging it along. */
+#define SD_BREATH_PITCH_MAX 118
+
+/* The configured shift for a voiced sound, capped for the unvoiced breath. */
+static s32 Sd_PlayerVoicePitchPct(int sfxClass)
+{
+    s32 pct = g_PcConfig.femaleVoicePitch;
+
+    if (sfxClass == SD_VOICE_SFX_BREATH && pct > SD_BREATH_PITCH_MAX)
+    {
+        pct = SD_BREATH_PITCH_MAX;
+    }
+    return pct;
+}
+#endif
+
 u8 Sd_PlaySfx(u16 sfxId, q0_7 balance, u8 vol) // 0x80046048
 {
     static s16   audioIdx;
@@ -524,6 +594,35 @@ u8 Sd_PlaySfx(u16 sfxId, q0_7 balance, u8 vol) // 0x80046048
         attr.voice                                               = 1 << g_Sd_VabPlayingInfo.audioVabIdx;
 
         SpuGetVoiceAttr(&attr);
+
+#ifdef SH_PC_PORT
+        /* Playing as one of the women: lift the pitch of HARRY'S OWN VOICE so it
+         * matches the body. Only the eight ids below — his hurt cries, death
+         * screams, landing grunt and low-HP breathing — every one of which owns
+         * its VAB (program, tone) outright, so nothing else can be caught by it.
+         * Deliberately a per-id switch and never a numeric range: the radio loops
+         * sit at 1321/1322, in the middle of them.
+         *
+         * Cutscene dialogue is XA and is untouched by design — it carries whole
+         * scenes, so pitching it would raise every other character's voice too.
+         *
+         * attr is a stack struct here and SpuGetVoiceAttr deliberately leaves
+         * .mask alone, so it MUST be set before writing back or the SPU takes
+         * garbage volume/ADSR/sample-address from uninitialised memory. */
+        int sfxClass = Sd_IsPlayerVoiceSfx(sfxId);
+
+        if (g_PcConfig.femaleVoicePitch != 0 && attr.pitch != 0 &&
+            sfxClass != 0 && Pc_PlayAs_IsFemale())
+        {
+            s32 scaled = ((s32)attr.pitch * Sd_PlayerVoicePitchPct(sfxClass)) / 100;
+
+            if (scaled > 0x3FFF) scaled = 0x3FFF; /* the software SPU's own step clamp */
+            if (scaled < 1)      scaled = 1;
+            attr.pitch = (u16)scaled;
+            attr.mask  = SPU_VOICE_PITCH;
+            SpuSetVoiceAttr(&attr);
+        }
+#endif
 
         g_AudioPlayingPitchList[g_Sd_VabPlayingInfo.audioVabIdx] = attr.pitch;
         return g_Sd_VabPlayingInfo.audioVabIdx;
@@ -1877,6 +1976,41 @@ void func_800485C0(s32 idx) // 0x800485C0
 
 #define CD_ERROR_LIMIT 600 // Matches value used in beatmania `FSCD.C`.
 
+#ifdef SH_PC_PORT
+/* The XA volume Sd_XaAudioPlay's Initialize state picks for a line; the PC
+ * skips that state machine, and the seek model needs it to size the next
+ * stop task's fade-out. */
+static int Pc_XaLineVolume(u16 xaIdx)
+{
+    switch (xaIdx)
+    {
+        case 53:
+        case 56:
+        case 596:
+        case 597:
+        case 598:
+        case 600:
+        case 602:
+        case 612:
+        case 614:
+        case 620:
+        case 657:
+        case 606:
+            return Sd_GetVolSe(84);
+
+        case 723:
+        case 725:
+            return 50;
+
+        case 724:
+            return 40;
+
+        default:
+            return 84;
+    }
+}
+#endif
+
 void Sd_TaskPoolExecute(void) // 0x800485D8
 {
     g_Sd_CurrentTask = g_Sd_TaskPool[0];
@@ -1902,7 +2036,10 @@ void Sd_TaskPoolExecute(void) // 0x800485D8
              * and XaLoadState_EnableAudio re-setting xaAudioIdx_4. Lets the
              * Stop-then-Play sequence in Sd_XaAudioPlayTaskAdd work correctly
              * even when Stop fully clears the streaming-state flags. */
+            Pc_XaSeek_OnPlayTask(g_Sd_AudioWork.xaAudioIdxCheck_2, Pc_XaLineVolume(g_Sd_AudioWork.xaAudioIdxCheck_2));
             XaPlayer_Play(g_Sd_AudioWork.xaAudioIdxCheck_2);
+            if (PcAudioConfig_UsesSoftwareSpu())
+                SdSetSerialAttr(0, 0, 1);
             g_Sd_AudioWork.xaAudioIdx_4 = g_Sd_AudioWork.xaAudioIdxCheck_2;
             Sd_TaskPoolUpdate();
 #else
@@ -1915,6 +2052,9 @@ void Sd_TaskPoolExecute(void) // 0x800485D8
             /* XaPlayer_Stop calls Xa_SignalPlaybackFinished which clears
              * xaAudioIdx_4 + D_800C37DC. Safe because the upcoming Play in
              * Sd_XaAudioPlayTaskAdd's queue uses xaAudioIdxCheck_2 (still set). */
+            if (PcAudioConfig_UsesSoftwareSpu())
+                SdSetSerialAttr(0, 0, 0);
+            Pc_XaSeek_OnStopTask();
             XaPlayer_Stop();
             Sd_TaskPoolUpdate();
 #else

@@ -105,6 +105,47 @@ s32 func_800DE350(s32 arg0) // 0x800DE350
     return D_800EAF20[idx] | 0x3A000000;
 }
 
+#ifdef SH_PC_PORT
+/* The carousel's glow field is a grid of 12px gouraud cells laid across the
+ * whole 320x224 frame, but it is drawn in OT0, so it inherits the world pass's
+ * Hor+ widening and vertical crop -- both there for 3D geometry -- and comes out
+ * as a 4:3 box of glow that stops short of the bottom. Map it onto the world
+ * ortho's own extent instead. A glow field has no aspect to preserve, and every
+ * cell edge goes through the same affine map, so shared edges stay shared and no
+ * cracks can open. Identity at 4:3, where the ortho is the frame itself. */
+static void Pc_GlowGridMapping(float* sx, float* ox, float* sy, float* oy)
+{
+    extern float g_PsxWorldOrtho[4];
+    extern float g_PsxWorldDisp[2];
+    extern int   g_PsxWorldOrthoValid;
+    float        w;
+    float        h;
+
+    *sx = 1.0f; *ox = 0.0f;
+    *sy = 1.0f; *oy = 0.0f;
+
+    w = g_PsxWorldDisp[0];
+    h = g_PsxWorldDisp[1];
+    if (!g_PsxWorldOrthoValid || w <= 0.0f || h <= 0.0f)
+    {
+        return;
+    }
+
+    /* Prim coordinates are centre-origin (draw offset = half the display), the
+     * ortho is in display coordinates: x' = L + (x + w/2) * (R - L) / w - w/2. */
+    *sx = (g_PsxWorldOrtho[1] - g_PsxWorldOrtho[0]) / w;
+    *ox = g_PsxWorldOrtho[0] + (w * 0.5f) * (*sx) - (w * 0.5f);
+    *sy = (g_PsxWorldOrtho[3] - g_PsxWorldOrtho[2]) / h;
+    *oy = g_PsxWorldOrtho[2] + (h * 0.5f) * (*sy) - (h * 0.5f);
+}
+
+static short Pc_GlowGridMap(short v, float s, float o)
+{
+    float f = (float)v * s + o;
+    return (short)((f >= 0.0f) ? (f + 0.5f) : (f - 0.5f));
+}
+#endif
+
 void* func_800DE380(GsOT_TAG* arg0, PACKET* arg1) // 0x800DE380
 {
     s32       i;
@@ -115,6 +156,11 @@ void* func_800DE380(GsOT_TAG* arg0, PACKET* arg1) // 0x800DE380
     s32       var_s7;
     POLY_G4*  poly;
     DR_TPAGE* tPage;
+#ifdef SH_PC_PORT
+    float     pcSx, pcOx, pcSy, pcOy;
+
+    Pc_GlowGridMapping(&pcSx, &pcOx, &pcSy, &pcOy);
+#endif
 
     poly = arg1;
 
@@ -141,6 +187,17 @@ void* func_800DE380(GsOT_TAG* arg0, PACKET* arg1) // 0x800DE380
             poly->y2 = ((i - 1) * 12) - 100;
             poly->x3 = -166 + (12 * j);
             poly->y3 = ((i - 1) * 12) - 100;
+
+#ifdef SH_PC_PORT
+            poly->x0 = Pc_GlowGridMap(poly->x0, pcSx, pcOx);
+            poly->x1 = Pc_GlowGridMap(poly->x1, pcSx, pcOx);
+            poly->x2 = Pc_GlowGridMap(poly->x2, pcSx, pcOx);
+            poly->x3 = Pc_GlowGridMap(poly->x3, pcSx, pcOx);
+            poly->y0 = Pc_GlowGridMap(poly->y0, pcSy, pcOy);
+            poly->y1 = Pc_GlowGridMap(poly->y1, pcSy, pcOy);
+            poly->y2 = Pc_GlowGridMap(poly->y2, pcSy, pcOy);
+            poly->y3 = Pc_GlowGridMap(poly->y3, pcSy, pcOy);
+#endif
 
             *(s32*)&poly->r0 = temp_s0;
             *(s32*)&poly->r1 = var_s7;
@@ -679,6 +736,30 @@ bool func_800DF41C(s_800ED848* arg0) // 0x800DF41C
 
     arg0->field_8 += 30;
 
+#ifdef SH_PC_PORT
+    {
+        /* One-shot Flauros-ray diagnosis (0727 report: ray not visible). The
+         * sweep advances 30/frame regardless of dt, so at 60fps it crosses in
+         * ~half the PSX wall time; these lines tell the next log whether the
+         * ray ran (and how fast), or never got here at all. */
+        static s32 s_rayProbes = 0;
+        if (s_rayProbes < 8)
+        {
+            /* The ray is aimed purely by these two world points (Flauros ->
+             * Alessa's torso), so if it renders past her they are what to look
+             * at: everything between is faithful decomp. Alessa's own position
+             * comes along to show whether the stored target is tracking her. */
+            SH_DBG("[FLAUROS-RAY] update field_8=%d trans=(%d,%d,%d) from=(%d,%d,%d) to=(%d,%d,%d) alessa=(%d,%d,%d)",
+                   arg0->field_8, arg0->field_28.t[0], arg0->field_28.t[1], arg0->field_28.t[2],
+                   arg0->field_14->vx, arg0->field_14->vy, arg0->field_14->vz,
+                   arg0->field_68->vx, arg0->field_68->vy, arg0->field_68->vz,
+                   g_SysWork.npcs[0].position.vx, g_SysWork.npcs[0].position.vy,
+                   g_SysWork.npcs[0].position.vz);
+            s_rayProbes++;
+        }
+    }
+#endif
+
     for (i = 0; i < 50; i++)
     {
         var_v1 = 332;
@@ -993,6 +1074,22 @@ void* func_800DFD3C(GsOT_TAG* ot, PACKET* packet, MATRIX* mat, s32 arg3, s32 arg
             temp_s1 = var_s5;
             var_s5  = func_800DE350(j + (i * 28));
 
+#ifdef SH_PC_PORT
+            {
+                /* One-shot Flauros-ray diagnosis: first grid quad's screen
+                 * coords + colors distinguish drawn-but-blink-fast from
+                 * off-screen from all-black. */
+                static s32 s_rayDrawProbes = 0;
+                if (i == 1 && j == 1 && s_rayDrawProbes < 8)
+                {
+                    SH_DBG("[FLAUROS-RAY] draw quad0 xy0=(%d,%d) xy2=(%d,%d) c0=%08X c1=%08X p=%d flag=%d",
+                           sp48[0].vx, sp48[0].vy, sp48[2].vx, sp48[2].vy,
+                           (u32)temp_s0, (u32)temp_s1, sp58, sp5C);
+                    s_rayDrawProbes++;
+                }
+            }
+#endif
+
             setPolyG4(poly);
 
             *(s32*)&poly->x0 = *(s32*)&sp48[0];
@@ -1155,7 +1252,16 @@ s_func_800E030C* func_800E030C(void) // 0x800E030C
     s32              i;
     s_func_800E030C* ptr;
 
+#ifdef SH_PC_PORT
+    /* PSX offset 0x494 != offsetof(field_494) on 64-bit: s_func_800E030C has
+     * an 8-byte funcPtr so the array aligns up to 0x498. base+0x494 made every
+     * spawn write -4 vs the readers (the [FXBUF-BAD] 0x7ffc signature + the
+     * old EXECUTING 0x7ffa crash) -> the Dahlia-teleport light-gather never
+     * rendered. On PSX both expressions are the same address. */
+    ptr = ((s_func_800E05C8*)MAP6S04_FXBUF)->field_494;
+#else
     ptr = (s_func_800E030C*)((u8*)MAP6S04_FXBUF + 0x494);
+#endif
 
     for (i = 0; i < 800; i++, ptr++)
     {

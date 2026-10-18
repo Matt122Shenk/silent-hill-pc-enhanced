@@ -12,7 +12,10 @@
 #include "bodyprog/text/text_draw.h"
 #include "main/rng.h"
 #ifdef SH_PC_PORT
+#include "pc_modern_mesh.h"
+#include "pc_item_unq.h" /* Pc_ItemUnq_FromItemId: itemId -> UNQ file index */
 #include "sh_log.h"
+#include "pc_big_tmd.h" /* Pc_BigTmd_Resolve at the FS_BUFFER_5/8 consumers */
 #endif
 
 /* Forward decl: called before its definition below; clang errors on the
@@ -79,7 +82,19 @@ GsCOORDINATE2 g_Items_Coords[DISPLAYED_ITEM_COUNT_MAX]; // 0x800C3E48
 
 #include "item_rotations.h"
 
+/* Called above their definitions. Without a prototype in scope Clang
+ * synthesises `int f()` at the call site and then rejects the real
+ * definition as a conflicting type; GCC only warns. */
+void Gfx_Inventory_2dBackgroundDraw(s32* arg0);
+
+#ifdef SH_PC_PORT
+/* Non-static under the PC port so the manual-reload request gate
+ * (pc_combat.c, PC_PlayerManualReloadRequested) can read a gun's clip capacity
+ * to avoid reloading an already-full clip. Matching build keeps it static. */
+u8 g_Items_GunsMaxLoadAmmo[36] = {
+#else
 static u8 g_Items_GunsMaxLoadAmmo[36] = {
+#endif
     0, 0, 0, 0, 0, 0, 0, 0,
     0, 0, 0, 0, 0, 0, 0, 0,
     0, 0, 0, 0, 0, 0, 0, 0,
@@ -536,6 +551,8 @@ const char* g_ItemDescriptions[] = {
 
 #ifdef SH_PC_PORT
 #include "lang_text.h" /* PAL localized item text (NULL = use the US string) */
+#include "lang_jpn.h"  /* NTSC-J inventory labels */
+#include "main/fileinfo.h" /* g_GameRegion */
 
 static const char* s_ItemName(u8 id) {
     int idx = (int)id - 32;
@@ -588,6 +605,14 @@ q19_12 g_Items_PickupScale     = Q12(0.0f);
  * with force-item-depth (the inventory see-through fix) and to release the
  * freeze-frame when the pickup ends. */
 int g_PcPickupItemActive = 0;
+
+/* Set to 1 every frame a full-screen puzzle draws its 3D models through the
+ * shared item path (func_8004BD74 arg2==0 under GameState_InGame — today only
+ * the map5_s01 combination lock). The puzzle's map event holds
+ * BgmStatusFlag_Pause, so OT0 holds the puzzle models ALONE and the same
+ * force-item-depth bracket + precise-SZ feed as the inventory applies. Armed
+ * at the puzzle draw site, cleared each frame in game_main.c. */
+int g_PcPuzzleItemDepth = 0;
 #endif
 
 VECTOR3 D_800AE1B4[1] = { 0x00000000, 0x000000CC, 0xFFFFFEC9 };
@@ -1162,8 +1187,27 @@ void Gfx_ItemScreens_DrawInit(u32* selectedItemId) // 0x8004F764
     {
         for (i = 0; i < ARRAY_SIZE(LABEL_STR_POS_TABLE); i++)
         {
+#ifdef SH_PC_PORT
+            /* "Exit" and "Map" are also PC Options / Options row keys with
+             * different meanings, so on NTSC-J these labels take their own
+             * inventory-only lookup. The six box labels stay centred on the
+             * English one's centre; No./Name: are left-aligned. */
+            const char* label = LABEL_STRS[i];
+            s32         x     = LABEL_STR_POS_TABLE[i].vx;
+            if (g_GameRegion == Region_JPN)
+            {
+                const char* tr = Pc_JpnInventoryLabel(label);
+                if (tr != NULL)
+                    label = tr;
+            }
+            if (i < 6)
+                x += (Pc_LangMenuTextWidth(LABEL_STRS[i]) - Pc_LangMenuTextWidth(Pc_LangMenuText(label))) / 2;
+            Gfx_StringSetPosition(x, LABEL_STR_POS_TABLE[i].vy);
+            Gfx_StringDraw(label, 10);
+#else
             Gfx_StringSetPosition(LABEL_STR_POS_TABLE[i].vx, LABEL_STR_POS_TABLE[i].vy);
             Gfx_StringDraw(LABEL_STRS[i], 10);
+#endif
         }
 
         Inventory_PlayerItemScroll(selectedItemId);
@@ -2596,7 +2640,11 @@ void Inventory_PlayerItemScroll(u32* selectedItemId) // 0x800523D8
                         if (!Xbox_TmdBufferValid((const void*)FS_BUFFER_8, "inv7"))
                             break;
 #endif
+#ifdef SH_PC_PORT
+                        Gfx_Items_Display((s_TmdFile*)Pc_BigTmd_Resolve(FS_BUFFER_8), 7, k);
+#else
                         Gfx_Items_Display((s_TmdFile*)FS_BUFFER_8, 7, k);
+#endif
                         func_8005487C(7);
                         k = INV_ITEM_COUNT_MAX;
                     }
@@ -3189,6 +3237,11 @@ void func_800539A4(s32 scrollDirection, s32 arg1) // 0x800539A4
 
     if (g_SavegamePtr->items[arg1].id_0 != (u8)InvItemId_Empty)
     {
+#ifdef SH_PC_PORT
+        /* Consumed only by the modern-mesh fallback below; guarded so the PSX
+         * build sees this loop exactly as it shipped. */
+        bool found = false;
+#endif
         for (i = 0; i < INV_ITEM_COUNT_MAX; i++)
         {
             if (g_SavegamePtr->items[arg1].id_0 == g_Item_MapLoadableItems[i])
@@ -3197,11 +3250,44 @@ void func_800539A4(s32 scrollDirection, s32 arg1) // 0x800539A4
                 if (!Xbox_TmdBufferValid((const void*)FS_BUFFER_8, "invN"))
                     break;
 #endif
+#ifdef SH_PC_PORT
+                Gfx_Items_Display(Pc_BigTmd_Resolve(FS_BUFFER_8), var_s0, i);
+#else
                 Gfx_Items_Display(FS_BUFFER_8, var_s0, i);
+#endif
                 func_8005487C(var_s0);
+#ifdef SH_PC_PORT
+                found = true;
+#endif
                 i = INV_ITEM_COUNT_MAX;
             }
         }
+#ifdef SH_PC_PORT
+        /* Cheat-granted items may be absent from this map's pack list. They
+         * still have a canonical UNQ file identity, so let a valid loose GLB
+         * occupy the carousel slot without guessing or reusing a pack index.
+         * Gfx_Items_Display first links pack object 0 only as the retail
+         * transform/texture binding carrier; Pc_ModernMesh_LinkObject then
+         * replaces its geometry. Missing/rejected GLBs fail closed to blank. */
+        if (!found)
+        {
+            if (Pc_ModernMesh_Find(Pc_ItemUnq_FromItemId(g_SavegamePtr->items[arg1].id_0)) != NULL)
+            {
+                Pc_ItemUnq_SetRequestedItemId(g_SavegamePtr->items[arg1].id_0);
+                Gfx_Items_Display(FS_BUFFER_8, var_s0, 0);
+                func_8005487C(var_s0);
+                SH_DBG("[UNIFIEDITEM] carousel fallback source=modern-unq slot=%d item=%u",
+                       (int)var_s0, (unsigned)g_SavegamePtr->items[arg1].id_0);
+            }
+            else
+            {
+                g_Items_ItemsModelData[var_s0].id = 0;
+                g_Items_ItemsModelData[var_s0].tmd = NULL;
+                SH_DBG("[UNIFIEDITEM] carousel fallback source=none slot=%d item=%u",
+                       (int)var_s0, (unsigned)g_SavegamePtr->items[arg1].id_0);
+            }
+        }
+#endif
     }
 
     for (i = 0; i < ARRAY_SIZE(sp10); i++)
@@ -3220,6 +3306,32 @@ void func_800539A4(s32 scrollDirection, s32 arg1) // 0x800539A4
  * - `GameFs_MapItemsModelLoad` and `GameFs_MapItemsTextureLoad` load the packs based on the
  *   map being loaded.
  */
+
+#ifdef SH_PC_PORT
+/* Oversized loose item-TMD support (pc_port/src/pc_big_tmd.c).
+ *
+ * Every one of the ~79 arms below reads into the SINGLE fixed slab
+ * FS_BUFFER_5, whose usable size is set by the disc file table. A loose
+ * replacement larger than its slot cannot be byte-replaced, so Fs_QueueTickRead
+ * refuses it and the disc file loads instead.
+ *
+ * Rather than edit 79 identical call sites — where one being missed would make
+ * the mechanism silently wrong for that item — the read is intercepted for the
+ * extent of this ONE function. Pc_BigTmd_Redirect is keyed by fileIdx, so each
+ * item gets its own verdict, and it returns `dest` unchanged unless an
+ * oversized, valid loose file exists for that exact file id. With
+ * allow_loose_files off (the default) it is one boolean test that returns the
+ * incoming pointer, so the slab the read lands in is FS_BUFFER_5 as before.
+ *
+ * Pc_ModernMesh_SelectRead is layered inside the same interception: it gets
+ * first refusal on the read so an item with a modern glTF replacement can
+ * divert to its own buffer, and is likewise an identity for every id without
+ * one — so the big-TMD verdict above is reached unchanged in that case.
+ *
+ * #undef'd immediately after the function so no other call site is affected. */
+#define Fs_QueueStartRead(fileIdx_, dest_) \
+    Fs_QueueStartRead((fileIdx_), Pc_BigTmd_Redirect((fileIdx_), Pc_ModernMesh_SelectRead((fileIdx_), (dest_))))
+#endif
 
 void GameFs_UniqueItemModelLoad(u8 itemId) // 0x80053B08
 {
@@ -3520,6 +3632,10 @@ void GameFs_UniqueItemModelLoad(u8 itemId) // 0x80053B08
     }
 }
 
+#ifdef SH_PC_PORT
+#undef Fs_QueueStartRead
+#endif
+
 void GameFs_Tim00TIMLoad(void) // 0x80053dA0
 {
     if (g_SysWork.invItemLoadFlags & InvItemLoadFlag_Tex0)
@@ -3630,6 +3746,14 @@ void GameFs_MapItemsModelLoad(u32 mapId) // 0x80053DFC
     #undef flags
 }
 
+#ifdef SH_PC_PORT
+/* Same oversized-loose-TMD intercept for the per-map inventory item packs
+ * (IT_000..006 into FS_BUFFER_8): a modded pack with more/bigger item models
+ * gets a PC-owned buffer exactly like the UNQ close-ups above. */
+#define Fs_QueueStartRead(fileIdx_, dest_) \
+    Fs_QueueStartRead((fileIdx_), Pc_BigTmd_Redirect((fileIdx_), (dest_)))
+#endif
+
 void GameFs_MapItemsTextureLoad(s32 mapId) // 0x80054024
 {
     switch (mapId)
@@ -3696,6 +3820,10 @@ void GameFs_MapItemsTextureLoad(s32 mapId) // 0x80054024
     }
 }
 
+#ifdef SH_PC_PORT
+#undef Fs_QueueStartRead
+#endif
+
 void func_800540A4(s8 arg0) // 0x800540A4
 {
     s32 i;
@@ -3706,7 +3834,17 @@ void func_800540A4(s8 arg0) // 0x800540A4
         g_SavegamePtr->items[g_SysWork.playerCombat.weaponInventoryIdx].count_1 = g_SysWork.playerCombat.currentWeaponAmmo;
     }
 
-    for (i = 0; i < g_SavegamePtr->inventorySlotCount; i++)
+    /* The loop body dereferences items[weaponInventoryIdx] unguarded, unlike the
+     * writeback above. With nothing equipped that index is NO_VALUE, so items[-1]
+     * reads the four bytes preceding the savegame; if they happen to spell a gun
+     * id whose ammo the player carries, that stack is overwritten with a stale
+     * totalWeaponAmmo and deleted outright when it lands on zero. Reachable from
+     * the inventory screen, which clears the index on Unequip. */
+    for (i = 0;
+#ifdef SH_PC_PORT
+         g_SysWork.playerCombat.weaponInventoryIdx != NO_VALUE &&
+#endif
+         i < g_SavegamePtr->inventorySlotCount; i++)
     {
         if (INV_ITEM_GROUP(g_SavegamePtr->items[i].id_0) == InvItemGroup_GunAmmo &&
             g_SavegamePtr->items[i].id_0 == INV_WEAPON_AMMO_ID(g_SavegamePtr->items[g_SysWork.playerCombat.weaponInventoryIdx].id_0))
@@ -3767,7 +3905,11 @@ void Gfx_Items_Draw(void) // 0x80054200
         g_Items_Transforms[i].trans.vx  = 0;
     }
 
+#ifdef SH_PC_PORT
+    GameFs_TmdDataAlloc((s32*)Pc_BigTmd_Resolve(FS_BUFFER_8));
+#else
     GameFs_TmdDataAlloc(FS_BUFFER_8);
+#endif
 
 #ifdef SH_PC_PORT
     /* Clear every carousel model slot up front. The loops below only call
@@ -3803,7 +3945,11 @@ void Gfx_Items_Draw(void) // 0x80054200
             {
                 if (g_SavegamePtr->items[D_800C3E18[inventoryItemsIdx]].id_0 == g_Item_MapLoadableItems[saveItemsIdx])
                 {
+#ifdef SH_PC_PORT
+                    Gfx_Items_Display(Pc_BigTmd_Resolve(FS_BUFFER_8), inventoryItemsIdx, saveItemsIdx);
+#else
                     Gfx_Items_Display(FS_BUFFER_8, inventoryItemsIdx, saveItemsIdx);
+#endif
                     func_8005487C(inventoryItemsIdx);
 
                     saveItemsIdx = INV_ITEM_COUNT_MAX;
@@ -3830,7 +3976,11 @@ void Gfx_Items_Draw(void) // 0x80054200
             {
                 if (g_Inventory_EquippedItem == g_Item_MapLoadableItems[saveItemsIdx])
                 {
+#ifdef SH_PC_PORT
+                    Gfx_Items_Display(Pc_BigTmd_Resolve(FS_BUFFER_8), 7, saveItemsIdx);
+#else
                     Gfx_Items_Display(FS_BUFFER_8, 7, saveItemsIdx);
+#endif
                     func_8005487C(7);
 
                     saveItemsIdx = INV_ITEM_COUNT_MAX;
@@ -3871,7 +4021,11 @@ void Gfx_Items_Draw(void) // 0x80054200
             {
                 if (ITEM_IDS[inventoryItemsIdx] == g_Item_MapLoadableItems[saveItemsIdx])
                 {
+#ifdef SH_PC_PORT
+                    Gfx_Items_Display(Pc_BigTmd_Resolve(FS_BUFFER_8), inventoryItemsIdx, saveItemsIdx);
+#else
                     Gfx_Items_Display(FS_BUFFER_8, inventoryItemsIdx, saveItemsIdx);
+#endif
                     func_8005487C(inventoryItemsIdx);
 
                     saveItemsIdx = INV_ITEM_COUNT_MAX;
@@ -3963,6 +4117,12 @@ void Gfx_Items_Display(s_TmdFile* tmd, s32 displayItemIdx, s32 loadableItemIdx)
     struct TMD_STRUCT* models;
 
 #ifdef SH_PC_PORT
+    /* Every relink attempt owns the modern-handle disposition, including a
+     * failed/out-of-range stock-pack lookup. Otherwise a slot that previously
+     * held a modern mesh can retain its non-zero id after ->tmd is cleared and
+     * re-emit the previous item's geometry with stale carousel state. */
+    g_Items_ItemsModelData[displayItemIdx].id = 0;
+
     /* s_TmdFile is a raw TMD file image: id/flags/nobj followed by
      * object table (each object 28 bytes on disk, 7×u32). PSX code
      * passed &models[loadableItemIdx] because TMD_STRUCT matched the
@@ -3989,7 +4149,22 @@ void Gfx_Items_Display(s_TmdFile* tmd, s32 displayItemIdx, s32 loadableItemIdx)
             }
         }
         if (obj != NULL) {
+            u8 modernItemId = Pc_ItemUnq_TakeRequestedItemId(loadableItemIdx);
+
             GsLinkObject4_PC(obj, &g_Items_ItemsModelData[displayItemIdx]);
+            if (modernItemId != InvItemId_Unequipped &&
+                Pc_ModernMesh_LinkObject(Pc_ItemUnq_FromItemId(modernItemId),
+                                         &g_Items_ItemsModelData[displayItemIdx]))
+            {
+                SH_DBG("[UNIFIEDITEM] carousel link source=modern slot=%d item=%u file=%d",
+                       (int)displayItemIdx, (unsigned)modernItemId,
+                       (int)Pc_ItemUnq_FromItemId(modernItemId));
+            }
+            else
+            {
+                SH_DBG("[UNIFIEDITEM] carousel link source=stock-pack slot=%d item=%u loadableIdx=%d",
+                       (int)displayItemIdx, (unsigned)modernItemId, (int)loadableItemIdx);
+            }
         } else {
             /* loadableItemIdx has no model in the loaded TMD — e.g. a cheat-added
              * item that isn't in this map's loadableItems, or idx >= nobj.
@@ -4180,7 +4355,16 @@ void func_80054A04(u8 itemId) // 0x80054A04
     g_Items_Transforms[9].trans.vy  = 0;
     g_Items_Transforms[9].trans.vx  = 0;
 
+#ifdef SH_PC_PORT
+    /* Resolve the oversized-item substitution: when this item's model was
+     * redirected into a PC-owned buffer, GsMapModelingData must parse THAT
+     * buffer, not the slab the read never went into. Pc_BigTmd_Resolve is the
+     * identity for any pointer with no active substitution, which is always the
+     * case on stock data — so this stays FS_BUFFER_5 exactly as before. */
+    GameFs_TmdDataAlloc((s32*)Pc_BigTmd_Resolve(FS_BUFFER_5));
+#else
     GameFs_TmdDataAlloc(FS_BUFFER_5);
+#endif
 
 #ifndef SH_PC_PORT
     D_800C3E18[9] = 0; /* PSX BSS aliasing; out of bounds on PC */
@@ -4196,7 +4380,8 @@ void func_80054A04(u8 itemId) // 0x80054A04
      * to render — that's the "invisible health drink / picked-up map
      * shows no model" symptom. */
     {
-        s_TmdFile* _tmd = (s_TmdFile*)FS_BUFFER_5;
+        /* Same substitution resolve as the GameFs_TmdDataAlloc call above. */
+        s_TmdFile* _tmd = (s_TmdFile*)Pc_BigTmd_Resolve(FS_BUFFER_5);
         if (_tmd != NULL) {
             unsigned long*     _hdr = (unsigned long*)&_tmd->flags;
             struct TMD_STRUCT* _obj;
@@ -4213,7 +4398,9 @@ void func_80054A04(u8 itemId) // 0x80054A04
                 }
             }
             if (_obj != NULL) {
+                D_800C3E08.id = 0;
                 GsLinkObject4_PC(_obj, &D_800C3E08);
+                Pc_ModernMesh_LinkObject(Pc_ItemUnq_FromItemId(D_800AE187), &D_800C3E08);
             } else {
             }
         }
@@ -4338,7 +4525,27 @@ bool Gfx_PickupItemAnimate(u8 itemId) // 0x80054AD8
 #endif
     GsSetFlatLight(0, &D_800C3AC8[0]);
     GsSetFlatLight(1, &D_800C3AC8[1]);
+#ifdef SH_PC_PORT
+    /* Pin the pickup to the game's own projection. This draw uses whatever GTE H
+     * is current, and the alternate cameras (TPS/OTS/FPS) drive H with their
+     * per-camera FOV, so the pickup item scaled with that FOV (reported). The
+     * Pc_CameraFov_Update stand-down that was meant to prevent this keys on
+     * g_PcPickupItemActive, which MainLoop clears every frame and only THIS
+     * function re-sets -- so whether the camera update sees it depends on
+     * their order within the frame, and it did not. The inventory is immune
+     * because func_8004BFE8 pins its own projection; do the same here around
+     * the draw. The world is frozen behind the item (BgmStatusFlag_Pause), so
+     * nothing else is reprojected by the swap. gsScreenHeight IS the game's own
+     * projection (H = 224), the one this animation was authored for. */
+    {
+        s32 savedH = ReadGeomScreen();
+        SetGeomScreen(g_GameWork.gsScreenHeight);
+        func_8004BD74(9, obj, 2);
+        SetGeomScreen(savedH);
+    }
+#else
     func_8004BD74(9, obj, 2);
+#endif
     PopMatrix();
 
     return g_Items_PickupAnimState > 0;
@@ -4457,4 +4664,3 @@ void Items_AmmoReloadCalculation(s32* currentAmmo, s32* availableAmmo, u8 gunIdx
 // `bodyprog_80055028.c` directly.
 const s32 rodataPad_80028524 = 0;
 const s32 rodataPad_80028528 = 0;
- 

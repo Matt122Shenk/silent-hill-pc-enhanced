@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 /*
  * libgs_stub.c - GS (Graphics System) library stub implementations
  *
@@ -16,6 +17,8 @@
 #ifndef SH_XBOX_PORT
 #include <SDL.h>
 #include <PsyX/common/glad.h>
+#include <PsyX/PsyX_backend.h>
+#include <PsyX/PsyX_render.h> /* GR_SetPsxDisplayBuffers */
 #endif
 #include "sh_log.h"
 
@@ -27,7 +30,10 @@ void SH_TakeScreenshot(const char* filename)
     int w, h;
     SDL_GetWindowSize(g_window, &w, &h);
     unsigned char* px = (unsigned char*)malloc(w * h * 3);
-    glReadBuffer(GL_FRONT);
+    /* ES 3.0 accepts only GL_BACK or GL_NONE as the default framebuffer's read
+     * buffer — GL_FRONT is a desktop-GL spelling and raises GL_INVALID_ENUM on
+     * the ANGLE-backed backends, leaving the capture as uninitialised memory. */
+    glReadBuffer(g_grIsGLES ? GL_BACK : GL_FRONT);
     glReadPixels(0, 0, w, h, GL_RGB, GL_UNSIGNED_BYTE, px);
     /* Flip vertically (OpenGL reads bottom-up) */
     unsigned char* flipped = (unsigned char*)malloc(w * h * 3);
@@ -135,11 +141,17 @@ void GsTMDfastNTG4(void* op, VERT* vp, PACKET* pk, int n, int shift, GsOT* ot, u
 void GsInit3D(void)
 {
     InitGeom();
-    /* On PSX, GsInit3D sets geom offset to screen center (160, 120).
-     * However, PsyCross adds activeDrawEnv.ofs to every vertex (PsyX_GPU.cpp),
-     * and draw env ofs is already set to screen center (160, 112).
-     * Setting geom offset to (0, 0) avoids double-centering. */
-    SetGeomOffset(0, 0);
+    /* On PSX, GsInit3D sets the geom offset to the SCREEN centre (160, 120)
+     * -- the 240-line display, NOT the 224-line framebuffer. PsyCross adds
+     * activeDrawEnv.ofs (160, 112) to every vertex, so zeroing both here (the
+     * old "avoid double-centering" fix) silently moved the vertical anchor
+     * from 120 to 112: the whole picture sat EXACTLY 8 rows high from boot,
+     * clipping the top 8 GTE rows the console showed (the cafe "Study" sign)
+     * and revealing 8 bottom rows it never did. That global offset is what the
+     * vshift band-aid (eye-tuned to 11) was compensating. Keep X at 0 (160 is
+     * already in the draw offset; net 160 = console) and restore the +8 the
+     * console's Y anchor carries: net (160, 120) = console exactly. */
+    SetGeomOffset(0, 8);
     SetGeomScreen(240);
     /* PsyCross InitGeom() defaults DQA=-98/DQB=340, calibrated for a PSX scene
      * where SZ3 ≈ H.  The item camera uses H=1000 with SZ3≈10240, giving
@@ -180,11 +192,25 @@ void GsInit3D(void)
 }
 
 static unsigned long long gs_cum_epoch = 0;
+/* Fast-forward (PsyCross Ctrl+F5) scales GAME TIME, because the port paces
+ * the game from this wall clock, not from the PSX vblank counter. The old
+ * trick of inflating the vblank count is inert here, and skipping the vsync
+ * wait does nothing when the renderer already runs far above the refresh
+ * rate. Scaling the clock is what actually speeds the game up, and it feeds
+ * animation, physics and audio pacing consistently since they all derive
+ * from this one value. */
+#define GS_FASTFORWARD_SCALE 4
+extern int g_skipSwapInterval; /* PsyCross: held while Ctrl+F5 is down */
+extern int g_PcFastForward;    /* quick options: sticky toggle */
+static unsigned long long gs_cum_last  = 0;
+static long long gs_cum_ticks = 0;
 
 void GsInitVcount(void)
 {
     gs_vcount_start = Gs_PerfCounter();
     gs_cum_epoch = gs_vcount_start;
+    gs_cum_last  = gs_vcount_start;
+    gs_cum_ticks = 0;
     gs_vcount_active = 1;
 }
 
@@ -208,7 +234,22 @@ long long GsGetCumulativeQ12(void)
     }
     now  = Gs_PerfCounter();
     freq = Gs_PerfFreq();
-    return (long long)(((now - gs_cum_epoch) * 4096ull) / freq);
+
+    /* Accumulate elapsed COUNTER TICKS rather than measuring from a fixed
+     * epoch, so the scale can change mid-session without the whole history
+     * re-scaling and jumping the clock. At scale 1 this is exactly the old
+     * value: summing integer deltas telescopes to (now - epoch), and the
+     * single divide below keeps the same one-floor-per-read precision the
+     * cutscene/subtitle sync depends on. */
+    if (gs_cum_last == 0)
+    {
+        gs_cum_last = gs_cum_epoch;
+    }
+    gs_cum_ticks += (long long)(now - gs_cum_last) *
+                    ((g_skipSwapInterval || g_PcFastForward) ? GS_FASTFORWARD_SCALE : 1);
+    gs_cum_last   = now;
+
+    return (long long)((gs_cum_ticks * 4096ll) / (long long)freq);
 }
 
 int GsGetVcount(void)
@@ -263,7 +304,11 @@ void GsDrawOt(GsOT *ot)
         g_currentOTBucketCount = 1 << ot->length;
         PsyX_ClearGteDepthTable();
 
-        glClearDepth(1.0f);
+        /* The double-precision form is desktop-only; ES 3.0 has glClearDepthf. */
+        if (g_grCaps.clearDepthDouble)
+            glClearDepth(1.0f);
+        else
+            glClearDepthf(1.0f);
         glClear(GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
 #endif
         /* Xbox: the NV2A backend clears depth in GpuNv2a_FrameBegin. */
@@ -467,6 +512,22 @@ extern int  Xbox_ItemOtz(const unsigned short* sz4, int coarseOtz, int otLen);
     } } while (0)
 #endif /* SH_XBOX_PORT */
 
+/* [ITEMDEPTH] diagnostic (config item_depth_probe, off by default). Hands the
+ * probe the SORT half of each item primitive — the per-vertex GTE SZ, the IR0
+ * depth cue `p` the bucket is derived from, the bucket itself, the OT length
+ * and the drawer shift — keyed by the packet address so the draw-side parse can
+ * join to it. Reads only; no effect on rendering. */
+extern int g_PsyX_ItemDepthProbe;
+extern void PsyX_ItemProbeSortPrim(const void* prim, unsigned s0, unsigned s1,
+                                   unsigned s2, unsigned s3, long ir0,
+                                   int otz, int otLen, int shift);
+#define ITEM_PROBE_SORT(pl, oz, pz, otl, sh) do { \
+    if (g_PsyX_ItemDepthProbe) { \
+        PsyX_ItemProbeSortPrim((const void*)(pl), g_PsyX_RtpSz[0], g_PsyX_RtpSz[1], \
+                               g_PsyX_RtpSz[2], g_PsyX_RtpSz[3], (long)(pz), \
+                               (int)(oz), (int)(otl), (int)(sh)); \
+    } } while (0)
+
 /* PGXP shadow propagation, the item-path twin of SH_PGXP_PROP3/4 in
  * bodyprog_80055028.c. RotTransPers* shadow-stores each projected vertex at the
  * address it wrote — here a stack temporary — and the drawers below then copy that
@@ -489,6 +550,13 @@ extern int g_PsxUsePgxp;
         Shadow_Copy(&(pl)->x3, &(a3)); \
     } } while (0)
  
+/* Every emitter below carries the TMD mode byte's ABE bit (`cd` bit 1) into the
+ * output packet, because setPoly*() writes the OPAQUE base code and PsyCross
+ * blends on `code & 2` alone. Without it every semi-transparent primitive in an
+ * item model drew solid — most visibly the "Unknown liquid" bottle (UNQ66),
+ * whose 212 shell triangles are ABE and whose 8 opaque ones are the liquid
+ * inside: an opaque shell hid the liquid completely. */
+
 /* Flat-shaded triangle — lit + fog */
 void GsTMDfastF3LFG(void* op, VERT* vp, VERT* np, PACKET* pk, int n, int shift, GsOT* ot, unsigned long* scratch)
 {
@@ -517,10 +585,11 @@ void GsTMDfastF3LFG(void* op, VERT* vp, VERT* np, PACKET* pk, int n, int shift, 
  
         poly = (POLY_F3*)GsOUT_PACKET_P;
         setPolyF3(poly);
+        setSemiTrans(poly, (prim->cd >> 1) & 1);
         setRGB0(poly, col_out.r, col_out.g, col_out.b);
         *(int*)&poly->x0 = sxy0; *(int*)&poly->x1 = sxy1; *(int*)&poly->x2 = sxy2;
         TMD_PGXP3(poly, sxy0, sxy1, sxy2);
-        ITEM_PRECISE_SZ(p); addPrim(&ot->org[otz], poly);
+        ITEM_PRECISE_SZ(p); ITEM_PROBE_SORT(poly, otz, p, ot->length, shift); addPrim(&ot->org[otz], poly);
         GsOUT_PACKET_P = (u8*)poly + sizeof(POLY_F3);
     }
 }
@@ -554,12 +623,13 @@ void GsTMDfastG3LFG(void* op, VERT* vp, VERT* np, PACKET* pk, int n, int shift, 
  
         poly = (POLY_G3*)GsOUT_PACKET_P;
         setPolyG3(poly);
+        setSemiTrans(poly, (prim->cd >> 1) & 1);
         setRGB0(poly, c0.r, c0.g, c0.b);
         setRGB1(poly, c1.r, c1.g, c1.b);
         setRGB2(poly, c2.r, c2.g, c2.b);
         *(int*)&poly->x0 = sxy0; *(int*)&poly->x1 = sxy1; *(int*)&poly->x2 = sxy2;
         TMD_PGXP3(poly, sxy0, sxy1, sxy2);
-        ITEM_PRECISE_SZ(p); addPrim(&ot->org[otz], poly);
+        ITEM_PRECISE_SZ(p); ITEM_PROBE_SORT(poly, otz, p, ot->length, shift); addPrim(&ot->org[otz], poly);
         GsOUT_PACKET_P = (u8*)poly + sizeof(POLY_G3);
     }
 }
@@ -593,11 +663,12 @@ void GsTMDfastF4LFG(void* op, VERT* vp, VERT* np, PACKET* pk, int n, int shift, 
  
         poly = (POLY_F4*)GsOUT_PACKET_P;
         setPolyF4(poly);
+        setSemiTrans(poly, (prim->cd >> 1) & 1);
         setRGB0(poly, col_out.r, col_out.g, col_out.b);
         *(int*)&poly->x0 = sxy0; *(int*)&poly->x1 = sxy1;
         *(int*)&poly->x2 = sxy2; *(int*)&poly->x3 = sxy3;
         TMD_PGXP4(poly, sxy0, sxy1, sxy2, sxy3);
-        ITEM_PRECISE_SZ(p); addPrim(&ot->org[otz], poly);
+        ITEM_PRECISE_SZ(p); ITEM_PROBE_SORT(poly, otz, p, ot->length, shift); addPrim(&ot->org[otz], poly);
         GsOUT_PACKET_P = (u8*)poly + sizeof(POLY_F4);
     }
 }
@@ -632,6 +703,7 @@ void GsTMDfastG4LFG(void* op, VERT* vp, VERT* np, PACKET* pk, int n, int shift, 
  
         poly = (POLY_G4*)GsOUT_PACKET_P;
         setPolyG4(poly);
+        setSemiTrans(poly, (prim->cd >> 1) & 1);
         setRGB0(poly, c0.r, c0.g, c0.b);
         setRGB1(poly, c1.r, c1.g, c1.b);
         setRGB2(poly, c2.r, c2.g, c2.b);
@@ -640,7 +712,7 @@ void GsTMDfastG4LFG(void* op, VERT* vp, VERT* np, PACKET* pk, int n, int shift, 
         *(int*)&poly->x0 = sxy0; *(int*)&poly->x1 = sxy1;
         *(int*)&poly->x2 = sxy2; *(int*)&poly->x3 = sxy3;
         TMD_PGXP4(poly, sxy0, sxy1, sxy2, sxy3);
-        ITEM_PRECISE_SZ(p); addPrim(&ot->org[otz], poly);
+        ITEM_PRECISE_SZ(p); ITEM_PROBE_SORT(poly, otz, p, ot->length, shift); addPrim(&ot->org[otz], poly);
         GsOUT_PACKET_P = (u8*)poly + sizeof(POLY_G4);
     }
 }
@@ -675,13 +747,14 @@ void GsTMDfastTF3LFG(void* op, VERT* vp, VERT* np, PACKET* pk, int n, int shift,
 
         poly = (POLY_FT3*)GsOUT_PACKET_P;
         setPolyFT3(poly);
+        setSemiTrans(poly, (prim->cd >> 1) & 1);
         setRGB0(poly, col_out.r, col_out.g, col_out.b);
         setUV3(poly, prim->tu0, prim->tv0, prim->tu1, prim->tv1, prim->tu2, prim->tv2);
         poly->tpage = prim->tpage;
         poly->clut  = prim->clut;
         *(int*)&poly->x0 = sxy0; *(int*)&poly->x1 = sxy1; *(int*)&poly->x2 = sxy2;
         TMD_PGXP3(poly, sxy0, sxy1, sxy2);
-        ITEM_PRECISE_SZ(p); addPrim(&ot->org[otz], poly);
+        ITEM_PRECISE_SZ(p); ITEM_PROBE_SORT(poly, otz, p, ot->length, shift); addPrim(&ot->org[otz], poly);
         GsOUT_PACKET_P = (u8*)poly + sizeof(POLY_FT3);
     }
 }
@@ -715,6 +788,9 @@ void GsTMDfastTG3LFG(void* op, VERT* vp, VERT* np, PACKET* pk, int n, int shift,
 
         poly = (POLY_GT3*)GsOUT_PACKET_P;
         setPolyGT3(poly);
+        /* The packet arena is reused: a world-object GT3 leaves 0x8000|fog in pad2 and fog in p1/p2, and the parser reads pad2 bit 15 as "v0 carries its own fog". Zero all three or one corner of every item triangle is fogged. */
+        poly->p1 = 0; poly->p2 = 0; poly->pad2 = 0;
+        setSemiTrans(poly, (prim->cd >> 1) & 1);
         setRGB0(poly, c0.r, c0.g, c0.b);
         setRGB1(poly, c1.r, c1.g, c1.b);
         setRGB2(poly, c2.r, c2.g, c2.b);
@@ -723,7 +799,7 @@ void GsTMDfastTG3LFG(void* op, VERT* vp, VERT* np, PACKET* pk, int n, int shift,
         poly->clut  = prim->clut;
         *(int*)&poly->x0 = sxy0; *(int*)&poly->x1 = sxy1; *(int*)&poly->x2 = sxy2;
         TMD_PGXP3(poly, sxy0, sxy1, sxy2);
-        ITEM_PRECISE_SZ(p); addPrim(&ot->org[otz], poly);
+        ITEM_PRECISE_SZ(p); ITEM_PROBE_SORT(poly, otz, p, ot->length, shift); addPrim(&ot->org[otz], poly);
         GsOUT_PACKET_P = (u8*)poly + sizeof(POLY_GT3);
     }
 }
@@ -758,6 +834,7 @@ void GsTMDfastTF4LFG(void* op, VERT* vp, VERT* np, PACKET* pk, int n, int shift,
 
         poly = (POLY_FT4*)GsOUT_PACKET_P;
         setPolyFT4(poly);
+        setSemiTrans(poly, (prim->cd >> 1) & 1);
         setRGB0(poly, col_out.r, col_out.g, col_out.b);
         setUV4(poly, prim->tu0, prim->tv0, prim->tu1, prim->tv1,
                      prim->tu2, prim->tv2, prim->tu3, prim->tv3);
@@ -766,7 +843,7 @@ void GsTMDfastTF4LFG(void* op, VERT* vp, VERT* np, PACKET* pk, int n, int shift,
         *(int*)&poly->x0 = sxy0; *(int*)&poly->x1 = sxy1;
         *(int*)&poly->x2 = sxy2; *(int*)&poly->x3 = sxy3;
         TMD_PGXP4(poly, sxy0, sxy1, sxy2, sxy3);
-        ITEM_PRECISE_SZ(p); addPrim(&ot->org[otz], poly);
+        ITEM_PRECISE_SZ(p); ITEM_PROBE_SORT(poly, otz, p, ot->length, shift); addPrim(&ot->org[otz], poly);
         GsOUT_PACKET_P = (u8*)poly + sizeof(POLY_FT4);
     }
 }
@@ -801,6 +878,7 @@ void GsTMDfastTG4LFG(void* op, VERT* vp, VERT* np, PACKET* pk, int n, int shift,
 
         poly = (POLY_GT4*)GsOUT_PACKET_P;
         setPolyGT4(poly);
+        setSemiTrans(poly, (prim->cd >> 1) & 1);
         setRGB0(poly, c0.r, c0.g, c0.b);
         setRGB1(poly, c1.r, c1.g, c1.b);
         setRGB2(poly, c2.r, c2.g, c2.b);
@@ -812,7 +890,7 @@ void GsTMDfastTG4LFG(void* op, VERT* vp, VERT* np, PACKET* pk, int n, int shift,
         *(int*)&poly->x0 = sxy0; *(int*)&poly->x1 = sxy1;
         *(int*)&poly->x2 = sxy2; *(int*)&poly->x3 = sxy3;
         TMD_PGXP4(poly, sxy0, sxy1, sxy2, sxy3);
-        ITEM_PRECISE_SZ(p); addPrim(&ot->org[otz], poly);
+        ITEM_PRECISE_SZ(p); ITEM_PROBE_SORT(poly, otz, p, ot->length, shift); addPrim(&ot->org[otz], poly);
         GsOUT_PACKET_P = (u8*)poly + sizeof(POLY_GT4);
     }
 }
@@ -840,10 +918,11 @@ void GsTMDfastNF3(void* op, VERT* vp, PACKET* pk, int n, int shift, GsOT* ot, un
  
         poly = (POLY_F3*)GsOUT_PACKET_P;
         setPolyF3(poly);
+        setSemiTrans(poly, (prim->cd >> 1) & 1);
         setRGB0(poly, ITEMDIM(prim->r0), ITEMDIM(prim->g0), ITEMDIM(prim->b0));
         *(int*)&poly->x0 = sxy0; *(int*)&poly->x1 = sxy1; *(int*)&poly->x2 = sxy2;
         TMD_PGXP3(poly, sxy0, sxy1, sxy2);
-        ITEM_PRECISE_SZ(p); addPrim(&ot->org[otz], poly);
+        ITEM_PRECISE_SZ(p); ITEM_PROBE_SORT(poly, otz, p, ot->length, shift); addPrim(&ot->org[otz], poly);
         GsOUT_PACKET_P = (u8*)poly + sizeof(POLY_F3);
     }
 }
@@ -884,10 +963,11 @@ void GsTMDfastNG3(void* op, VERT* vp, PACKET* pk, int n, int shift, GsOT* ot, un
 
             poly = (POLY_F3*)GsOUT_PACKET_P;
             setPolyF3(poly);
+            setSemiTrans(poly, (gp->cd >> 1) & 1);
             setRGB0(poly, ITEMDIM(gp->r0), ITEMDIM(gp->g0), ITEMDIM(gp->b0));
             *(int*)&poly->x0 = sxy0; *(int*)&poly->x1 = sxy1; *(int*)&poly->x2 = sxy2;
             TMD_PGXP3(poly, sxy0, sxy1, sxy2);
-            ITEM_PRECISE_SZ(p); addPrim(&ot->org[otz], poly);
+            ITEM_PRECISE_SZ(p); ITEM_PROBE_SORT(poly, otz, p, ot->length, shift); addPrim(&ot->org[otz], poly);
             GsOUT_PACKET_P = (u8*)poly + sizeof(POLY_F3);
         }
         return;
@@ -908,12 +988,13 @@ void GsTMDfastNG3(void* op, VERT* vp, PACKET* pk, int n, int shift, GsOT* ot, un
  
         poly = (POLY_G3*)GsOUT_PACKET_P;
         setPolyG3(poly);
+        setSemiTrans(poly, (prim->cd >> 1) & 1);
         setRGB0(poly, ITEMDIM(prim->r0), ITEMDIM(prim->g0), ITEMDIM(prim->b0));
         setRGB1(poly, ITEMDIM(prim->r1), ITEMDIM(prim->g1), ITEMDIM(prim->b1));
         setRGB2(poly, ITEMDIM(prim->r2), ITEMDIM(prim->g2), ITEMDIM(prim->b2));
         *(int*)&poly->x0 = sxy0; *(int*)&poly->x1 = sxy1; *(int*)&poly->x2 = sxy2;
         TMD_PGXP3(poly, sxy0, sxy1, sxy2);
-        ITEM_PRECISE_SZ(p); addPrim(&ot->org[otz], poly);
+        ITEM_PRECISE_SZ(p); ITEM_PROBE_SORT(poly, otz, p, ot->length, shift); addPrim(&ot->org[otz], poly);
         GsOUT_PACKET_P = (u8*)poly + sizeof(POLY_G3);
     }
 }
@@ -942,11 +1023,12 @@ void GsTMDfastNF4(void* op, VERT* vp, PACKET* pk, int n, int shift, GsOT* ot, un
  
         poly = (POLY_F4*)GsOUT_PACKET_P;
         setPolyF4(poly);
+        setSemiTrans(poly, (prim->cd >> 1) & 1);
         setRGB0(poly, ITEMDIM(prim->r0), ITEMDIM(prim->g0), ITEMDIM(prim->b0));
         *(int*)&poly->x0 = sxy0; *(int*)&poly->x1 = sxy1;
         *(int*)&poly->x2 = sxy2; *(int*)&poly->x3 = sxy3;
         TMD_PGXP4(poly, sxy0, sxy1, sxy2, sxy3);
-        ITEM_PRECISE_SZ(p); addPrim(&ot->org[otz], poly);
+        ITEM_PRECISE_SZ(p); ITEM_PROBE_SORT(poly, otz, p, ot->length, shift); addPrim(&ot->org[otz], poly);
         GsOUT_PACKET_P = (u8*)poly + sizeof(POLY_F4);
     }
 }
@@ -975,6 +1057,7 @@ void GsTMDfastNG4(void* op, VERT* vp, PACKET* pk, int n, int shift, GsOT* ot, un
  
         poly = (POLY_G4*)GsOUT_PACKET_P;
         setPolyG4(poly);
+        setSemiTrans(poly, (prim->cd >> 1) & 1);
         setRGB0(poly, ITEMDIM(prim->r0), ITEMDIM(prim->g0), ITEMDIM(prim->b0));
         setRGB1(poly, ITEMDIM(prim->r1), ITEMDIM(prim->g1), ITEMDIM(prim->b1));
         setRGB2(poly, ITEMDIM(prim->r2), ITEMDIM(prim->g2), ITEMDIM(prim->b2));
@@ -982,7 +1065,7 @@ void GsTMDfastNG4(void* op, VERT* vp, PACKET* pk, int n, int shift, GsOT* ot, un
         *(int*)&poly->x0 = sxy0; *(int*)&poly->x1 = sxy1;
         *(int*)&poly->x2 = sxy2; *(int*)&poly->x3 = sxy3;
         TMD_PGXP4(poly, sxy0, sxy1, sxy2, sxy3);
-        ITEM_PRECISE_SZ(p); addPrim(&ot->org[otz], poly);
+        ITEM_PRECISE_SZ(p); ITEM_PROBE_SORT(poly, otz, p, ot->length, shift); addPrim(&ot->org[otz], poly);
         GsOUT_PACKET_P = (u8*)poly + sizeof(POLY_G4);
     }
 
@@ -1014,13 +1097,14 @@ void GsTMDfastNTF3(void* op, VERT* vp, PACKET* pk, int n, int shift, GsOT* ot, u
 
         poly = (POLY_FT3*)GsOUT_PACKET_P;
         setPolyFT3(poly);
+        setSemiTrans(poly, (prim->cd >> 1) & 1);
         setRGB0(poly, ITEMDIM(prim->r0), ITEMDIM(prim->g0), ITEMDIM(prim->b0));
         setUV3(poly, prim->tu0, prim->tv0, prim->tu1, prim->tv1, prim->tu2, prim->tv2);
         poly->tpage = prim->tpage;
         poly->clut  = prim->clut;
         *(int*)&poly->x0 = sxy0; *(int*)&poly->x1 = sxy1; *(int*)&poly->x2 = sxy2;
         TMD_PGXP3(poly, sxy0, sxy1, sxy2);
-        ITEM_PRECISE_SZ(p); addPrim(&ot->org[otz], poly);
+        ITEM_PRECISE_SZ(p); ITEM_PROBE_SORT(poly, otz, p, ot->length, shift); addPrim(&ot->org[otz], poly);
         GsOUT_PACKET_P = (u8*)poly + sizeof(POLY_FT3);
     }
 }
@@ -1102,17 +1186,19 @@ void GsTMDfastNTG3(void* op, VERT* vp, PACKET* pk, int n, int shift, GsOT* ot, u
 
         poly = (POLY_GT3*)GsOUT_PACKET_P;
         setPolyGT3(poly);
+        /* The packet arena is reused: a world-object GT3 leaves 0x8000|fog in pad2 and fog in p1/p2, and the parser reads pad2 bit 15 as "v0 carries its own fog". Zero all three or one corner of every item triangle is fogged. */
+        poly->p1 = 0; poly->p2 = 0; poly->pad2 = 0;
+        setSemiTrans(poly, (prim->mode >> 1) & 1);
         /* No per-vertex colours in data; use neutral 0x80 (= 100% modulation). */
         setRGB0(poly, ITEMDIM(0x80), ITEMDIM(0x80), ITEMDIM(0x80));
         setRGB1(poly, ITEMDIM(0x80), ITEMDIM(0x80), ITEMDIM(0x80));
         setRGB2(poly, ITEMDIM(0x80), ITEMDIM(0x80), ITEMDIM(0x80));
-        poly->p1 = 0; poly->p2 = 0;
         setUV3(poly, prim->tu0, prim->tv0, prim->tu1, prim->tv1, prim->tu2, prim->tv2);
         poly->tpage = prim->tpage;
         poly->clut  = prim->clut;
         *(int*)&poly->x0 = sxy0; *(int*)&poly->x1 = sxy1; *(int*)&poly->x2 = sxy2;
         TMD_PGXP3(poly, sxy0, sxy1, sxy2);
-        ITEM_PRECISE_SZ(p); addPrim(&ot->org[otz], poly);
+        ITEM_PRECISE_SZ(p); ITEM_PROBE_SORT(poly, otz, p, ot->length, shift); addPrim(&ot->org[otz], poly);
         GsOUT_PACKET_P = (u8*)poly + sizeof(POLY_GT3);
     }
 }
@@ -1142,6 +1228,7 @@ void GsTMDfastNTF4(void* op, VERT* vp, PACKET* pk, int n, int shift, GsOT* ot, u
 
         poly = (POLY_FT4*)GsOUT_PACKET_P;
         setPolyFT4(poly);
+        setSemiTrans(poly, (prim->cd >> 1) & 1);
         setRGB0(poly, ITEMDIM(prim->r0), ITEMDIM(prim->g0), ITEMDIM(prim->b0));
         setUV4(poly, prim->tu0, prim->tv0, prim->tu1, prim->tv1,
                      prim->tu2, prim->tv2, prim->tu3, prim->tv3);
@@ -1150,7 +1237,7 @@ void GsTMDfastNTF4(void* op, VERT* vp, PACKET* pk, int n, int shift, GsOT* ot, u
         *(int*)&poly->x0 = sxy0; *(int*)&poly->x1 = sxy1;
         *(int*)&poly->x2 = sxy2; *(int*)&poly->x3 = sxy3;
         TMD_PGXP4(poly, sxy0, sxy1, sxy2, sxy3);
-        ITEM_PRECISE_SZ(p); addPrim(&ot->org[otz], poly);
+        ITEM_PRECISE_SZ(p); ITEM_PROBE_SORT(poly, otz, p, ot->length, shift); addPrim(&ot->org[otz], poly);
         GsOUT_PACKET_P = (u8*)poly + sizeof(POLY_FT4);
     }
 }
@@ -1180,6 +1267,7 @@ void GsTMDfastNTG4(void* op, VERT* vp, PACKET* pk, int n, int shift, GsOT* ot, u
 
         poly = (POLY_GT4*)GsOUT_PACKET_P;
         setPolyGT4(poly);
+        setSemiTrans(poly, (prim->cd >> 1) & 1);
         setRGB0(poly, ITEMDIM(prim->r0), ITEMDIM(prim->g0), ITEMDIM(prim->b0));
         setRGB1(poly, ITEMDIM(prim->r1), ITEMDIM(prim->g1), ITEMDIM(prim->b1));
         setRGB2(poly, ITEMDIM(prim->r2), ITEMDIM(prim->g2), ITEMDIM(prim->b2));
@@ -1192,7 +1280,7 @@ void GsTMDfastNTG4(void* op, VERT* vp, PACKET* pk, int n, int shift, GsOT* ot, u
         *(int*)&poly->x0 = sxy0; *(int*)&poly->x1 = sxy1;
         *(int*)&poly->x2 = sxy2; *(int*)&poly->x3 = sxy3;
         TMD_PGXP4(poly, sxy0, sxy1, sxy2, sxy3);
-        ITEM_PRECISE_SZ(p); addPrim(&ot->org[otz], poly);
+        ITEM_PRECISE_SZ(p); ITEM_PROBE_SORT(poly, otz, p, ot->length, shift); addPrim(&ot->org[otz], poly);
         GsOUT_PACKET_P = (u8*)poly + sizeof(POLY_GT4);
     }
 }
@@ -1258,11 +1346,30 @@ MATRIX GsIDMATRIX = {
     {{4096, 0, 0}, {0, 4096, 0}, {0, 0, 4096}},
     {0, 0, 0}
 };
-/* Identity matrix with NTSC aspect ratio correction.
- * PSX NTSC pixels are ~1.094x taller than wide (320x240 displayed as 4:3).
- * Y scale = 4096 * 3/4 = 3072 (PSX libgs convention). */
+/* GsIDMATRIX2 is a PLAIN IDENTITY, exactly like GsIDMATRIX. Do not "restore"
+ * the aspect correction the libgs header's "Unit Matrix including Aspect retio"
+ * comment implies -- retail does not apply one.
+ *
+ * Read out of the retail binary, GsInitGraph at 0x80094950:
+ *     addiu r2, 4096            ; sh into m[0][0], m[1][1], m[2][2] of
+ *     ...                       ; GsIDMATRIX (0x800C6FA0), off-diagonals and
+ *                               ; t[] already zeroed above
+ *     lw/sw x8                  ; 0x80094960..0x8009499C copies all 32 bytes
+ *                               ; verbatim into GsIDMATRIX2 (0x800C6FE0)
+ * Both are .bss (configs/USA/sym.bodyprog.txt, libgs/gs_107), so the values
+ * exist only at runtime and cannot be read out of the file image.
+ *
+ * The 3072 that used to sit here (a fabricated 3/4 Y scale) squashed the WORLD
+ * vertically to 75% -- vw_calc.c's vbSetWorldScreenMatrix right-multiplies by
+ * this matrix, which scales the Y COLUMN, i.e. world Y before the view
+ * rotation. That made the port show ~1/0.75 more vertical world than the
+ * console, varying with camera pitch (world Y mixes into depth on a tilted
+ * shot), which is why the framing read as inconsistent from room to room.
+ * It is also what every hfov "correction" was really compensating: the chain
+ * of eyeball fixes had settled on 0.76, and the squash it was cancelling
+ * was 0.75. */
 MATRIX GsIDMATRIX2 = {
-    {{4096, 0, 0}, {0, 3072, 0}, {0, 0, 4096}},
+    {{4096, 0, 0}, {0, 4096, 0}, {0, 0, 4096}},
     {0, 0, 0}
 };
 
@@ -1283,6 +1390,15 @@ void GsDefDispBuff2(unsigned short x0, unsigned short y0, unsigned short x1, uns
     /* PC: No VRAM double-buffering. Both buffers use (0,0) with offset at
      * screen center. CLUT/texture data in VRAM is protected by skipping
      * GR_ClearVRAM in ClearImage (via PSYX_SKIP_FRAMEBUFFER_STORE). */
+
+    /* ...but the game still READS the PSX buffer addresses back as texture:
+     * Screen_BackgroundMotionBlur (Harry-running loading screen) and the
+     * per-map ghosting/dream overlays sample getTPage(2,0,...) display pages.
+     * Collapsing both envs to (0,0) above loses where those pages live, so
+     * hand the real origins to the renderer for its feedback store.
+     * Silent Hill calls GsDefDispBuff2(0, 32, 0, 256) — see screen_draw.c. */
+    GR_SetPsxDisplayBuffers(x0, y0, x1, y1, gs_screen_w, gs_screen_h);
+
     SetDefDispEnv(&gs_disp_env[0], 0, 0, gs_screen_w, gs_screen_h);
     SetDefDispEnv(&gs_disp_env[1], 0, 0, gs_screen_w, gs_screen_h);
     SetDefDrawEnv(&gs_draw_env[0], 0, 0, gs_screen_w, gs_screen_h);
@@ -1418,12 +1534,17 @@ void GsMapModelingData(unsigned long *p)
     size_t copy_size;
 
     if (!p) return;
-    /* p[0] = flags, p[1] = nobj */
-    nobj = p[1];
+    /* TMD header fields are 32-bit on disc, but this parameter is `unsigned long*`,
+     * which is 8 bytes on LP64 (Linux/Steam Deck) and 4 on LLP64 (Windows). Reading
+     * `p[1]` as unsigned long fetched nobj from offset 8 instead of 4 on LP64 -> a
+     * garbage count -> the early return below -> the TMD is never cached, so
+     * inventory item models link NULL and draw black. Read the header at 32-bit
+     * width so the offsets are correct on both ABIs. */
+    nobj = ((u32*)p)[1];             /* header: [0]=flags, [1]=nobj */
     if (nobj == 0 || nobj > GS_TMD_MAX_OBJS) return;
 
-    /* Object table starts right after flags + nobj (2 u_longs = 8 bytes) */
-    obj_table = (u8*)&p[2];
+    /* Object table starts right after flags + nobj (two u32 = 8 bytes). */
+    obj_table = (u8*)p + 8;
 
 #ifdef SH_XBOX_PORT
     /* SAME-CONTENT DEDUP (the 64MB-console leak fix): the inventory calls this
@@ -1521,6 +1642,11 @@ void GsMapModelingData(unsigned long *p)
     /* Include the object table itself in the copy (offsets are relative to
      * obj_table, so the copy base is obj_table). */
     copy_size += (size_t)nobj * 28;
+
+    /* Pointer resolution below reaches data_copy + raw[ofs] as far as data_end.
+     * A TMD with a gap between the object table and its data blocks would make
+     * the copy shorter than the furthest resolved pointer — size for both. */
+    if (copy_size < (size_t)data_end) copy_size = (size_t)data_end;
     if (copy_size == 0) copy_size = 4096;
 
     entry->data_copy = (u8*)malloc(copy_size);
@@ -1576,6 +1702,14 @@ void GsSortObject4J(GsDOBJ2 *obj, GsOT *ot, int shift, unsigned long *scratch)
 
     if (!obj || !obj->tmd || !ot) {
         return;
+    }
+
+    /* Depth channel: register the OT->viewZ scale (p ~ SZ>>2, bucket = p>>shift
+     * => viewZ ~ bucket << (shift+2)). Disagreement with the world drawer's
+     * scale is logged once by PsyX. */
+    {
+        extern void PsyX_SetOtViewZShift(int shiftEff);
+        PsyX_SetOtViewZShift(shift + 2);
     }
 
     /* The world fog path reprograms the GTE depth-cue registers every frame

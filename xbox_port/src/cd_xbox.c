@@ -26,6 +26,8 @@ char g_CdBinPath[MAX_PATH] = "NOT FOUND";
 typedef unsigned char u8;
 
 #define CDL_SETLOC      0x02
+#define CDL_SEEKL       0x15
+#define CDL_SEEKP       0x16
 #define CDL_COMPLETE    0x02
 #define BIN_SECTOR_SIZE 2352
 #define BIN_DATA_OFFSET 24
@@ -163,11 +165,23 @@ void Cd_XboxInit(void)
 
 void CdInit(void) { Cd_XboxInit(); }
 
+/* Where a real drive's head would be, for the per-line voice seek delay
+ * (pc_port/src/xa_seek_model.c, the PC port's Dialog Pause): every Setloc/Seek
+ * moves it, every data read carries it forward, and the epoch tells the model a
+ * move happened since it last looked. Same contract as PsyCross's libcd. */
+int      g_PsxCdHeadLba   = 0;
+unsigned g_PsxCdHeadEpoch = 0;
+
 int CdControl(unsigned char com, unsigned char* param, unsigned char* result)
 {
     (void)result;
     if (com == CDL_SETLOC && param)
         s_curSector = CdPosToInt((const CdlLOC*)param);
+    if ((com == CDL_SETLOC || com == CDL_SEEKL || com == CDL_SEEKP) && param)
+    {
+        g_PsxCdHeadLba = CdPosToInt((const CdlLOC*)param);
+        g_PsxCdHeadEpoch++;
+    }
     return 1;
 }
 
@@ -225,6 +239,8 @@ int CdRead(int sectors, unsigned long* buf, int mode)
     }
 
     s_curSector += sectors;
+    g_PsxCdHeadLba += sectors;
+    g_PsxCdHeadEpoch++;
     return 1;
 }
 

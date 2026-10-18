@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 /* PC port: mouse control for cursor-driven puzzles + a clickable main menu.
  * See pc_mouse_cursor.h for the design. */
 #include "game.h"
@@ -12,6 +13,10 @@
 
 #include <SDL.h>
 #include <PsyX/PsyX_public.h>
+#include <PsyX/PsyX_render.h> /* GR_ReadVRAM */
+#include "pc_confirm_dialog.h"
+#include "pc_bind_panel.h"
+#include "pc_quick_options.h"
 #include <libgs.h>
 
 /* Menu rows are authored via Gfx_StringSetPosition(x, y), a center-origin space
@@ -35,6 +40,7 @@
 
 /* Per-frame pointer state, in logical 320x240 coords. */
 static float s_gx, s_gy, s_prevGx, s_prevGy;
+static float s_vx, s_vy;   /* normalized 0..1 inside the presented picture */
 static int   s_inView;
 static int   s_leftDown, s_prevLeft, s_leftEdge;
 static int   s_rightDown, s_prevRight, s_rightEdge;
@@ -51,6 +57,8 @@ static float s_gameCurX, s_gameCurY;
 static int   s_haveGameCur;
 static int   s_servoActive;
 static int   s_wheelStep;    /* +1/-1 on a new wheel notch this frame, else 0 */
+static int   s_wheelNotches; /* every notch this frame, signed */
+static int   s_prevWheelTotal;
 static int   s_prevWheelUp, s_prevWheelDown;
 
 static int Mc_Enabled(void)
@@ -95,6 +103,20 @@ int Pc_MouseCursor_UiPos(int* outX, int* outY)
     return 1;
 }
 
+/* Normalized position inside the presented picture. Anything drawing in the
+ * post-capture GL hook wants THIS, not UiPos: the authoring space UiPos reports
+ * in is the live framebuffer (448 tall for the interlaced menus, 224 in game,
+ * and different again on PAL), so reconstructing viewport pixels from it needs
+ * knowledge this side does not have. */
+int Pc_MouseCursor_ViewportPos(float* outX, float* outY)
+{
+    if (!Mc_Enabled() || !s_inView)
+        return 0;
+    if (outX != NULL) *outX = s_vx;
+    if (outY != NULL) *outY = s_vy;
+    return 1;
+}
+
 int Pc_MouseCursor_LeftClicked(void)
 {
     return Mc_Enabled() && s_inView && s_leftEdge;
@@ -115,6 +137,33 @@ int Pc_MouseCursor_WheelStep(void)
     return Mc_Enabled() ? s_wheelStep : 0;
 }
 
+int Pc_MouseCursor_WheelNotches(void)
+{
+    return Mc_Enabled() ? s_wheelNotches : 0;
+}
+
+unsigned int Pc_MouseCursor_BoundPadBits(void)
+{
+    extern unsigned short g_cfg_mouseButtonMask[8];
+    extern int            g_PsyX_WheelUpFrames, g_PsyX_WheelDownFrames;
+    const Uint32          mb   = SDL_GetMouseState(NULL, NULL);
+    unsigned int          bits = 0;
+    int                   b;
+
+    for (b = 1; b <= 5; b++)
+    {
+        if (mb & SDL_BUTTON(b))
+            bits |= g_cfg_mouseButtonMask[b];
+    }
+    if (g_PsyX_WheelUpFrames > 0)   bits |= g_cfg_mouseButtonMask[6];
+    if (g_PsyX_WheelDownFrames > 0) bits |= g_cfg_mouseButtonMask[7];
+    if (bits & ControllerFlag_DpadUp)    bits |= ControllerFlag_LStickUp;
+    if (bits & ControllerFlag_DpadDown)  bits |= ControllerFlag_LStickDown;
+    if (bits & ControllerFlag_DpadLeft)  bits |= ControllerFlag_LStickLeft;
+    if (bits & ControllerFlag_DpadRight) bits |= ControllerFlag_LStickRight;
+    return bits;
+}
+
 int Pc_MouseCursor_PuzzleActive(void)
 {
     return s_puzzleFrames > 0;
@@ -133,6 +182,13 @@ void Pc_MouseCursor_FrameUpdate(void)
         s_prevLeft = s_prevRight = 0;
         s_havePrev  = 0;
         s_wheelStep = 0;
+        {
+            /* Notches spun while the cursor was off must not land as one
+             * burst when it comes back. */
+            extern int g_PsyX_WheelTotal;
+            s_wheelNotches   = 0;
+            s_prevWheelTotal = g_PsyX_WheelTotal;
+        }
         if (s_puzzleFrames > 0)
             s_puzzleFrames--;
         return;
@@ -142,7 +198,10 @@ void Pc_MouseCursor_FrameUpdate(void)
      * rise back to 2 (prev<2). Two notches in one frame collapse to one step. */
     {
         extern int g_PsyX_WheelUpFrames, g_PsyX_WheelDownFrames;
+        extern int g_PsyX_WheelTotal;
 
+        s_wheelNotches   = g_PsyX_WheelTotal - s_prevWheelTotal;
+        s_prevWheelTotal = g_PsyX_WheelTotal;
         s_wheelStep = 0;
         if (g_PsyX_WheelUpFrames == 2 && s_prevWheelUp < 2)
             s_wheelStep = 1;
@@ -166,6 +225,8 @@ void Pc_MouseCursor_FrameUpdate(void)
     s_prevGx = s_gx;
     s_prevGy = s_gy;
     s_inView = PsyX_MapWindowToViewport(mx, my, &fx, &fy);
+    s_vx = fx;
+    s_vy = fy;
     /* Mouse -> menu text-authoring space. Height differs by framebuffer mode:
      * 448 (interlaced menus) / 224 (progressive in-game), read live. */
     s_gx = fx * (float)g_GameWork.gsScreenWidth;
@@ -263,12 +324,24 @@ int Pc_MouseCursor_MenuRowHover(int baseY, int stepY, int count, unsigned int vi
     return hovered;
 }
 
+/* Only the picture hides: hover and clicks stay live, and any real mouse use
+ * clears the flag before they could matter. */
+static int Mc_HiddenForPad(void)
+{
+    extern int g_PsyX_PadInputLast;
+    return g_PsyX_PadInputLast;
+}
+
 void Pc_MouseCursor_Draw(void)
 {
     POLY_FT4* poly;
     s32       cx, cy;
 
-    if (!Mc_Enabled() || !s_inView)
+    if (!Mc_Enabled() || !s_inView || Mc_HiddenForPad())
+        return;
+    /* A GL overlay dialog composites above this whole frame, so it draws the
+     * cursor itself (Pc_MouseCursor_SpriteRgba/GlRect); ours would sit under it. */
+    if (Pc_ConfirmDialog_IsOpen() || Pc_QuickOptions_IsOpen() || Pc_BindPanel_IsOpen())
         return;
 
     cx = (s32)s_gx - MC_OFFSET_X;
@@ -287,7 +360,11 @@ void Pc_MouseCursor_Draw(void)
     setXY1Fast(poly, cx + 16, cy);
     setXY2Fast(poly, cx,      cy + 16);
     setXY3Fast(poly, cx + 16, cy + 16);
-    setUVWH(poly, 0, 64, 32, 32);
+    /* 31, not 32: the far edge is exclusive on hardware, which never samples
+     * texel 32 -- but the Menus filter's taps are clamped to the prim's UV box,
+     * and a box ending at 32 let them reach the next sprite in BG_ETC, drawing
+     * its green as specks along the arrow's right and bottom edges. */
+    setUVWH(poly, 0, 64, 31, 31);
     poly->clut  = getClut(192, 0);
     poly->tpage = getTPage(0, 0, 768, 0);
     setRGB0(poly, 128, 128, 128);
@@ -297,4 +374,60 @@ void Pc_MouseCursor_Draw(void)
      * cursor at layer 4 so it sits on top — same overlay the crosshair uses. */
     AddPrim(&g_OtTags0[g_ActiveBufferIdx][4], poly);
     GsOUT_PACKET_P = (PACKET*)(poly + 1);
+}
+
+int Pc_MouseCursor_SpriteRgba(unsigned char* out)
+{
+    /* Same sprite as Pc_MouseCursor_Draw: 32x32 4bpp at tpage VRAM (768,0),
+     * UV (0,64) -> halfword column 768, row 64, 8 halfwords per row; 16-entry
+     * CLUT at halfword (192,0). Texel 0x0000 is transparent on the PSX. */
+    unsigned short px[32 * 8];
+    unsigned short clut[16];
+    int x, y;
+
+    GR_ReadVRAM(px, 768, 64, 8, 32);
+    GR_ReadVRAM(clut, 192, 0, 16, 1);
+
+    /* BG_ETC not uploaded yet: an all-zero CLUT would decode to nothing. */
+    for (x = 0; x < 16; x++)
+        if (clut[x] != 0)
+            break;
+    if (x == 16)
+        return 0;
+
+    for (y = 0; y < 32; y++) {
+        for (x = 0; x < 32; x++) {
+            unsigned short w = px[y * 8 + (x >> 2)];
+            unsigned short c = clut[(w >> ((x & 3) * 4)) & 0xF];
+            unsigned char* o = out + (y * 32 + x) * 4;
+            o[0] = (unsigned char)((c & 0x1F) << 3);
+            o[1] = (unsigned char)(((c >> 5) & 0x1F) << 3);
+            o[2] = (unsigned char)(((c >> 10) & 0x1F) << 3);
+            o[3] = (c == 0) ? 0 : 255;
+        }
+    }
+    return 1;
+}
+
+int Pc_MouseCursor_GlRect(float vpW, float vpH, float* outX, float* outY, float* outW, float* outH)
+{
+    float w, h, fbH;
+
+    if (!Mc_Enabled() || !s_inView || Mc_HiddenForPad())
+        return 0;
+
+    /* The PSX draw is 16x16 framebuffer units; the framebuffer is 320 wide and
+     * gsScreenHeight tall (448 on the interlaced menus, 224 in-game), so the
+     * cursor is the same fraction of the picture here as it is there. */
+    fbH = (float)g_GameWork.gsScreenHeight;
+    if (fbH <= 0.0f)
+        fbH = 240.0f;
+    w = 16.0f / 320.0f * vpW;
+    h = 16.0f / fbH * vpH;
+
+    if (outX) *outX = s_vx * vpW;
+    if (outY) *outY = (1.0f - s_vy) * vpH; /* top edge; arrow tip at top-left */
+    if (outW) *outW = w;
+    if (outH) *outH = h;
+    return 1;
 }

@@ -2,10 +2,13 @@
 #ifdef SH_PC_PORT
 #include "sh_log.h"
 #include <stdio.h>
+#include <stdlib.h> /* exit() for the port's main-menu Exit row */
 #include "psx_memory.h"
 #include "pc_config.h"
 #include "map_registry.h"
 #include "lang_text.h" /* menu translations + width for recentred entries */
+#include "pc_title_style.h"
+#include "main/fileinfo.h" /* g_GameRegion: PAL repositions the achievements hint */
 #endif
 
 #include <psyq/libetc.h>
@@ -30,12 +33,20 @@ void MainMenu_FogUpdate(void);
 #ifdef SH_PC_PORT
 /* Forward declarations for static functions used before definition */
 static void MainMenu_MainTextDraw(void);
+static void MainMenu_AchievementHintDraw(void);
 static void MainMenu_DifficultyTextDraw(s32 idx);
 static void MainMenu_BackgroundDraw(void);
 static void func_8003BCF4(void);
 #endif
 #include "main/rng.h"
 #include "screens/stream/stream.h"
+
+/* Called above their definitions. Without a prototype in scope Clang
+ * synthesises `int f()` at the call site and then rejects the real
+ * definition as a conflicting type; GCC only warns. */
+void func_8003B560(void);
+
+void MainMenu_FogUpdate(void);
 
 #define MAIN_MENU_FOG_COUNT 21
 
@@ -49,7 +60,14 @@ static void func_8003BCF4(void);
 
 static s32 g_MainMenuState              = 0;
 static s32 g_MainMenu_SelectedEntry     = MainMenuEntry_Start;
-static u32 g_MainMenu_VisibleEntryFlags = (1 << MainMenuEntry_Start) | (1 << MainMenuEntry_Option);
+#ifdef SH_PC_PORT
+/* The port adds an Exit row, always available alongside Option. */
+#define MAINMENU_BASE_ENTRY_FLAGS ((1 << MainMenuEntry_Start) | (1 << MainMenuEntry_Option) | (1 << MainMenuEntry_Exit))
+#else
+#define MAINMENU_BASE_ENTRY_FLAGS ((1 << MainMenuEntry_Start) | (1 << MainMenuEntry_Option))
+#endif
+
+static u32 g_MainMenu_VisibleEntryFlags = MAINMENU_BASE_ENTRY_FLAGS;
 
 // ========================================
 // GLOBAL VARIABLES
@@ -91,14 +109,45 @@ void GameState_MainMenu_Update(void) // 0x8003AB28
     e_GameState prevState;
     static s32  newGameSelectedDifficultyIdx = 1;
     static s32  prevSavegameCount            = 0;
+#ifdef SH_PC_PORT
+    extern int  Pc_RaBrowser_IsOpen(void);
+    bool        browserOpen                  = false;
+#endif
+#ifdef SH_PC_PORT
+    /* skip_intros=2 drives the stock New Game path rather than duplicating it:
+     * arm on the first menu frame, synthesise START, then NORMAL, then retarget
+     * the hand-off past the opening movie. Consumed at hand-off so a later warm
+     * boot back to the title behaves normally. */
+    static s32  skipToGameStep = 0;
+
+    if (skipToGameStep == 0 && g_PcConfig.skipIntros >= 2)
+    {
+        skipToGameStep = 1;
+    }
+#endif
 
     func_80033548();
 
     // After staying idle in the title screen for some time, this checks if the intro FMV or a
     // demo gameplay segment should be played. If the next value from `g_Demo_ReproducedCount`
     // is a value divisible by 3, the intro FMV will play. Otherwise, it defaults to a gameplay demo.
-#if defined(SH_PC_PORT) && !defined(SH_XBOX_PORT)
-    playInGameDemo = false; /* Skip demo on PC - not fully functional there */
+#ifdef SH_PC_PORT
+    /* The whole demo pipeline is wired on PC -- Demo_ControllerDataUpdate is
+     * already spliced between Joy_ReadP1 and Joy_ControllerDataUpdate
+     * (game_main.c), the PSX vblank-derived dt is used instead of the port's
+     * wall-clock one while SysFlag_DemoActive is set (game_main.c), and
+     * PsyCross reports idle pads as 0xFFFF so the any-button exit works. Left
+     * off historically because it had never been exercised; config-gated so it
+     * can be turned off without a rebuild. */
+    /* Read before playInGameDemo so the achievement panel suppresses the whole
+     * attract pipeline: reflects last frame's state, which is enough because the
+     * idle counter is also pinned below. */
+    browserOpen = Pc_RaBrowser_IsOpen();
+
+    /* Neither the gameplay demo nor the intro FMV may take the screen while the
+     * achievement panel is up -- the player is reading, not idle. */
+    playInGameDemo = g_PcConfig.attractDemos && !browserOpen &&
+                     (((g_Demo_ReproducedCount + 1) % 3) != 0);
 #else
     /* Xbox + PSX: play the attract-mode gameplay demos (data is on the disc).
      * Same PSX cadence — every 3rd idle timeout shows the intro FMV instead. */
@@ -149,11 +198,11 @@ void GameState_MainMenu_Update(void) // 0x8003AB28
                 }
             }
 
-            g_MainMenu_VisibleEntryFlags = (1 << MainMenuEntry_Start) | (1 << MainMenuEntry_Option);
+            g_MainMenu_VisibleEntryFlags = MAINMENU_BASE_ENTRY_FLAGS;
 
             if (g_GameWork.autosave.playerHealth > Q12(0.0f))
             {
-                g_MainMenu_VisibleEntryFlags = (1 << MainMenuEntry_Continue) | (1 << MainMenuEntry_Start) | (1 << MainMenuEntry_Option);
+                g_MainMenu_VisibleEntryFlags = (1 << MainMenuEntry_Continue) | MAINMENU_BASE_ENTRY_FLAGS;
             }
 
             // Memory card present and savegames exist.
@@ -195,6 +244,61 @@ void GameState_MainMenu_Update(void) // 0x8003AB28
                 }
             }
 
+#ifdef SH_PC_PORT
+            /* Achievement browser: the Map button has no meaning on the title
+             * screen, so it opens the list here. While the panel is up it owns
+             * the pad -- the flags are cleared so the menu underneath does not
+             * also move its selection or start a game.
+             *
+             * Deliberately does NOT return: the menu's own drawing (background,
+             * entry text and the mouse cursor) lives past the end of this
+             * switch, and returning here left the whole screen black behind the
+             * panel with no cursor. Everything below reads the flags this just
+             * zeroed, so falling through is inert. */
+            {
+                extern void Pc_RaBrowser_Open(void);
+                extern int  Pc_RaBrowser_IsOpen(void);
+                extern void Pc_RaBrowser_Update(int closeRequested, int up, int down, int confirm);
+
+                if (Pc_RaBrowser_IsOpen())
+                {
+                    /* Resolved here, against the player's own bindings, so the
+                     * browser needs no knowledge of the controller config. */
+                    u16 closeBtns = g_GameWorkPtr->config.controllerConfig.cancel |
+                                    g_GameWorkPtr->config.controllerConfig.map;
+                    Pc_RaBrowser_Update(
+                        (g_Controller0->clickedBtnFlags & closeBtns) != 0,
+                        (g_Controller0->pulsedBtnFlags & ControllerFlag_LStickUp) != 0,
+                        (g_Controller0->pulsedBtnFlags & ControllerFlag_LStickDown) != 0,
+                        (g_Controller0->clickedBtnFlags &
+                         (g_GameWorkPtr->config.controllerConfig.enter |
+                          g_GameWorkPtr->config.controllerConfig.action)) != 0);
+                    browserOpen = true;
+                }
+                else if (g_Controller0->clickedBtnFlags & g_GameWorkPtr->config.controllerConfig.map)
+                {
+                    Pc_RaBrowser_Open();
+                    browserOpen = true;
+                }
+                if (browserOpen)
+                {
+                    /* Clear the DERIVED per-frame events only.
+                     *
+                     * heldBtnFlags must NOT be cleared: Joy_ControllerDataUpdate
+                     * keeps last frame's value as prevBtnsHeld and derives
+                     * clicked = ~prev & held from it. Zeroing it made every
+                     * frame look like a fresh press, so a held button "clicked"
+                     * continuously (Enter flickering a detail card open and
+                     * shut) and pulseTicks reset every frame, which pinned
+                     * pulsed to clicked and raced the list past at frame rate. */
+                    g_Controller0->clickedBtnFlags   = 0;
+                    g_Controller0->pulsedBtnFlags    = 0;
+                    g_Controller0->releasedBtnFlags  = 0;
+                    g_Controller0->pulsedGuiBtnFlags = 0;
+                }
+            }
+#endif
+
             if (g_Controller0->pulsedBtnFlags & ControllerFlag_LStickUp)
             {
                 g_MainMenu_SelectedEntry += MainMenuEntry_Count;
@@ -210,7 +314,11 @@ void GameState_MainMenu_Update(void) // 0x8003AB28
             g_MainMenu_SelectedEntry %= MainMenuEntry_Count;
 
 #ifdef SH_PC_PORT
-            /* Mouse: hover a visible row to select it, left-click to confirm. */
+            /* Mouse: hover a visible row to select it, left-click to confirm.
+             * Suppressed while the achievement panel is up — it reads the mouse
+             * directly, and this block would otherwise keep re-selecting menu
+             * rows (and synthesising Enter) under the panel. */
+            if (!browserOpen)
             {
                 extern int Pc_MouseCursor_MenuRowHover(int, int, int, unsigned int, int*);
                 extern int Pc_MouseCursor_Moved(void);
@@ -230,6 +338,15 @@ void GameState_MainMenu_Update(void) // 0x8003AB28
                         SD_Call(Sfx_MenuMove);
                     }
                 }
+            }
+#endif
+
+#ifdef SH_PC_PORT
+            if (skipToGameStep == 1)
+            {
+                g_MainMenu_SelectedEntry        = MainMenuEntry_Start;
+                g_Controller0->clickedBtnFlags |= g_GameWorkPtr->config.controllerConfig.enter;
+                skipToGameStep                  = 2;
             }
 #endif
 
@@ -285,12 +402,23 @@ void GameState_MainMenu_Update(void) // 0x8003AB28
                         GameFs_OptionBinLoad();
                         break;
 
-                    case MainMenuEntry_Extra:
+#ifdef SH_PC_PORT
+                    /* Retail leaves this slot dead (never made visible, empty
+                     * handler). The port shows it as Exit and quits here. */
+                    case MainMenuEntry_Exit:
 #ifdef SH_XBOX_PORT
-                        /* Xbox: the Extra slot is "EXIT" -> quit to dashboard. */
                         { extern void Xbox_QuitToDashboard(void); Xbox_QuitToDashboard(); }
+#else
+                        SH_DBG("[MENU] Exit selected — closing game");
+                        if (g_ShDebugLog)
+                            fflush(g_ShDebugLog);
+                        exit(0);
 #endif
                         break;
+#else
+                    case MainMenuEntry_Extra: // @unused See `e_MainMenuEntry`.
+                        break;
+#endif
                 }
             }
 
@@ -385,6 +513,16 @@ void GameState_MainMenu_Update(void) // 0x8003AB28
             }
 
             // Select game difficulty.
+#ifdef SH_PC_PORT
+            /* After the scroll/mouse handling above, so a stray cursor hover
+             * cannot override NORMAL on the frame the confirm is synthesised. */
+            if (skipToGameStep == 2)
+            {
+                newGameSelectedDifficultyIdx    = 1;
+                g_Controller0->clickedBtnFlags |= g_GameWorkPtr->config.controllerConfig.enter;
+                skipToGameStep                  = 3;
+            }
+#endif
             if (g_Controller0->clickedBtnFlags & g_GameWorkPtr->config.controllerConfig.enter)
             {
 
@@ -400,6 +538,13 @@ void GameState_MainMenu_Update(void) // 0x8003AB28
                     {
                         extern void Pc_Rando_OnNewGame(void);
                         Pc_Rando_OnNewGame();
+                    }
+
+                    /* Gameplay plugins: same timing rationale as the randomizer
+                     * hook above. No-op with zero plugins loaded. */
+                    {
+                        extern void Pc_Plugins_OnNewGame(void);
+                        Pc_Plugins_OnNewGame();
                     }
                 }
 #else
@@ -450,8 +595,28 @@ void GameState_MainMenu_Update(void) // 0x8003AB28
 
                 if (g_MainMenu_SelectedEntry == MainMenuEntry_Start)
                 {
+#ifdef SH_PC_PORT
+                    /* A New Game started straight on map2_s00 (map = config):
+                     * its point 0 is a parking spot outside the town, which the
+                     * PSX never uses because Harry always arrives through the
+                     * cafe door, point 1. */
+                    Chara_PositionSet(&g_MapOverlayHdr.mapPoints[g_SavegamePtr->mapIdx == MapIdx_MAP2_S00 ? 1 : 0]);
+#else
                     Chara_PositionSet(&g_MapOverlayHdr.mapPoints[0]);
+#endif
                 }
+
+#ifdef SH_PC_PORT
+                /* GameState_MovieOpening only plays the opening movie and then
+                 * hands off to GameState_MainLoadScreen, so retargeting drops the
+                 * movie and nothing else. NEXT_GAME_STATES is a plain local, so
+                 * this lasts one frame. */
+                if (skipToGameStep == 3)
+                {
+                    NEXT_GAME_STATES[MainMenuEntry_Start] = GameState_MainLoadScreen;
+                    skipToGameStep                        = 4;
+                }
+#endif
 
                 MemCard_SysDisable();
 
@@ -473,6 +638,15 @@ void GameState_MainMenu_Update(void) // 0x8003AB28
     {
         g_SysWork.counters_1C[1] = 0;
     }
+
+#ifdef SH_PC_PORT
+    /* Hold the idle timer at zero while the panel is up. Scrolling a list is not
+     * idling, and at 1740 this loads STREAM.BIN and cuts to the intro movie. */
+    if (browserOpen)
+    {
+        g_SysWork.counters_1C[1] = 0;
+    }
+#endif
 
     if (!playInGameDemo)
     {
@@ -503,6 +677,16 @@ void GameState_MainMenu_Update(void) // 0x8003AB28
 
     if (g_GameWork.gameState == GameState_MainMenu)
     {
+#ifdef SH_PC_PORT
+        /* Skip-to-game passes through the menu for a couple of frames; drawing
+         * it would flash the title art before the fade into gameplay. Both calls
+         * below are draw-only (func_8003B560 is a nullsub), so nothing is lost. */
+        if (skipToGameStep != 0 && skipToGameStep < 4)
+        {
+            return;
+        }
+#endif
+
         MainMenu_BackgroundDraw();
         func_8003B560();
 
@@ -510,6 +694,11 @@ void GameState_MainMenu_Update(void) // 0x8003AB28
         {
             MainMenu_MainTextDraw();
 #ifdef SH_PC_PORT
+            MainMenu_AchievementHintDraw();
+            /* The achievement panel draws its own pointer over the top, so the
+             * game's would just be a second cursor tracking the same mouse
+             * underneath it. */
+            if (!browserOpen)
             { extern void Pc_MouseCursor_Draw(void); Pc_MouseCursor_Draw(); }
 #endif
             return;
@@ -517,6 +706,7 @@ void GameState_MainMenu_Update(void) // 0x8003AB28
 
         MainMenu_DifficultyTextDraw(newGameSelectedDifficultyIdx);
 #ifdef SH_PC_PORT
+        if (!browserOpen)
         { extern void Pc_MouseCursor_Draw(void); Pc_MouseCursor_Draw(); }
 #endif
         return;
@@ -549,6 +739,85 @@ void MainMenu_SelectedOptionIdxReset(void) // 0x8003B550
 
 void func_8003B560(void) {} // 0x8003B560
 
+#ifdef SH_PC_PORT
+/* Bottom-left hint naming the button that opens the achievement browser.
+ *
+ * Drawn through the game's own text system rather than a GL overlay, which buys
+ * three things: the game's glyphs, and a coordinate space that is already mapped
+ * into the picture area -- so pillarboxing and widescreen are handled by the
+ * same path every other menu string goes through, with nothing to get wrong
+ * here. */
+static void MainMenu_AchievementHintDraw(void)
+{
+    /* Authoring space on this screen runs y -112 (top) .. 336 (bottom), x 0 ..
+     * 320; the menu column sits at x158, y184..264.
+     *
+     * Y sits BELOW the copyright line baked into the title art, which lands
+     * around y286 -- drawing there put the hint straight through it. The band
+     * under it is empty, so this is the one clean strip left at the bottom.
+     *
+     * EUR's copyright comes from Pc_TitleLogoDrawEur's strips instead and lands
+     * at ~y306-318, straight through the US position. 320 is as low as the band
+     * allows -- the glyphs end at the y336 bottom edge. */
+    #define ACH_HINT_POS_X 18
+    #define ACH_HINT_POS_Y ((g_GameRegion == Region_EUR) ? 320 : 310)
+
+    extern const char* PcConfig_BindName(unsigned short, int, int, int);
+    extern int         Pc_ControllerAttached(void);
+
+    char        line[64];
+    char        bind[40];
+    const char* key;
+    const char* pad;
+    s32         i;
+    u16         mapBtn;
+
+    if (!g_PcConfig.retroAchievements)
+    {
+        return;
+    }
+
+    /* Whatever the player bound Map to -- the browser opens on that, so the
+     * hint has to read it rather than assume a key. Scheme 0 (classic): the
+     * title screen has no camera mode to disagree about. */
+    mapBtn = g_GameWorkPtr->config.controllerConfig.map;
+    key    = PcConfig_BindName(mapBtn, 0, 0, 0);
+    pad    = PcConfig_BindName(mapBtn, 1, 0, 0);
+
+    if (Pc_ControllerAttached() && pad[0] != '\0' && key[0] != '\0')
+    {
+        snprintf(bind, sizeof(bind), "%s/%s", key, pad);
+    }
+    else if (Pc_ControllerAttached() && pad[0] != '\0')
+    {
+        snprintf(bind, sizeof(bind), "%s", pad);
+    }
+    else if (key[0] != '\0')
+    {
+        snprintf(bind, sizeof(bind), "%s", key);
+    }
+    else
+    {
+        return; /* unbound — a hint naming no button helps nobody */
+    }
+
+    snprintf(line, sizeof(line), "[%s]_Achievements", bind);
+
+    /* The renderer prints '_' as a space, so a bind whose own name contains a
+     * real space ("Left Shift") has to be converted or the words run together. */
+    for (i = 0; line[i] != '\0'; i++)
+    {
+        if (line[i] == ' ')
+        {
+            line[i] = '_';
+        }
+    }
+
+    Gfx_StringSetPosition(ACH_HINT_POS_X, ACH_HINT_POS_Y);
+    Gfx_StringDraw(line, DEFAULT_MAP_MESSAGE_LENGTH);
+}
+#endif
+
 static void MainMenu_MainTextDraw(void) // 0x8003B568
 {
     #define COLUMN_POS_X 158
@@ -560,20 +829,14 @@ static void MainMenu_MainTextDraw(void) // 0x8003B568
         "CONTINUE",
         "START",
         "OPTION",
-#ifdef SH_XBOX_PORT
-        "EXIT"  /* Xbox: repurposed Extra slot -> quit to dashboard */
+#ifdef SH_PC_PORT
+        "EXIT" /* PC port: quits the game. Reuses the unused Extra slot. */
 #else
         "EXTRA" /** @unused See `e_MainMenuEntry`. */
 #endif
     };
     static const u8 STR_OFFSETS_X[] = { 29, 50, 32, 39,
-#ifdef SH_XBOX_PORT
-        24  /* EXIT: X = COLUMN_POS_X - offset, so smaller = further right. "EXIT"
-             * is 4 chars (narrow 'I'); the 33 tuned for the 5-char "EXTRA" sat it
-             * too far left. 24 nudges it right to sit centred with the column. */
-#else
         33  // @unused Element at index 4. See `g_MainMenu_VisibleEntryFlags`.
-#endif
     };
 
     s32 i;
@@ -592,7 +855,11 @@ static void MainMenu_MainTextDraw(void) // 0x8003B568
          * actual string ('[' is 6px wide); untranslated keeps the constant. */
         {
             const char* tr   = Pc_LangMenuText(MAIN_MENU_ENTRY_STRINGS[i]);
-            s32         offX = (tr == MAIN_MENU_ENTRY_STRINGS[i])
+            /* STR_OFFSETS_X holds hand-measured centres for the retail rows, so
+             * keep using them when the text is untranslated. The port's Exit row
+             * has no authored offset (index 4's was for "EXTRA"), so centre it
+             * from the measured width in every language, English included. */
+            s32         offX = (tr == MAIN_MENU_ENTRY_STRINGS[i] && i != MainMenuEntry_Exit)
                                    ? STR_OFFSETS_X[i]
                                    : ((Pc_LangMenuTextWidth(tr) + 6) >> 1);
             Gfx_StringSetPosition(COLUMN_POS_X - offX, COLUMN_POS_Y + (i * STR_OFFSET_Y));
@@ -739,7 +1006,7 @@ static void MainMenu_BackgroundDraw(void) // 0x8003B758
     }
 
 #ifdef SH_PC_PORT
-    if (g_GameRegion == Region_EUR)
+    if (Pc_TitleUsesPalLogo())
     {
         Pc_TitleLogoDrawEur();
     }

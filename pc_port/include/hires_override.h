@@ -1,5 +1,8 @@
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 #ifndef HIRES_OVERRIDE_H
 #define HIRES_OVERRIDE_H
+
+#include <stddef.h> /* size_t */
 
 #ifdef __cplusplus
 extern "C" {
@@ -38,6 +41,18 @@ extern "C" {
 
 /* Initialize the override system. Safe to call multiple times. */
 void HiresOverride_Init(void);
+
+/* Force GL_NEAREST (point) sampling on subsequent override uploads until cleared
+ * with 0. The font TIM loader wraps its registration in this so HD font atlases
+ * (gutterless glyph cells) don't bleed a neighbour glyph's ink across the cell
+ * edge under bilinear sampling ("ghost text"); all other overrides stay bilinear. */
+void HiresOverride_SetForceNearestUpload(int on);
+
+/* Decode a raw TIM/PNG blob to RGBA8 (no PSX VRAM, no override tables) — used by
+ * the PC minimap to turn the per-area paper-map TIM into a GL texture.
+ * Caller frees *outRGBA. Returns 0 on success. */
+int HiresOverride_DecodeToRGBA(const unsigned char* data, unsigned int size,
+                               unsigned char** outRGBA, int* outW, int* outH);
 
 /* Register a hi-res override.
  *   timPath:     loose-file path (used only for log messages)
@@ -80,6 +95,14 @@ unsigned int HiresOverride_LookupByTpageClut(int tpage, int clut,
                                               int* outOffsetY,
                                               int* outHiresW,
                                               int* outHiresH);
+
+/* Upload standalone RGBA8 pixels with the same defensive allocation/upload
+ * policy used by hi-res overrides (zero-prefill, delete-on-any-GL-error). The
+ * returned GL texture is owned by the CALLER, not by the override tables — it
+ * is never evicted, invalidated or freed here. Zero means the upload failed and
+ * must be treated as a miss. Used by the modern glTF item path, whose meshes
+ * carry their own base-colour image rather than a PSX CLUT. */
+unsigned int HiresOverride_CreateTextureRGBA(const unsigned char* rgba, int w, int h);
 
 void HiresOverride_LogStats(void);
 
@@ -124,6 +147,13 @@ void HiresOverride_LogStats(void);
 #define HIRES_POOL_SLOT_MAX       512
 #define HIRES_POOL_MAX_ROWS       16
 #define HIRES_POOL_CHARA_SLOT_BASE 256
+
+/* Play-as player body TIM (pc_playas.c) — first id past the chara range
+ * (Chara_Count == 44 -> 256..299), deliberately NOT 256+skinCharaId: the pool
+ * resets and re-reads that slot when it spawns the same chara you are wearing,
+ * which would blank the player. Its spills land at 364/428, between the chara
+ * slots' own spill sets (320..363, 384..427), so it aliases nothing. */
+#define HIRES_POOL_PLAYAS_SLOT    300
 /* Bullet-decal texture (pc_decals.c) — last chunk-range id, excluded from the
  * Texture_Get claim list. Named so the chunk-pool bound can't drift when
  * HIRES_POOL_SLOT_MAX grows (it did: 256->512 for the chara range). */
@@ -199,18 +229,94 @@ int  HiresOverride_RegisterRGBAKeyed(const char* label,
                                      int originalBitDepth,
                                      unsigned long long contentHash);
 
+/* BC7 .dds twins of the two *RGBAKeyed registrars: a whole-upload BC7 pack
+ * entry is uploaded compressed (4x cheaper VRAM) rather than expanded to RGBA.
+ * Dims come from the DDS header; contentHash gives the same redundant-upload
+ * skip. Used by the TexPack_LastComposeIsDds() path at the two compose sites. */
+int  HiresOverride_PoolSlotRegisterDdsKeyed(int slotId, int row,
+                                            const unsigned char* ddsBytes, size_t ddsSize,
+                                            int nativePixelW, int nativePixelH,
+                                            unsigned long long contentHash);
+int  HiresOverride_RegisterDdsKeyed(const char* label,
+                                    const unsigned char* ddsBytes, size_t ddsSize,
+                                    int targetVramX, int targetVramY,
+                                    int targetVramW, int targetVramH,
+                                    int targetClutX, int targetClutY,
+                                    int originalBitDepth,
+                                    unsigned long long contentHash);
+
 /* Drop every rect-keyed entry whose pixel rect or CLUT cells intersect a
  * VRAM region that was just rewritten — pool slots and map atlas VRAM
  * recycle the same rect+clut for different TIMs, and a surviving entry
  * would bind the OLD image to the new material's prims. Call for every
- * VRAM upload (pixels and CLUT rects). */
+ * VRAM upload (pixels and CLUT rects). Pinned entries are exempt. */
 void HiresOverride_InvalidateVramRect(int x, int y, int w, int h);
+
+/* Pin (or unpin) the entry registered under exactly this key, so neither
+ * HiresOverride_InvalidateVramRect nor the evictor removes it. For an override
+ * whose VRAM home is on purpose never uploaded (the PAL font grid on a USA or
+ * Japanese disc); the owner drops it with HiresOverride_DropVramRect. Both
+ * return -1 when no entry has that key. */
+int HiresOverride_PinVramRect(int vramX, int vramY, int vramW, int vramH,
+                              int clutX, int clutY, int bitDepth, int pin);
+int HiresOverride_DropVramRect(int vramX, int vramY, int vramW, int vramH,
+                               int clutX, int clutY, int bitDepth);
 
 /* True once live pack-composed GL textures exceed the byte budget. Pack
  * compose loops (fsqueue_3.c) stop making MORE pack textures then — rows
  * past the cap keep native disc art. Frees credit the budget back. Guards
  * the whole-town texture-all path against multi-GB pack blowups. */
 int HiresOverride_PackBudgetExceeded(void);
+/* True above the eviction TARGET (7/8 of the cap). Admission still gates on
+ * PackBudgetExceeded; only the evictor uses this, so it frees a margin instead
+ * of parking the run exactly on the cap. */
+int HiresOverride_PackBudgetOverTarget(void);
+
+/* Live pack-composed GL bytes, for logging/telemetry. */
+long long HiresOverride_PackBytesLive(void);
+
+/* Advance the LRU clock. Called once per pumped frame. */
+void HiresOverride_Tick(void);
+
+/* Free the least-recently-SAMPLED pack-composed slot row and credit its bytes
+ * back to the budget, so a spent budget recovers instead of latching off for
+ * the session. Skips rows sampled within `minAgeTicks` pumps. Returns 1 and
+ * fills outSlot and outRow when a row was freed, 0 when everything is hot.
+ *
+ * The caller MUST follow a successful evict with
+ * HiresOverride_PoolSlotRestoreNativeRow for that row — a row at glTexture==0
+ * falls back to ROW 0's palette in the lookup, which is wrong art on the
+ * multi-CLUT slots eviction targets most. */
+/* "Can this (slot,row) be put back to its own native art?" Rows that answer 0
+ * are never evicted — see the note in HiresOverride_EvictColdestPackRow. */
+typedef int (*HiresRestorablePredicate)(int slotId, int row);
+
+/* Validate a rebased prim clut against the pool: returns it unchanged when it
+ * is native or encodes a backed slot, otherwise logs and returns baseClut (the
+ * material's own registered base) so the prim stays drawable. */
+void HiresOverride_PoolSlotSetNativeClut(int slotId, int clutX, int clutY);
+
+unsigned short HiresOverride_RestampValidate(unsigned short newClut,
+                                             unsigned short baseClut,
+                                             unsigned short oldClut,
+                                             unsigned short oldBase,
+                                             const char* matName);
+
+int HiresOverride_EvictColdestPackRow(unsigned minAgeTicks,
+                                      HiresRestorablePredicate canRestore,
+                                      int* outSlot, int* outRow);
+
+/* Expand one CLUT row of a raw TIM pixel+palette block to RGBA8 at native
+ * resolution and install it as this slot row's texture, UNCHARGED against the
+ * pack budget. Pairs with the evictor above. Returns 0 on success. */
+int HiresOverride_PoolSlotRestoreNativeRow(int slotId, int row,
+                                           const unsigned char* pixels, int w16, int h,
+                                           const unsigned short* clutRow, int clutW,
+                                           int bpp, int nativePixelW, int nativePixelH);
+
+/* Lower texpack_budget_mb to a fraction of the GPU's reported VRAM. Only ever
+ * lowers; needs a live GL context, so call after PsyX_Initialise. */
+void HiresOverride_ClampBudgetToVram(void);
 
 #ifdef __cplusplus
 }

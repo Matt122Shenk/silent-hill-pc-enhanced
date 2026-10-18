@@ -619,12 +619,10 @@ void Player_UpperBodyStateUpdate(s_PlayerExtra* extra, e_PlayerUpperBodyState up
 /** @brief Triggers animations and actions performed by the player's upper body. */
 void Player_UpperBodyUpdate(s_SubCharacter* player, s_PlayerExtra* extra);
 
-/** @brief Updates animations and status related to player attacks.
- * Returns `true` if animations where succefully finished and if performing a multitap attack.
- * Un-nested from Player_UpperBodyMainUpdate into a file-scope static in
- * player_control.c (clang has no GCC nested functions); it now takes the
- * player/extra it used to capture, so this extern prototype is removed.
- */
+/* Player_CombatAnimUpdate was a GCC nested function inside
+ * Player_UpperBodyMainUpdate (player_control.c); un-nested there to a file-scope
+ * static taking the state it used to capture, so this stale no-arg prototype
+ * (which never had an external definition) is removed. */
 
 /** @brief Main animation and state handler for the player's upper body.
  * Returns `true` if combat animations where completed or if the player's health is >60%.

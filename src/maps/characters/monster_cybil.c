@@ -695,10 +695,31 @@ void func_800D8D7C(s_SubCharacter* monsterCybil, s_Model* modelUpper, GsCOORDINA
             break;
 
         case MonsterCybilControl_11:
-            if (monsterCybil->model.anim.keyframeIdx == 38)
+        {
+            /* Fire on the ENTRY to keyframe 38, not while it equals 38.
+             *
+             * Animation time advances fractionally (Anim_TimestepGet scales
+             * by g_DeltaTime), so an integer keyframe holds the same value
+             * for about two frames at 60fps and four at 120 -- an equality
+             * test spawns the attack that many times. At 30fps the keyframe
+             * advances a whole step per frame, so it fired exactly once,
+             * which is why this never showed on console. Same family as the
+             * two-bullets-per-shot free-aim bug (dce9773e0).
+             *
+             * Cybil's sibling call in cybil.c already guards this function
+             * with its own one-shot flag; this one had nothing. A static is
+             * safe here because monster Cybil is a single-instance boss.
+             * The edge cannot fire less often than the old test at 30fps,
+             * where the equality was already true for exactly one frame. */
+            static s32 s_prevKeyframeIdx = -1;
+            const s32  curKeyframeIdx    = monsterCybil->model.anim.keyframeIdx;
+
+            if (curKeyframeIdx == 38 && s_prevKeyframeIdx != 38)
             {
                 func_8006342C(EquippedWeaponId_Unk63, Q12_ANGLE(90.0f), monsterCybil->rotation.vy, g_SysWork.npcBoneCoordBuffer);
             }
+            s_prevKeyframeIdx = curKeyframeIdx;
+        }
 
             sharedFunc_800D9188_0_s00(39, monsterCybil, 38, Sfx_Unk1622);
             break;
@@ -1862,7 +1883,20 @@ void func_800DB4CC(s_SubCharacter* monsterCybil, s_Model* modelUpper, GsCOORDINA
                 monsterCybilProps.field_11A -= delta;
             }
 
+#ifdef SH_PC_PORT
+            /* COMPOSE the gun elevation onto the arm's animated pose, don't
+             * OVERWRITE it. Math_RotMatrixZ replaces bone 8's whole local
+             * rotation with a pure Z-rotation; on PSX the upper arm's animated
+             * local rotation is ~identity so overwrite == compose, but on our
+             * reformatted anim data the upper arm CARRIES the gun-forward pose,
+             * so overwriting reverts it toward bind and the gun points in a wrong
+             * (diagonal) direction. func_80044F14 builds the identical Z matrix
+             * but MulMatrix-composes it — same fix as the player's aim
+             * (player_control.c HarryBone_*UpperArm). */
+            func_80044F14(&boneCoords[8], monsterCybilProps.field_11A - Q12_ANGLE(90.0f), Q12_ANGLE(0.0f), Q12_ANGLE(0.0f));
+#else
             Math_RotMatrixZ(monsterCybilProps.field_11A - Q12_ANGLE(90.0f), &boneCoords[8].coord);
+#endif
             break;
 
         case 2:
@@ -1879,7 +1913,20 @@ void func_800DB4CC(s_SubCharacter* monsterCybil, s_Model* modelUpper, GsCOORDINA
                 monsterCybilProps.field_11A = angle;
             }
 
+#ifdef SH_PC_PORT
+            /* COMPOSE the gun elevation onto the arm's animated pose, don't
+             * OVERWRITE it. Math_RotMatrixZ replaces bone 8's whole local
+             * rotation with a pure Z-rotation; on PSX the upper arm's animated
+             * local rotation is ~identity so overwrite == compose, but on our
+             * reformatted anim data the upper arm CARRIES the gun-forward pose,
+             * so overwriting reverts it toward bind and the gun points in a wrong
+             * (diagonal) direction. func_80044F14 builds the identical Z matrix
+             * but MulMatrix-composes it — same fix as the player's aim
+             * (player_control.c HarryBone_*UpperArm). */
+            func_80044F14(&boneCoords[8], monsterCybilProps.field_11A - Q12_ANGLE(90.0f), Q12_ANGLE(0.0f), Q12_ANGLE(0.0f));
+#else
             Math_RotMatrixZ(monsterCybilProps.field_11A - Q12_ANGLE(90.0f), &boneCoords[8].coord);
+#endif
             break;
 
         case 6:

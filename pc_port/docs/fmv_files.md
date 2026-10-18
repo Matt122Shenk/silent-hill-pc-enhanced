@@ -93,4 +93,103 @@ and `SilentHill.log` prints the re-encode hint.
 
 A file using an unsupported *video* codec (H.264, Xvid, …) is not an
 error: the port logs the fourcc and falls back to the original disc
-movie for that slot.
+movie for that slot — unless ffmpeg is available (see below).
+
+## Native H.264/H.265/VP9/AV1 + mp4/mkv/webm (bring your own ffmpeg)
+
+The built-in decoder above is intra-frame only (each frame stands alone),
+which is why it can't do H.264/H.265 — those are inter-frame and need a
+real decoder. Every build of the port has ffmpeg support **compiled in**,
+but ships **no ffmpeg DLLs**. It looks for them at runtime; if they aren't
+there, nothing breaks — FMVs just play from the disc as always.
+
+So there are two tiers:
+
+**Tier 1 — works out of the box, no extra files.** Everything in
+*Supported AVI formats* above: MJPEG, uncompressed RGB, raw
+YUY2/UYVY/I420/YV12/NV12, with PCM or float32 audio. This is still the
+recommended path for mod authors who want zero friction on the player's
+end:
+
+```
+ffmpeg -i in.mp4 -c:v mjpeg -q:v 3 -c:a pcm_s16le out.avi
+```
+
+**Tier 2 — needs the player to supply ffmpeg DLLs.**
+
+- Video: **H.264, H.265/HEVC, VP9, AV1**
+- Audio: **AAC, MP3, Opus, Vorbis, FLAC**
+- Containers: `.mp4`, `.mkv`, `.webm`, `.mov`, and `.avi` files carrying
+  any of the above
+
+Put the file at `gamedata/fmv/<basename>.<ext>` — same place the MJPEG AVIs
+go. The built-in path is always tried **first**, so nothing about the
+existing AVI workflow changes; ffmpeg is only the fallback.
+
+### Getting the DLLs (ffmpeg 8.x)
+
+Download a **shared** ffmpeg 8.x build and drop these five DLLs next to
+`SilentHillPC.exe`, or put an ffmpeg 8.x `bin` folder on your `PATH`:
+
+| Library | DLL |
+|---------|-----|
+| avcodec | `avcodec-62.dll` |
+| avformat | `avformat-62.dll` |
+| avutil | `avutil-60.dll` |
+| swscale | `swscale-9.dll` |
+| swresample | `swresample-6.dll` |
+
+Both spellings are accepted — `avcodec-62.dll` and `libavcodec-62.dll`
+both load, whichever your build produced.
+
+The version numbers above come from the ffmpeg headers the port was compiled
+against, so the authoritative list for *your* build is the one written to
+`SilentHill.log` when the libraries are missing — check there if it disagrees
+with this table.
+
+> **It must be ffmpeg 8.x. A 6.x or 7.x build will not work.** The port is
+> compiled against the ffmpeg 8 ABI and reads decoder struct fields
+> directly, so a different major version is a crash, not a quirk. The port
+> checks each library's major version on load and **refuses** anything that
+> doesn't match, logging which library was wrong and what it expected. If
+> your movie mod isn't playing, check the DLL version numbers first — the
+> filenames must end in `-62`, `-60`, `-9`, `-6` as above.
+
+Where to get them:
+
+- **Windows:** [gyan.dev](https://www.gyan.dev/ffmpeg/builds/) or
+  [BtbN](https://github.com/BtbN/FFmpeg-Builds/releases). Both serve 8.x as
+  their current build, so just take the latest — the only thing to watch is
+  **shared** vs "static", since the static packages contain no DLLs at all.
+  On gyan.dev that's the `ffmpeg-*-full_build-shared.7z`; on BtbN, a release
+  asset with `shared` in the name.
+- **Linux:** the distro packages for whatever ffmpeg your build targets, e.g.
+  `apt install libavcodec62 libavformat62 libavutil60 libswscale9 libswresample6`.
+  The loader looks for `libavcodec.so.62` etc.
+- **macOS:** `brew install ffmpeg`. The loader looks for
+  `libavcodec.62.dylib` etc.
+
+### If the DLLs are missing
+
+Nothing fails. The port logs a line to `SilentHill.log` saying ffmpeg
+wasn't available (or which library mismatched), that movie falls back to
+the original disc version, and the game continues normally. The launcher
+also flags it so you aren't left guessing why a movie mod did nothing.
+
+### Why we don't bundle ffmpeg
+
+Redistributing ffmpeg carries license obligations, and the common prebuilt
+Windows binaries are GPL builds. Separately, H.264 and H.265 decoding is
+covered by patent pools (MPEG-LA / Access Advance) independent of ffmpeg's
+license. Shipping no decoder at all sidesteps both, while users stay free
+to install ffmpeg themselves. VP9, AV1, Opus, Vorbis and FLAC are
+royalty-free if you'd rather avoid the question entirely when authoring a
+mod.
+
+### Build note
+
+ffmpeg **headers** are a build-time dependency (`pacman -S
+mingw-w64-x86_64-ffmpeg` on MSYS2, or the `-dev` packages on Linux); the
+libraries are never linked. If the headers aren't found, CMake prints a
+warning and auto-disables the feature rather than failing the build.
+`-DSH_FMV_FFMPEG=OFF` still compiles the path out entirely.

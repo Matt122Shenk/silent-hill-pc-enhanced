@@ -2,7 +2,7 @@
 
 ## Overview
 
-This project is an **experimental PC port** of the original Silent Hill (1999) PlayStation game. It is built on top of the PSX decompilation project and uses **PsyCross** as a hardware abstraction layer (SDL2 + OpenGL + OpenAL). The port enables the game to run natively on PC with enhanced features like high resolution, 16:9 aspect ratio, high refresh rates, and uncapped framerates.
+This project is a **native PC port** of the original Silent Hill (1999) PlayStation game, built on top of the PSX decompilation project. It is **not an emulator** and **not a static recompilation** — no part of the original binary is machine-translated. The game is compiled from decompiled C source and uses **PsyCross** as a hardware abstraction layer (SDL2 + OpenGL + OpenAL), which reimplements the PSX libraries the game calls (libgpu, libgs, libspu) on the host. The port runs at high resolution, 16:9, high refresh rates and uncapped framerates, with alternate cameras, mod support and asset replacement.
 
 ---
 

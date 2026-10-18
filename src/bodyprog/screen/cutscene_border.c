@@ -63,12 +63,20 @@ static void Screen_BorderInitStatics(void)
     }
 
     {
-        const float psxAspect = 320.0f / 240.0f;
+        /* Same wrong formula as the screenBrightness/fog quads (320/240 base, no
+         * PAR, no hfov): halfW ~223 while the visible half is ~250 at 16:9, so
+         * the letterbox bars stopped short of the window edges. Use the shared
+         * visible-extent bound instead. */
+        extern float g_PsxPixelAspect, g_PsxWorldHScale;
+extern float GR_LivePixelAspect(void);
         const int   rw = g_windowWidth  > 0 ? g_windowWidth  : g_PcConfig.windowWidth;
         const int   rh = g_windowHeight > 0 ? g_windowHeight : g_PcConfig.windowHeight;
-        const float winAspect = rh > 0 ? (float)rw / (float)rh : psxAspect;
-        const float horScale = winAspect / psxAspect;
-        halfW = (s16)(160.0f * horScale + 10.0f);
+        const float hs = (g_PsxWorldHScale > 0.01f) ? g_PsxWorldHScale : 1.0f;
+        float fw = (rh > 0)
+            ? ((float)g_GameWork.gsScreenHeight * (float)rw / (2.0f * (float)rh)) * GR_LivePixelAspect() / hs
+            : 160.0f;
+        if (fw < 160.0f) fw = 160.0f;
+        halfW = (s16)(fw + 10.0f);
     }
 
     /* Width recomputed every call so a window resize is reflected.
@@ -145,9 +153,9 @@ static q19_12 g_BlackBorderShade = Q12(0.0f);
 // CUTSCENE BORDERS
 // ========================================
 
-// Un-nested from Screen_CutsceneCameraStateUpdate: clang/nxdk does not support
-// GCC nested functions. No parent locals were captured, so a file-scope static is
-// behavior-identical (and still compiles under the PC port's gcc).
+// Un-nested from Screen_CutsceneCameraStateUpdate: Clang has no GCC
+// nested-function extension. Everything this touches arrives by parameter, so a
+// file-scope static is behaviour-identical.
 static void Screen_BlackBorderDraw(POLY_G4* poly, s32 color)
 {
     s32 i;

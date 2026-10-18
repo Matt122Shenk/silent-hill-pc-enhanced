@@ -90,6 +90,14 @@ typedef enum _MainMenuEntry
     MainMenuEntry_Option   = 3,
     MainMenuEntry_Extra    = 4, /** @unused The extra options menu may have been accessible via the main menu. */
 
+#ifdef SH_PC_PORT
+    /* PC port: the port's Exit row reuses the unused Extra slot. It sits
+     * directly under Option in draw order and inside the existing
+     * MainMenuEntry_Count, so the row layout, selection wrap and mouse
+     * hit-test all keep working untouched. */
+    MainMenuEntry_Exit     = 4,
+#endif
+
     MainMenuEntry_Count    = 5
 } e_MainMenuEntry;
 
@@ -139,16 +147,59 @@ typedef struct
     char pad[12];
 } s_func_8005B424;
 
+/* GTE scratch pool capacities. PSX keeps the shipped scratchpad layout
+ * byte-for-byte; the PC port widens every pool to the u8 prim-index ceiling
+ * (256 slots) plus stride slack — the GTE walkers batch 3 vertices/normals at
+ * a time (writes reach up to 2 slots past a window) and func_800574D4's shade
+ * copy advances 4 bytes at a time (up to 3 bytes past). Both struct variants
+ * below alias ONE buffer (func_8005A21C casts between them), so their shared
+ * fields must stay offset-identical — pinned by the _Static_asserts after
+ * s_GteScratchData2. See pc_port/docs/Oversized_Models_Plan.md. */
+/* Flip to 1 to give the PC build the PSX pool dims exactly (disables
+ * oversized-model support while set). Was tried as the cause of the nurse/
+ * doctor back-parasite vanishing and disproved — that turned out to be the
+ * bone hide-list walk in func_8003E4A0, not the pools. */
+#define SH_GTE_SCRATCH_PSX_DIMS 0
+
+#if defined(SH_PC_PORT) && !SH_GTE_SCRATCH_PSX_DIMS
+#define GTE_SCRATCH_POOL_SLOTS     258
+#define GTE_SCRATCH_XY_CAP         GTE_SCRATCH_POOL_SLOTS
+#define GTE_SCRATCH_Z_UNLIT_CAP    GTE_SCRATCH_POOL_SLOTS
+#define GTE_SCRATCH_Z_LIT_TAIL_CAP (GTE_SCRATCH_POOL_SLOTS - 18) /* Lit Z pool spans screenZ_168[18] + this. */
+#define GTE_SCRATCH_FOG_CAP        GTE_SCRATCH_POOL_SLOTS
+#define GTE_SCRATCH_NORMAL_CAP     GTE_SCRATCH_POOL_SLOTS
+#define GTE_SCRATCH_SHADE_CAP      (GTE_SCRATCH_POOL_SLOTS + 3)
+/* Equalizes field_2B8's offset across the two variants (asserted below). */
+#define GTE_SCRATCH_V1_MID_PAD     ((GTE_SCRATCH_Z_LIT_TAIL_CAP * 2 + GTE_SCRATCH_NORMAL_CAP * 4) - \
+                                    (GTE_SCRATCH_Z_UNLIT_CAP * 2 + GTE_SCRATCH_FOG_CAP))
+#else
+#if defined(SH_PC_PORT) && SH_GTE_SCRATCH_PSX_DIMS
+/* PC using PSX dims: the pad collapses to 0, so field_2B8 aligns the same way
+ * it does on hardware and the runtime overlap is restored. */
+#define GTE_SCRATCH_POOL_SLOTS     90
+#define GTE_SCRATCH_V1_MID_PAD     0
+#endif
+#define GTE_SCRATCH_XY_CAP         90
+#define GTE_SCRATCH_Z_UNLIT_CAP    99
+#define GTE_SCRATCH_Z_LIT_TAIL_CAP 72
+#define GTE_SCRATCH_FOG_CAP        102
+#define GTE_SCRATCH_NORMAL_CAP     39
+#define GTE_SCRATCH_SHADE_CAP      200
+#endif
+
 /** @brief Struct used by many functions involved with GTE. Kept at `PSX_SCRATCH_ADDR` (possibly only temporarily). */
 typedef struct _GteScratchData
 {
-    DVECTOR screenXy_0[90];
+    DVECTOR screenXy_0[GTE_SCRATCH_XY_CAP];
     u16     screenZ_168[18];
 
-    s16 field_18C[99]; // The size changed from 150 due to the addition of `field_252`. Not sure if this is correct.
-    u8  field_252[102];
+    s16 field_18C[GTE_SCRATCH_Z_UNLIT_CAP]; // The size changed from 150 due to the addition of `field_252`. Not sure if this is correct.
+    u8  field_252[GTE_SCRATCH_FOG_CAP];
 
-    u8 field_2B8[200]; // Size likely incorrect.
+#if defined(SH_PC_PORT) && GTE_SCRATCH_V1_MID_PAD > 0
+    u8 pcPad_0[GTE_SCRATCH_V1_MID_PAD];
+#endif
+    u8 field_2B8[GTE_SCRATCH_SHADE_CAP]; // Size likely incorrect.
 
     union
     {
@@ -299,11 +350,42 @@ typedef struct _MapEffectsPresetIdxs
 
 typedef struct
 {
-    DVECTOR  screenXy_0[90];
+    /* NOTE: the array LENGTHS below are artifacts of where the decompiler split
+     * this region (at each offset it happened to observe an access), not real
+     * capacities. Several writers legitimately run past their declared end into
+     * the next field. Measured against all 256 shipped .ILM files:
+     *
+     *   screenXy_0  needs 90 slots, declared 90  -- exact fit, so 90 vertices is
+     *               the genuine design limit of the pool.
+     *   field_18C   is the per-vertex Z pool and needs 90 s16 (180 bytes), but
+     *               only 144 are declared before field_21C. screenZ_168[18] +
+     *               field_18C[72] == 90 s16 starting at 0x168, which is exactly
+     *               the matching pair for screenXy_0[90] -- one array, split in
+     *               two by the decomp.
+     *   field_21C   is written by func_8005AA08 as &field_21C[normalOffset] at
+     *               4 bytes per normal (VECTOR3* stepped once per 3 normals).
+     *               Max normal slot across every shipped model is 92 (BAR.ILM),
+     *               so writes reach 0x38C -- past field_2B8 and 12 bytes into
+     *               field_380.
+     *
+     * That is NOT a buffer overflow: the struct lives at PSX_SCRATCH_ADDR(0) and
+     * the writes stay inside the scratchpad on both targets. Nor is it a clobber
+     * in practice -- field_2B8 is the WORLD path's corner-shade array (unkCount_3
+     * is 0 on every shipping character), so the two never overlap in a live
+     * frame, and the original PSX build has the identical layout and data.
+     *
+     * PSX builds keep these exact dims (the GTE_SCRATCH_* macros collapse to the
+     * shipped numbers). The PC port widens every pool to GTE_SCRATCH_POOL_SLOTS
+     * so u8 prim indices can address the full 256-slot space; on PC the BAR.ILM
+     * slot-92 writes land INSIDE the widened field_21C instead of spilling over
+     * field_2B8/field_380 -- value-identical, because every spilled-over byte was
+     * rewritten by its own chain before any read (staging is filled per prim,
+     * shade/fog pools are recopied per part). */
+    DVECTOR  screenXy_0[GTE_SCRATCH_XY_CAP];
     s16      screenZ_168[18];
-    s16      field_18C[72];
-    s32      field_21C[39]; // Used as `VECTOR3`?
-    u8       field_2B8[200];
+    s16      field_18C[GTE_SCRATCH_Z_LIT_TAIL_CAP];
+    s32      field_21C[GTE_SCRATCH_NORMAL_CAP]; // Used as `VECTOR3`?
+    u8       field_2B8[GTE_SCRATCH_SHADE_CAP];
     MATRIX   field_380;
     s_Normal field_3A0;
     DVECTOR  screenPos_3A4;
@@ -343,6 +425,32 @@ typedef struct
         } s_1;
     } u;
 } s_GteScratchData2;
+
+#if defined(SH_PC_PORT) && !defined(__cplusplus)
+#include <stddef.h>
+/* One scratch buffer, two aliased views: every shared field must sit at the
+ * same offset in both variants, each chain's live pools must not overlap at
+ * full capacity, and both views must fit g_PsxScratchpad[4096]. */
+_Static_assert(offsetof(s_GteScratchData, screenXy_0)    == offsetof(s_GteScratchData2, screenXy_0),    "gte scratch aliasing: screenXy_0");
+_Static_assert(offsetof(s_GteScratchData, screenZ_168)   == offsetof(s_GteScratchData2, screenZ_168),   "gte scratch aliasing: screenZ_168");
+_Static_assert(offsetof(s_GteScratchData, field_18C)     == offsetof(s_GteScratchData2, field_18C),     "gte scratch aliasing: field_18C");
+_Static_assert(offsetof(s_GteScratchData, field_2B8)     == offsetof(s_GteScratchData2, field_2B8),     "gte scratch aliasing: field_2B8");
+_Static_assert(offsetof(s_GteScratchData, field_380)     == offsetof(s_GteScratchData2, field_380),     "gte scratch aliasing: field_380");
+_Static_assert(offsetof(s_GteScratchData, field_3A0)     == offsetof(s_GteScratchData2, field_3A0),     "gte scratch aliasing: field_3A0");
+_Static_assert(offsetof(s_GteScratchData, screenPos_3A4) == offsetof(s_GteScratchData2, screenPos_3A4), "gte scratch aliasing: screenPos_3A4");
+_Static_assert(offsetof(s_GteScratchData, depthP_3A8)    == offsetof(s_GteScratchData2, depthP_3A8),    "gte scratch aliasing: depthP_3A8");
+_Static_assert(offsetof(s_GteScratchData, field_3AC)     == offsetof(s_GteScratchData2, field_3AC),     "gte scratch aliasing: field_3AC");
+_Static_assert(offsetof(s_GteScratchData, unk_3B4)       == offsetof(s_GteScratchData2, unk_3B4),       "gte scratch aliasing: unk_3B4");
+_Static_assert(offsetof(s_GteScratchData, field_3D8)     == offsetof(s_GteScratchData2, field_3D8),     "gte scratch aliasing: field_3D8");
+_Static_assert(offsetof(s_GteScratchData, screenPos_3DC) == offsetof(s_GteScratchData2, u),             "gte scratch aliasing: tail");
+_Static_assert(offsetof(s_GteScratchData2, screenZ_168) + GTE_SCRATCH_POOL_SLOTS * sizeof(s16) <= offsetof(s_GteScratchData2, field_21C), "lit Z pool overlaps normal pool");
+_Static_assert(offsetof(s_GteScratchData2, field_21C) + GTE_SCRATCH_NORMAL_CAP * sizeof(s32)   <= offsetof(s_GteScratchData2, field_2B8), "normal pool overlaps shade pool");
+_Static_assert(offsetof(s_GteScratchData, field_18C) + GTE_SCRATCH_Z_UNLIT_CAP * sizeof(s16)   <= offsetof(s_GteScratchData, field_252),  "unlit Z pool overlaps fog pool");
+_Static_assert(offsetof(s_GteScratchData, field_252) + GTE_SCRATCH_FOG_CAP                     <= offsetof(s_GteScratchData, field_2B8),  "fog pool overlaps shade pool");
+_Static_assert(offsetof(s_GteScratchData, screenXy_0) + GTE_SCRATCH_XY_CAP * sizeof(DVECTOR)   <= offsetof(s_GteScratchData, screenZ_168), "XY pool overlaps Z pool");
+_Static_assert(sizeof(s_GteScratchData)  <= 4096, "s_GteScratchData exceeds g_PsxScratchpad");
+_Static_assert(sizeof(s_GteScratchData2) <= 4096, "s_GteScratchData2 exceeds g_PsxScratchpad");
+#endif
 
 // Something for inventory items.
 typedef struct
@@ -1103,6 +1211,18 @@ void WorldObject_ModelNameSet(s_WorldObjectModel* model, char* newStr);
 
 /** Submits a world object to draw. */
 void WorldGfx_ObjectAdd(s_WorldObjectModel* model, const VECTOR3* pos, const SVECTOR3* rot);
+#ifdef SH_PC_PORT
+/* Interiors only. Map scripts draw a common pickup only while the player stands in its 40u map
+ * cell. Behind fog and fixed cameras that edge never showed; in first person or
+ * with the fog thinned the item blinked out a few steps away. ORed into each
+ * pickup's cell test so a nearby item stays drawn. Drawing only: taking an
+ * item is a separate map event and is unchanged. */
+bool Pc_CommonPickupInRange(const VECTOR3* pos);
+/* Hold the live fog at >= 1.0 this frame (call every frame the scene needs it);
+ * Pc_FogFloorFrameEnd restores the user's value once no one asks. */
+void Pc_FogFloorRequest(void);
+void Pc_FogFloorFrameEnd(void);
+#endif
 
 /** @unused Returns held item ID. */
 s32 WorldGfx_HeldItemIdGet(void);

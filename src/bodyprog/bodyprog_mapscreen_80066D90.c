@@ -242,6 +242,9 @@ void GameState_PaperMapScreen_Update(void) // 0x80066EB0
             SD_Call(Sfx_MenuMap);
             func_80066E40();
             Fs_QueueStartReadTim(FILE_TIM_MP_0TOWN_TIM + g_PaperMapFileIdxs[paperMapIdx], FS_BUFFER_2, &g_PaperMapImg);
+#ifdef SH_PC_PORT
+            Fs_QueueDrainNow();
+#endif
             Fs_QueueWaitForEmpty();
 
             g_IntervalVBlanks = 1;
@@ -411,6 +414,9 @@ void GameState_PaperMapScreen_Update(void) // 0x80066EB0
                 Fs_QueueStartReadTim(FILE_TIM_MR_0TOWN_TIM + g_PaperMapMarkingFileIdxs[paperMapIdx], FS_BUFFER_1, &g_PaperMapMarkingAtlasImg);
             }
 
+#ifdef SH_PC_PORT
+            Fs_QueueDrainNow();
+#endif
             Fs_QueueWaitForEmpty();
             ScreenFade_Start(true, true, false);
 
@@ -523,6 +529,10 @@ s32 func_80067914(s32 paperMapIdx, u16 arg1, u16 arg2, u16 arg3) // 0x80067914
         case PaperMapIdx_OldTown:
             switch (g_SavegamePtr->mapIdx)
             {
+#ifdef SH_PC_PORT
+                /* Intro street shares map2_s00's layout, so borrow its placement. */
+                case MapIdx_MAP0_S00:
+#endif
                 case MapIdx_MAP2_S00:
                     if (cellZ < 4 || (cellZ < 6 && (cellX >= -1 && cellX < 1)))
                     {

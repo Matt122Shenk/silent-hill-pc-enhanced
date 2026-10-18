@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 /* Auto-generated data stubs for unresolved symbols */
 #include <string.h>
 
@@ -20,7 +21,11 @@ u8 D_80028544[256] = {0};
  * binary-extracted weapon anim keyframe data. The prior zero-stub here
  * caused Harry's handgun aim pose to render with shrunken torso because
  * GameFs_WeaponInfoUpdate copied all-zeros into D_800C44F0[]. */
-u8 D_8002B2CC[256] = {0};
+/* u_Filename "DWAVE" (BODYPROG.BIN @0x8002B2CC): the material name water.c
+ * func_8008E4EC retextures to the page-13 water caustic (img0). As a zero-stub
+ * the LM material search matched nothing, so the sewer water surface never
+ * received the caustic texture and rendered black. */
+u8 D_8002B2CC[256] = "DWAVE";
 u8 D_800A9938[256] = {0};
 u8 D_800A9945[256] = {0};
 u8 D_800A99B5[256] = {0};
@@ -241,10 +246,11 @@ u8 D_800DB054[256] = {0};
 u8 D_800DB055[256] = {0};
 u8 D_800DB064[256] = {0};
 /* D_800DB1D8/E0/E8/F0/F8 (twinfeeler emerge tables: bone scale, Y positions,
- * X/Y rotations, sfx id+vol) now defined with real binary-extracted values in
- * map4_s03_extracted_data.c. Zero-stubs here would shadow the DLL copies
- * (= worm never submerges + sfx id 0 looping at full volume). */
-u8 D_800DB238[256] = {0};
+ * X/Y rotations, sfx id+vol) and D_800DB238 (the per-segment bone-hide lists
+ * that bury the worm's body as it burrows) now have real binary-extracted
+ * values in map4_s03_extracted_data.c. Zero-stubs here would shadow the DLL
+ * copies (= worm never submerges, stays fully drawn underground, and sfx id 0
+ * loops at full volume). */
 u8 D_800DB898[256] = {0};
 u8 D_800DB89A[256] = {0};
 u8 D_800DB89C[256] = {0};
@@ -779,8 +785,15 @@ void* g_Cutscene_UpdateMar = 0;
 void* g_Cutscene_UpdateKau = 0;
 void* g_Cutscene_UpdateArsia = 0;
 void* g_Cutscene_UpdateHero = 0;
-/* Binary-extracted MAP3_S03.BIN @0x800D57F0 (SfxPair[9] as u16 words). */
-u16 g_NursePuppetSfxs[18] = { 1506, 128, 1507, 128, 1508, 128, 1509, 128, 1510, 160, 1511, 255, 1512, 128, 1512, 128, 1519, 128 };
+/* Binary-extracted MAP3_S03.BIN @0x800D57F0 (SfxPair[18] as u16 words). Two
+ * 9-pair banks selected by field_124->idx_1C in PuppetNurse_SfxPlay
+ * (idx0 = idx_1C*9 + idx): bank 0 = Puppet Nurse, bank 1 = Puppet Doctor.
+ * Only bank 0 was present, so the doctor (idx_1C=1, idx0=9..17) indexed past
+ * the array and played sfxId 0 -> silent. Bank 1 = the exact disc bytes at
+ * VRAM 0x800D5814 (verified against the USA MAP3_S03.BIN @file 0xc29c). The
+ * shared.h extern already declares [18] SfxPairs, matching this full size. */
+u16 g_NursePuppetSfxs[36] = { 1506, 128, 1507, 128, 1508, 128, 1509, 128, 1510, 160, 1511, 255, 1512, 128, 1512, 128, 1519, 128,
+                              1513, 128, 1514, 128, 1515, 128, 1516, 128, 1517, 168, 1518, 255, 1512, 128, 1512, 128, 1519, 128 };
 /* Binary-extracted from MAP3_S03.BIN (anim time -> nurse SFX map). */
 u8 g_NursePuppet_AnimSfxs[580] = {
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 3, 3, 3,
@@ -1541,10 +1554,12 @@ typedef int e_MapIdx; /* avoid pulling in heavy headers; underlying type is enum
 e_MapIdx g_ParticleMapIdx0 = 0;
 e_MapIdx g_ParticleMapIdx1 = 0;
 
-/* Cross-map shared symbol: defined in map3_s05.c, used by map3_s04.c.
- * On PSX both maps share the address; on PC each is a separate DLL so
- * we promote the definition to the main exe and #ifndef the original.
- * Value from map3_s05.c. */
+/* map3_s05 SFX-emit position (VECTOR3), promoted to the exe for map3_s05.dll.
+ * PSX VA 0x800CB35C ALSO exists in map3_s04 as a DIFFERENT per-overlay
+ * variable (SVECTOR3 world-object rotation, all zeros on disc) -- that one is
+ * defined DLL-locally in map3_s04_extracted_data.c and must NOT resolve to
+ * this value (reading this position as angles pitched the Plate of Queen ~36
+ * degrees). Each overlay has its own rodata at the shared VA. */
 const struct { int vx, vy, vz; } D_800CB35C = {
     (int)0x00015199, (int)0x00000000, (int)0xFFFEC000
 };

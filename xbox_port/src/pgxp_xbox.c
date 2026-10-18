@@ -201,3 +201,19 @@ void Pgxp_FrameAdvance(void)
 {
     s_pgxpGen++;
 }
+
+/* The GTE's own PGXP tables (the exact-transform "twins" in PsyX_GTE.cpp)
+ * stamp entries with this same per-frame generation, so they go stale on the
+ * same boundary as the shadow table above. */
+unsigned PGXP_CurGen(void)
+{
+    return s_pgxpGen;
+}
+
+/* PsyX_GTE.cpp's gate for capturing per-vertex view-space data. On PC the
+ * flashlight cone and bilinear filtering need it too; on Xbox only PGXP reads
+ * it, so off means the GTE skips the capture entirely (as before the merge). */
+int GR_NeedViewSpaceData(void)
+{
+    return g_PsxUsePgxp;
+}

@@ -54,16 +54,20 @@ s_CharaFileInfo CHARA_FILE_INFOS[] = {
 #ifdef SH_PC_PORT
 #include "main/fileinfo.h"    /* g_GameRegion */
 #include "bodyprog/map/map.h" /* e_MapIdx */
+#include "pc_config.h"        /* g_PcConfig.uncensored */
 
 /* PAL (SLES-01514) censored the Grey Children into "Mumblers": same enemy, AI and
  * animation, only a different model + texture (CLD3 -> CLD4). Replicate it by
  * pointing the Grey Child's model/texture at the Mumbler's so PAL spawns render
  * as Mumblers while keeping the working Grey Child AI/charaId. Called once after
- * the disc region is detected. (A future option could keep the Grey Children by
- * not applying this.) */
+ * the disc region is detected.
+ *
+ * The `uncensored` config key skips the swap, restoring the Grey Children on a
+ * PAL disc (which ships CLD3 too — it is simply unused) so an EUR disc matches
+ * the US/NTSC content. Off by default = retail PAL behaviour. */
 void CharaData_ApplyRegionPatches(void)
 {
-    if (g_GameRegion == Region_EUR)
+    if (g_GameRegion == Region_EUR && !g_PcConfig.uncensored)
     {
         CHARA_FILE_INFOS[Chara_GreyChild].modelFileIdx   = FILE_CHARA_CLD4_ILM;
         CHARA_FILE_INFOS[Chara_GreyChild].textureFileIdx = FILE_CHARA_CLD4_TIM;
@@ -73,8 +77,9 @@ void CharaData_ApplyRegionPatches(void)
 /* NTSC-J spawns Mumblers where the US disc spawns Grey Children in EXACTLY
  * these maps and nowhere else (disc-verified: the JAP overlays' chara group
  * bytes read 9/Mumbler instead of 8/GreyChild there; the global chara file
- * table is byte-identical between the discs). Same model+texture swap as the
- * PAL patch, but per map load and reverted where JP keeps Grey Children. */
+ * table is byte-identical between the discs). The five are the whole school
+ * and the amusement park. Same model+texture swap as the PAL patch, but per
+ * map load and reverted where JP keeps Grey Children. */
 void CharaData_ApplyJpnMapPatches(s32 mapIdx)
 {
     s32 useMumbler;
@@ -84,7 +89,13 @@ void CharaData_ApplyJpnMapPatches(s32 mapIdx)
         return;
     }
 
-    useMumbler = (mapIdx == MapIdx_MAP1_S00 || mapIdx == MapIdx_MAP1_S01 ||
+    /* `uncensored` covers this disc too. It was written for PAL and the
+     * comment above is why it has to apply here as well: these five maps are
+     * the ONLY content difference between the JP and US discs, so skipping the
+     * swap makes a JP disc match US exactly -- and CLD3 is right there to load,
+     * the chara file table being byte-identical between them. */
+    useMumbler = !g_PcConfig.uncensored &&
+                 (mapIdx == MapIdx_MAP1_S00 || mapIdx == MapIdx_MAP1_S01 ||
                   mapIdx == MapIdx_MAP1_S02 || mapIdx == MapIdx_MAP1_S03 ||
                   mapIdx == MapIdx_MAP6_S04);
 

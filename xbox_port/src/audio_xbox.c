@@ -778,6 +778,24 @@ void SpuSetKey(int on_off, unsigned int voice_bit)
     if (on_off == SPU_ON) s_azPendingValid = 0;   /* claimed; don't leak to next */
 }
 
+/* Quickload's SFX stop (bodyprog_bgm_80087EA8.c func_800880F0). The ports skip
+ * PSX's blanket SD_Call(22) because a hard stop truncates one-shots that the
+ * PSX's ADPCM tail let ring out (death scream, pickup voice), but a LOOP never
+ * ends on its own: the bridge wind kept playing across the quickload. Stop only
+ * the looping voices, as PsyCross does. */
+void Pc_SpuStopLoopingVoices(void)
+{
+    int i;
+    for (i = 0; i < SPU_VOICES; i++) {
+        Voice* v = &s_v[i];
+        if (!v->active || !v->looping)
+            continue;
+        v->looping  = 0;
+        v->envPhase = ENV_OFF;
+        v->active   = 0;
+    }
+}
+
 void SpuSetKeyOnWithAttr(SpuVoiceAttr* a)
 {
     if (!a) return;

@@ -11,6 +11,13 @@
 #include "pc_config.h"
 #include "hires_override.h"
 #include "tex_pack.h"
+#include "texpack_lazy.h"
+#include "pc_big_lm.h"
+#include "pc_big_tmd.h"   /* Pc_BigTmd_DestCapacity — oversized loose ITEM TMDs */
+#include "pc_big_ipd.h"   /* Pc_BigIpd_DestCapacity — oversized loose map chunks */
+#include "lang_pack.h"    /* Pc_LangPackActive — FONT16 Polish glyph patch */
+#include "font_region.h"  /* Font_PatchPackGlyphs */
+#include "lang_ru.h"      /* Pc_RuActive: a Russian disc needs one cell fixed too */
 #include "sh_log.h"
 
 #ifndef _WIN32
@@ -179,26 +186,38 @@ bool Fs_QueueTickSetLoc(s_FsQueueEntry* entry)
  * and computed the engine's target VRAM rect — uses that path to register
  * a hi-res GL texture override. */
 #define HIRES_PENDING_MAX 32
+/* Keyed on the FILE (s_FileInfo* into the stable g_FileTable), NOT on the
+ * s_FsQueueEntry* — the queue RECYCLES entry slots, so a pointer key let a stash
+ * left by one file be popped by a completely different file that later reused the
+ * slot. That is how a CHARA loose override (BFLU.png) ended up painted on a
+ * building wall, and then on Harry's inventory portrait. The file pointer is
+ * unique and stable per file, so an override can only ever be applied to the file
+ * it was stashed for. PopPath additionally re-checks the name, so no caller can
+ * skip validation (there are two pop sites and only one used to check). */
 typedef struct {
-    s_FsQueueEntry* entry;
+    const s_FileInfo* info;
     char path[160];
 } HiresPending;
 static HiresPending s_hiresPending[HIRES_PENDING_MAX];
 
 static void HiresPending_Stash(s_FsQueueEntry* entry, const char* path)
 {
+    const s_FileInfo* info = (entry != NULL) ? entry->info : NULL;
     int free = -1;
+
+    if (info == NULL || !FSQ_INFO_VALID(info)) return;
+
     for (int i = 0; i < HIRES_PENDING_MAX; i++)
     {
-        if (s_hiresPending[i].entry == entry) { free = i; break; }
-        if (s_hiresPending[i].entry == NULL && free < 0) free = i;
+        if (s_hiresPending[i].info == info) { free = i; break; }
+        if (s_hiresPending[i].info == NULL && free < 0) free = i;
     }
     if (free < 0)
     {
         SH_DBG("[HIRES] pending table full, dropping %s", path);
         return;
     }
-    s_hiresPending[free].entry = entry;
+    s_hiresPending[free].info = info;
     strncpy(s_hiresPending[free].path, path,
             sizeof(s_hiresPending[free].path) - 1);
     s_hiresPending[free].path[sizeof(s_hiresPending[free].path) - 1] = '\0';
@@ -207,16 +226,34 @@ static void HiresPending_Stash(s_FsQueueEntry* entry, const char* path)
 static const char* HiresPending_PopPath(s_FsQueueEntry* entry)
 {
     static char buf[160];
-    for (int i = 0; i < HIRES_PENDING_MAX; i++)
+    const s_FileInfo* info = (entry != NULL) ? entry->info : NULL;
+    int i;
+
+    if (info == NULL || !FSQ_INFO_VALID(info)) return NULL;
+
+    for (i = 0; i < HIRES_PENDING_MAX; i++)
     {
-        if (s_hiresPending[i].entry == entry)
+        if (s_hiresPending[i].info != info) continue;
+
+        strncpy(buf, s_hiresPending[i].path, sizeof(buf));
+        buf[sizeof(buf) - 1] = '\0';
+        s_hiresPending[i].info = NULL;
+        s_hiresPending[i].path[0] = '\0';
+
+        /* Belt-and-braces: the stashed path is "gamedata/load/{folder}/{discname}",
+         * so its basename must equal the disc name of the file being loaded. */
         {
-            strncpy(buf, s_hiresPending[i].path, sizeof(buf));
-            buf[sizeof(buf) - 1] = '\0';
-            s_hiresPending[i].entry = NULL;
-            s_hiresPending[i].path[0] = '\0';
-            return buf;
+            char        curName[16] = {0};
+            const char* base = strrchr(buf, '/');
+            base = (base != NULL) ? base + 1 : buf;
+            Fs_GetFileInfoName(curName, info);
+            if (curName[0] != '\0' && strcmp(base, curName) != 0)
+            {
+                SH_DBG("[HIRES] refusing stale override '%s' for '%s'", buf, curName);
+                return NULL;
+            }
         }
+        return buf;
     }
     return NULL;
 }
@@ -337,6 +374,13 @@ static FILE* Loose_FOpen(const char* path, const char* mode)
     }
 }
 
+/* pc_big_lm.c probes the same loose namespace; export the open so the Linux
+ * case-insensitive fallback lives in one place. */
+FILE* Pc_LooseFOpen(const char* path, const char* mode)
+{
+    return Loose_FOpen(path, mode);
+}
+
 /* Read a whole loose file. Returns malloc'd bytes (caller frees) or NULL
  * with the failing step logged. 64MB cap. */
 static unsigned char* PcFile_Slurp(const char* path, long* outSize)
@@ -401,6 +445,10 @@ static int Loose_HasPerRow(const char* base)
     snprintf(p, sizeof(p), "%s.p00.png", base);
     f = Loose_FOpen(p, "rb");
     if (f != NULL) { fclose(f); return 1; }
+    /* A per-row set may ship BC7 .dds rows instead of / alongside .png. */
+    snprintf(p, sizeof(p), "%s.p00.dds", base);
+    f = Loose_FOpen(p, "rb");
+    if (f != NULL) { fclose(f); return 1; }
     return 0;
 }
 
@@ -411,6 +459,12 @@ static int Loose_HasPerRow(const char* base)
 static int Loose_ResolveWhole(const char* base, char* out, size_t outSize)
 {
     FILE* f;
+
+    /* BC7 .dds is probed BEFORE .png at every form: when a mod ships both for
+     * the same texture, the .dds (4x cheaper in VRAM) must win. */
+    snprintf(out, outSize, "%s.dds", base);
+    f = Loose_FOpen(out, "rb");
+    if (f != NULL) { fclose(f); return 1; }
 
     snprintf(out, outSize, "%s.png", base);
     f = Loose_FOpen(out, "rb");
@@ -427,6 +481,10 @@ static int Loose_ResolveWhole(const char* base, char* out, size_t outSize)
             if (stemLen >= sizeof(stem)) stemLen = sizeof(stem) - 1;
             memcpy(stem, base, stemLen);
             stem[stemLen] = '\0';
+            snprintf(out, outSize, "%s.dds", stem);
+            f = Loose_FOpen(out, "rb");
+            if (f != NULL) { fclose(f); return 1; }
+
             snprintf(out, outSize, "%s.png", stem);
             f = Loose_FOpen(out, "rb");
             if (f != NULL) { fclose(f); return 1; }
@@ -441,6 +499,180 @@ static int Loose_ResolveWhole(const char* base, char* out, size_t outSize)
         if (f != NULL) { fclose(f); return 1; }
     }
     return 0;
+}
+
+/* True when ANY loose override form exists for a base disc path: the byte-
+ * replace file itself, plus — for TIM reads only, mirroring the probe gate in
+ * Fs_QueueTickRead — the whole-image {base}/{stem} .png/.dds and the {base}.p00
+ * per-CLUT-row sentinel. This only picks WHICH of two candidate names for the
+ * same read carries a mod (a PAL localized file's real disc name vs its
+ * US-canonical table name); the exact form is resolved by the unchanged probe
+ * chain afterwards. */
+static int Loose_AnyForm(const char* base, int allowImageForms)
+{
+    static const char* const imageSfx[] = { ".png", ".dds", ".p00.png", ".p00.dds" };
+    char   p[176];
+    FILE*  f;
+    size_t i;
+
+    if (base == NULL || base[0] == '\0') return 0;
+
+    f = Loose_FOpen(base, "rb");
+    if (f != NULL) { fclose(f); return 1; }
+
+    if (!allowImageForms) return 0;
+
+    for (i = 0; i < sizeof(imageSfx) / sizeof(imageSfx[0]); i++)
+    {
+        snprintf(p, sizeof(p), "%s%s", base, imageSfx[i]);
+        f = Loose_FOpen(p, "rb");
+        if (f != NULL) { fclose(f); return 1; }
+    }
+
+    {
+        const char* slash = strrchr(base, '/');
+        const char* fname = slash ? slash + 1 : base;
+        const char* dot   = strchr(fname, '.');
+        if (dot != NULL && dot != fname)
+        {
+            size_t stemLen = (size_t)(dot - base);
+            char   stem[160];
+            if (stemLen >= sizeof(stem)) stemLen = sizeof(stem) - 1;
+            memcpy(stem, base, stemLen);
+            stem[stemLen] = '\0';
+            snprintf(p, sizeof(p), "%s.dds", stem);
+            f = Loose_FOpen(p, "rb");
+            if (f != NULL) { fclose(f); return 1; }
+            snprintf(p, sizeof(p), "%s.png", stem);
+            f = Loose_FOpen(p, "rb");
+            if (f != NULL) { fclose(f); return 1; }
+        }
+    }
+    return 0;
+}
+
+/* Build the loose-override BASE path for a disc file — "gamedata/load/{FOLDER}/{NAME}",
+ * swapped to the region-renamed name when that one carries the mod. Extracted
+ * from Fs_QueueTickRead so PC-side consumers that read a file OUTSIDE the queue
+ * resolve mods through exactly these names instead of a second copy that drifts.
+ * `allowImageForms` mirrors the TIM-only image-probe gate. */
+static void Loose_BasePathForFile(const s_FileInfo* file, int allowImageForms,
+                                  char* outPath, size_t outPathSize,
+                                  char* outFolder, size_t outFolderSize,
+                                  char* outName, size_t outNameSize)
+{
+    const char* folder = g_FilePaths[file->pathIdx]; /* e.g. "\\BG\\" */
+    size_t      fi;
+    size_t      fl;
+
+    /* Strip leading/trailing backslashes from g_FilePaths entry. */
+    if (folder[0] == '\\') folder++;
+    fl = strlen(folder);
+    while (fl > 0 && folder[fl - 1] == '\\') fl--;
+    if (fl >= outFolderSize) fl = outFolderSize - 1;
+    for (fi = 0; fi < fl; fi++) outFolder[fi] = folder[fi];
+    outFolder[fl] = '\0';
+
+    Fs_GetFileInfoName(outName, file);
+
+    /* Use forward slashes — fopen on mingw accepts them. */
+    snprintf(outPath, outPathSize, "gamedata/load/%s/%s", outFolder, outName);
+
+    /* Region-renamed asset. g_FileTable is US-canonical, but PAL keeps the
+     * localized map overlays in VIN2..VIN5 and stamps a language letter into
+     * the death-hint TIMs, so on a non-English PAL disc the name above is a
+     * DIFFERENT file — the English original. An extracted PAL tree dropped
+     * into gamedata/load/ carries the real names, which were unreachable;
+     * worse, serving the English file for a German read would silently
+     * un-localize the game, so the real disc name wins when it carries an
+     * override. Fs_GetRegionFilePath reports no difference on USA, on JPN
+     * (its table is name-identical to USA at every index) and on English
+     * PAL, so those paths issue no extra fopen at all. */
+    if (FSQ_INFO_VALID(file))
+    {
+        const char* regionDir = NULL;
+        char        regionName[32];
+
+        if (Fs_GetRegionFilePath((s32)(file - &g_FileTable[0]), &regionDir, regionName))
+        {
+            char regionPath[160];
+
+            snprintf(regionPath, sizeof(regionPath), "gamedata/load/%s/%s",
+                     regionDir, regionName);
+            if (Loose_AnyForm(regionPath, allowImageForms))
+            {
+                static int s_regionLogged = 0;
+                if (s_regionLogged < 32)
+                {
+                    s_regionLogged++;
+                    SH_DBG("[LOOSE/REGION] %s overrides canonical %s", regionPath, outPath);
+                }
+                snprintf(outPath, outPathSize, "%s", regionPath);
+                snprintf(outFolder, outFolderSize, "%s", regionDir);
+                snprintf(outName, outNameSize, "%s", regionName);
+            }
+        }
+    }
+}
+
+/* A PC-side reader that consumes a disc file OUTSIDE the FS queue — pc_minimap.c
+ * reads the paper-map TIM itself and owns its own texture — never reaches
+ * Fs_QueuePostLoadTim, so none of the image-form overrides that pipeline applies
+ * would ever show there: an HD paper map replaced the map SCREEN but not the
+ * minimap. This resolves the same whole-image override the post-load would have
+ * picked, in the same order (.dds before .png, disc-name form before stem form,
+ * with a per-CLUT-row set's row 0 ahead of both), and fills `out` with its path.
+ * Returns 1 when one exists. fopen probes only — it never touches the FS queue,
+ * so it is safe from a caller's queue-idle window. A byte-replaced loose TIM
+ * needs nothing here: Fs_QueueTickRead already served its bytes to the read. */
+int Pc_LooseImageOverridePath(s32 fileIdx, char* out, size_t outSize)
+{
+    const s_FileInfo* file;
+    char              base[160];
+    char              folder[16];
+    char              name[32];
+
+    if (out == NULL || outSize == 0) return 0;
+    out[0] = '\0';
+
+    if (!g_PcConfig.allowLooseFiles) return 0;
+    if (fileIdx < 0 || fileIdx >= FS_FILE_COUNT) return 0;
+
+    file = &g_FileTable[fileIdx];
+    Loose_BasePathForFile(file, 1, base, sizeof(base), folder, sizeof(folder),
+                          name, sizeof(name));
+
+    /* A per-CLUT-row set replaces one palette at a time, but a single-palette
+     * TIM (every paper map is one) draws through row 0 — so p00 IS its whole
+     * image, and it outranks the whole-image forms exactly as in PostLoadTim. */
+    if (Loose_HasPerRow(base))
+    {
+        char  p[176];
+        FILE* f;
+
+        snprintf(p, sizeof(p), "%s.p00.dds", base);
+        f = Loose_FOpen(p, "rb");
+        if (f == NULL)
+        {
+            snprintf(p, sizeof(p), "%s.p00.png", base);
+            f = Loose_FOpen(p, "rb");
+        }
+        if (f != NULL)
+        {
+            fclose(f);
+            snprintf(out, outSize, "%s", p);
+            return 1;
+        }
+    }
+
+    return Loose_ResolveWhole(base, out, outSize);
+}
+
+/* The queue's own whole-file read (64MB cap, failures logged), for the same
+ * outside-the-queue consumers. Caller frees. */
+unsigned char* Pc_LooseSlurp(const char* path, long* outSize)
+{
+    return PcFile_Slurp(path, outSize);
 }
 #endif
 
@@ -505,27 +737,15 @@ bool Fs_QueueTickRead(s_FsQueueEntry* entry)
     if (g_PcConfig.allowLooseFiles && entry->info != NULL)
     {
         s_FileInfo* file = entry->info;
-        const char* folder = g_FilePaths[file->pathIdx]; /* e.g. "\\BG\\" */
         char strippedFolder[16];
         char nameBuf[32];
         char loosePath[160];
-        size_t fi = 0;
-        size_t fl;
         FILE* lf;
 
-        /* Strip leading/trailing backslashes from g_FilePaths entry. */
-        if (folder[0] == '\\') folder++;
-        fl = strlen(folder);
-        while (fl > 0 && folder[fl - 1] == '\\') fl--;
-        if (fl >= sizeof(strippedFolder)) fl = sizeof(strippedFolder) - 1;
-        for (fi = 0; fi < fl; fi++) strippedFolder[fi] = folder[fi];
-        strippedFolder[fl] = '\0';
-
-        Fs_GetFileInfoName(nameBuf, file);
-
-        /* Use forward slashes — fopen on mingw accepts them. */
-        snprintf(loosePath, sizeof(loosePath), "gamedata/load/%s/%s",
-                 strippedFolder, nameBuf);
+        Loose_BasePathForFile(file, entry->postLoad == FsQueuePostLoadType_Tim,
+                              loosePath, sizeof(loosePath),
+                              strippedFolder, sizeof(strippedFolder),
+                              nameBuf, sizeof(nameBuf));
 
         static int s_hits = 0;
         static int s_misses = 0;
@@ -541,6 +761,11 @@ bool Fs_QueueTickRead(s_FsQueueEntry* entry)
          *   2. "<basename>.png"   e.g. DRU02F.png       (extension replaced —
          *      the intuitive name for replacing DRU02F.TIM with a PNG). */
         int pngOverride = 0;
+        /* Only TIM reads run Fs_QueuePostLoadTim — the sole pop site for the
+         * hi-res stash. Probing for a non-TIM entry both leaks a HiresPending
+         * slot forever and lets a texture pack's stem PNG (CHARA/HERO.png)
+         * suppress the loose byte-replace of a same-stem ILM. */
+        if (entry->postLoad == FsQueuePostLoadType_Tim)
         {
             char pngPath[176];
             FILE* pf;
@@ -555,7 +780,19 @@ bool Fs_QueueTickRead(s_FsQueueEntry* entry)
 
             if (pf == NULL)
             {
+                snprintf(pngPath, sizeof(pngPath), "%s.p00.dds", loosePath);
+                pf = Loose_FOpen(pngPath, "rb");
+            }
+
+            if (pf == NULL)
+            {
                 snprintf(pngPath, sizeof(pngPath), "%s.png", loosePath);
+                pf = Loose_FOpen(pngPath, "rb");
+            }
+
+            if (pf == NULL)
+            {
+                snprintf(pngPath, sizeof(pngPath), "%s.dds", loosePath);
                 pf = Loose_FOpen(pngPath, "rb");
             }
 
@@ -572,6 +809,15 @@ bool Fs_QueueTickRead(s_FsQueueEntry* entry)
                 snprintf(pngPath, sizeof(pngPath), "gamedata/load/%s/%s.png",
                          strippedFolder, baseName);
                 pf = Loose_FOpen(pngPath, "rb");
+
+                /* A stem-form mod may ship ONLY the .dds — without this probe
+                 * it would never be detected/stashed at all. */
+                if (pf == NULL)
+                {
+                    snprintf(pngPath, sizeof(pngPath), "gamedata/load/%s/%s.dds",
+                             strippedFolder, baseName);
+                    pf = Loose_FOpen(pngPath, "rb");
+                }
             }
 
             if (pf != NULL)
@@ -592,6 +838,32 @@ bool Fs_QueueTickRead(s_FsQueueEntry* entry)
         if (lf != NULL)
         {
             size_t bufSize = (size_t)ALIGN(file->blockCount * FS_BLOCK_SIZE, FS_SECTOR_SIZE);
+            /* A registered big-model destination raises the gate to its real
+             * capacity; unregistered destinations keep the table-size gate. */
+            {
+                size_t bigCap = Pc_BigLm_DestCapacity(entry->data);
+                if (bigCap > bufSize)
+                {
+                    bufSize = bigCap;
+                }
+                /* Same lift for oversized ITEM TMDs (pc_big_tmd.c). Returns 0
+                 * for FS_BUFFER_5 and every other unregistered pointer, so the
+                 * stock item path keeps the exact table-size gate. */
+                bigCap = Pc_BigTmd_DestCapacity(entry->data);
+                if (bigCap > bufSize)
+                {
+                    bufSize = bigCap;
+                }
+                /* Same lift for oversized map chunks (pc_big_ipd.c). The slot
+                 * was already grown by Ipd_LoadStart, so this reports the real
+                 * destination size; unregistered pointers return 0 and keep the
+                 * table-size gate. */
+                bigCap = Pc_BigIpd_DestCapacity(entry->data);
+                if (bigCap > bufSize)
+                {
+                    bufSize = bigCap;
+                }
+            }
             /* Probe loose file size. If it overflows the disc-image buffer
              * slot, we cannot byte-replace; treat it as a hi-res TIM and
              * defer to PostLoadTim. */
@@ -616,11 +888,24 @@ bool Fs_QueueTickRead(s_FsQueueEntry* entry)
             if (fileSize > 0 && (size_t)fileSize > bufSize)
             {
                 fclose(lf);
-                HiresPending_Stash(entry, loosePath);
-                s_hires++;
-                if (s_hires <= 64)
+                /* Same postLoadType gate as the probe block above: a stash
+                 * for a non-TIM entry is never popped. An oversized loose
+                 * file for a non-TIM read that pc_big_lm did not accept is
+                 * loudly ignored — the disc file loads instead. */
+                if (entry->postLoad == FsQueuePostLoadType_Tim)
                 {
-                    SH_DBG("[LOOSE/HIRES] %s (%ld bytes) > buf %u; deferring to PostLoadTim for hi-res override",
+                    HiresPending_Stash(entry, loosePath);
+                    s_hires++;
+                    if (s_hires <= 64)
+                    {
+                        SH_DBG("[LOOSE/HIRES] %s (%ld bytes) > buf %u; deferring to PostLoadTim for hi-res override",
+                               loosePath, fileSize, (unsigned)bufSize);
+                    }
+                }
+                else
+                {
+                    s_warns++;
+                    SH_DBG("[LOOSE/WARN] %s (%ld bytes) > buf %u for non-TIM read; ignoring loose file",
                            loosePath, fileSize, (unsigned)bufSize);
                 }
                 /* Fall through to CdRead so the disc TIM populates entry->data
@@ -655,6 +940,16 @@ bool Fs_QueueTickRead(s_FsQueueEntry* entry)
                                loosePath, (unsigned)got, fileSize, errno, strerror(errno));
                     }
                     (void)got;
+                    /* Log-only modded-LM diagnostic (lm_reformat.c). Big-lm
+                     * destinations already passed the stricter skeletal
+                     * validation before Redirect handed them out. */
+                    {
+                        extern void Lm_LooseValidateDiag(const void* raw, u32 fileSize, const char* name);
+                        if (fileSize > 0 && Pc_BigLm_DestCapacity(entry->data) == 0)
+                        {
+                            Lm_LooseValidateDiag(entry->data, (u32)fileSize, loosePath);
+                        }
+                    }
                     g_FsLooseReadComplete = 1;
                     return true;
                 }
@@ -775,6 +1070,89 @@ bool Fs_QueueTickReadPcDrv(s_FsQueueEntry* entry)
     return result;
 }
 
+#ifdef SH_PC_PORT
+/* Per-tick texture-pack compose budget.
+ *
+ * One multi-palette TIM can trigger a canvas compose for EVERY CLUT row it
+ * carries — up to 16 PNG-decode + upscale + GL-upload rounds inside a single
+ * post-load, which is the 200-300ms hitch on room entry and exterior chunk
+ * stream-in. Only this many composes run per queue tick; the rest resume on
+ * later ticks (see the resume cursor in Fs_QueuePostLoadTim).
+ *
+ * A deferred row is never dropped: the post-load reports NOT done, so
+ * Fs_QueueUpdate leaves postLoad.idx parked on the entry with postLoadState
+ * still Exec and re-enters here next tick. Fs_QueueGetLength() therefore still
+ * counts the entry, so every blocking waiter (Fs_QueueWaitForEmpty,
+ * Fs_QueueChunksLoad, the queue-full wait in Fs_QueueEnqueue) keeps ticking
+ * until the last row is composed. The budget is refilled below on every tick,
+ * so each visit makes forward progress and the loop always terminates. */
+/* SCOPE: the VRAM-rect branch below only. The pool-slot branch no longer
+ * composes here at all (pc_port/src/texpack_lazy.c) - its rows compose from
+ * the frame pump when a prim actually samples them. The VRAM branch cannot
+ * take the same treatment: it composes under HiresOverride_SetForceNearestUpload,
+ * set and cleared around this registration, and moving it out of that window
+ * re-opens the gutterless-glyph ghost text on FONT16/FONT24. */
+#define FSQ_TEXPACK_COMPOSE_BUDGET 2
+static int s_texpackComposeBudget = 0;
+
+/* Where the deferred post-load resumes. Keyed on BOTH the entry and the
+ * post-load index it was parked at, and cleared on entry to every
+ * Fs_QueuePostLoadTim call, so a recycled queue slot can never be mistaken for
+ * the deferred one. */
+static const s_FsQueueEntry* s_composeResumeEntry = NULL;
+static s32                   s_composeResumeIdx   = 0;
+static s32                   s_composeResumeRow   = 0;
+
+/* A texture pack that replaces SOME palette rows of a sheet but not others is
+ * indistinguishable in the log from one that replaces all of them: the rows it
+ * covers are announced, the rows it misses are silent, and the missing ones only
+ * show up as one body region of a monster staying at native resolution while the
+ * rest is HD. Naming them costs one line per partially covered upload and turns
+ * "which palette does this body part use, and does the pack ship it" from an
+ * offline hash hunt into a grep. Only PARTIAL coverage is reported — a sheet the
+ * pack does not touch at all is the normal case and would flood the log.
+ *
+ * A row set split across ticks by the compose budget reports in two halves; each
+ * half is honest about the rows it visited. */
+static void TexPack_ReportUncoveredRows(const s_FsQueueEntry* entry, s32 slotId,
+                                        u32 missMask, s32 matched)
+{
+    static s32 s_uncoveredLog = 0;
+    char       timName[16] = { 0 };
+    char       rowList[80];
+    s32        len = 0;
+    s32        r;
+
+    if (missMask == 0 || matched == 0 || s_uncoveredLog >= 64) return;
+    s_uncoveredLog++;
+
+    if (FSQ_INFO_VALID(entry->info))
+    {
+        Fs_GetFileInfoName(timName, entry->info);
+    }
+
+    rowList[0] = '\0';
+    for (r = 0; r < 32; r++)
+    {
+        if (!(missMask & (1u << r))) continue;
+        len += snprintf(&rowList[len], sizeof(rowList) - (size_t)len,
+                        (len == 0) ? "%d" : ",%d", (int)r);
+        if (len >= (s32)sizeof(rowList) - 8) break;
+    }
+
+    if (slotId >= 0)
+    {
+        SH_DBG("[TEXPACK] %.8s (pool slot %d): pack covers %d CLUT row(s), NO replacement for row(s) %s — those rows keep native art",
+               timName, (int)slotId, (int)matched, rowList);
+    }
+    else
+    {
+        SH_DBG("[TEXPACK] %.8s (VRAM): pack covers %d CLUT row(s), NO replacement for row(s) %s — those rows keep native art",
+               timName, (int)matched, rowList);
+    }
+}
+#endif
+
 bool Fs_QueueUpdatePostLoad(s_FsQueueEntry* entry)
 {
     bool result;
@@ -783,6 +1161,10 @@ bool Fs_QueueUpdatePostLoad(s_FsQueueEntry* entry)
 
     result = false;
     state  = g_FsQueue.postLoadState;
+
+#ifdef SH_PC_PORT
+    s_texpackComposeBudget = FSQ_TEXPACK_COMPOSE_BUDGET;
+#endif
 
     switch (state)
     {
@@ -846,26 +1228,20 @@ bool Fs_QueuePostLoadTim(s_FsQueueEntry* entry)
      * persistent GL texture. */
     bool      pcVirtualSlot = entry->extra.image.u != UCHAR_MAX &&
                               entry->extra.image.clutY >= HIRES_POOL_CLUT_ROW_BASE;
+    /* First CLUT row still owed from a previous tick that ran out of compose
+     * budget. Non-zero means VRAM, the loose overrides and the base pool
+     * registration all already happened on that first pass — only the
+     * outstanding pack rows are redone here, and redoing the rest would undo
+     * the rows already composed. */
+    s32       composeResume = (s_composeResumeEntry == entry &&
+                               s_composeResumeIdx == g_FsQueue.postLoad.idx)
+                                  ? s_composeResumeRow : 0;
+
+    s_composeResumeEntry = NULL;
 #endif
 
-#ifdef SH_PC_PORT
-    { extern FILE* g_ShDebugLog; if (g_ShDebugLog) {
-        char _fnm[16] = {0};
-        int _fidx = (entry->info >= &g_FileTable[0] && entry->info < &g_FileTable[FS_FILE_COUNT])
-                        ? (int)(entry->info - &g_FileTable[0]) : -1;
-        if (_fidx >= 0) Fs_GetFileInfoName(_fnm, entry->info);
-        fprintf(g_ShDebugLog, "[BOOT0/TIM] PostLoadTim file=%d '%s' ss=0x%x img.u=%u img.v=%u tPage=%u,%u clutX=%d clutY=%d\n",
-        _fidx, _fnm, _fidx >= 0 ? (unsigned)entry->info->startSector : 0u,
-        (unsigned)entry->extra.image.u, (unsigned)entry->extra.image.v,
-        (unsigned)entry->extra.image.tPage[0], (unsigned)entry->extra.image.tPage[1],
-        (int)entry->extra.image.clutX, (int)entry->extra.image.clutY); fflush(g_ShDebugLog); } }
-#endif
     OpenTIM((u64*)entry->externalData);
     ReadTIM(&tim);
-#ifdef SH_PC_PORT
-    { extern FILE* g_ShDebugLog; if (g_ShDebugLog) { fprintf(g_ShDebugLog, "[BOOT0/TIM] post ReadTIM: prect=%p caddr=%p paddr=%p mode=%u\n",
-        (void*)tim.prect, (void*)tim.caddr, (void*)tim.paddr, (unsigned)tim.mode); fflush(g_ShDebugLog); } }
-#endif
 
     tempRect = *tim.prect;
     if (entry->extra.image.u != UCHAR_MAX)
@@ -878,13 +1254,43 @@ bool Fs_QueuePostLoadTim(s_FsQueueEntry* entry)
         // Same as `tempRect.y = (entry->extra.image.tPage & 0x10) * 16` for normal tPage.
         tempRect.y = entry->extra.image.v + ((entry->extra.image.tPage[1] << 4) & 0x100);
     }
-#ifdef SH_PC_PORT
-    { extern FILE* g_ShDebugLog; if (g_ShDebugLog) { fprintf(g_ShDebugLog, "[BOOT0/TIM] pre pixel LoadImage rect=(%d,%d %dx%d)\n",
-        (int)tempRect.x, (int)tempRect.y, (int)tempRect.w, (int)tempRect.h); fflush(g_ShDebugLog); } }
-#endif
 
 #ifdef SH_PC_PORT
-    if (!pcVirtualSlot)
+    if (FSQ_INFO_VALID(entry->info) &&
+        (int)(entry->info - &g_FileTable[0]) == FILE_1ST_FONT16_TIM)
+    {
+        /* A font pack built for the other region stores the same glyphs in a
+         * different shape, and the destination comes from the descriptor
+         * rather than the file, so it would smear across VRAM. Re-lay it to
+         * the active layout first; a pack already in the right shape, which is
+         * every pack in use today, is left untouched. */
+        void* pix = tim.paddr;
+        int   fw  = tim.prect->w;
+        int   fh  = tim.prect->h;
+
+        if (Font_FitAtlasToLayout(&pix, &fw, &fh))
+        {
+            tim.paddr   = (u_long*)pix;
+            tempRect.w  = (short)fw;
+            tempRect.h  = (short)fh;
+        }
+
+        /* A pack language ships no FONT16 of its own: build its letterforms
+         * into the atlas pixels right before upload. Covers every FONT16
+         * reload site (boot, Konami, title, save-select) since they all pass
+         * through here, and dispatches on which pack is active -- Polish adds
+         * a few cells, Russian replaces the atlas. */
+        if ((Pc_LangPackActive() || Pc_RuActive()) && !Font_HiresGridLive())
+        {
+            /* Not while the pinned grid carries the pack's cells: this strip
+             * is not what the pack draws, and the patchers would only report
+             * that a strip has no room for them. */
+            Font_PatchPackGlyphs(tim.paddr, fw, fh);
+        }
+    }
+
+    /* A resumed post-load already uploaded this TIM to VRAM on its first pass. */
+    if (!pcVirtualSlot && !composeResume)
 #endif
     {
         LoadImage(&tempRect, tim.paddr);
@@ -907,13 +1313,9 @@ bool Fs_QueuePostLoadTim(s_FsQueueEntry* entry)
             tempRect.x = entry->extra.image.clutX;
             tempRect.y = entry->extra.image.clutY;
         }
-#ifdef SH_PC_PORT
-        { extern FILE* g_ShDebugLog; if (g_ShDebugLog) { fprintf(g_ShDebugLog, "[BOOT0/TIM] pre CLUT LoadImage rect=(%d,%d %dx%d)\n",
-            (int)tempRect.x, (int)tempRect.y, (int)tempRect.w, (int)tempRect.h); fflush(g_ShDebugLog); } }
-#endif
 
 #ifdef SH_PC_PORT
-        if (!pcVirtualSlot)
+        if (!pcVirtualSlot && !composeResume)
 #endif
         {
             LoadImage(&tempRect, tim.caddr);
@@ -924,7 +1326,40 @@ bool Fs_QueuePostLoadTim(s_FsQueueEntry* entry)
 #endif
     }
 #ifdef SH_PC_PORT
-    { extern FILE* g_ShDebugLog; if (g_ShDebugLog) { fprintf(g_ShDebugLog, "[BOOT0/TIM] PostLoadTim done\n"); fflush(g_ShDebugLog); } }
+
+    /* Texture dump (dump_textures): hand this upload to the dumper, which crops
+     * it to the pieces the geometry that names this TIM actually draws. Sits
+     * ABOVE the pool/VRAM split on purpose — every texture class goes through
+     * here with the same (pixels, palette, bpp) triple the pack matcher hashes,
+     * so one call site covers chara pool, VRAM-resident and BG chunks and the
+     * dumps are guaranteed to be loadable back. The file name is what ties the
+     * upload to the geometry TexPack_DumpScanLm registered at LM load. A resumed
+     * post-load already dumped this TIM on its first pass. */
+    if (g_PcConfig.dumpTextures && !composeResume && discBitDepth > 0)
+    {
+        char timName[16] = { 0 };
+        int  clutW = (tim.caddr != NULL && tim.crect != NULL) ? (int)tim.crect->w : 0;
+        int  rows  = (haveClut && tim.crect != NULL) ? (int)clutRect.h : 1;
+
+        if (FSQ_INFO_VALID(entry->info))
+        {
+            Fs_GetFileInfoName(timName, entry->info);
+        }
+        TexPack_DumpUpload(timName, (const unsigned char*)tim.paddr,
+                           (int)pixelRect.w, (int)pixelRect.h,
+                           (const unsigned short*)tim.caddr, clutW, rows, discBitDepth);
+    }
+
+    /* Point-sample the font atlas: an HD font pack paints gutterless glyph cells
+     * edge-to-edge, so bilinear sampling bleeds the neighbour glyph's ink across
+     * the cell boundary ("ghost text" beside A/O). Force GL_NEAREST for the font
+     * TIMs only (FONT16 = the 12x16 menu/UI/dialogue font; FONT24 = credits) —
+     * every other override keeps bilinear. Cleared before return. */
+    {
+        int fidx = FSQ_INFO_VALID(entry->info) ? (int)(entry->info - &g_FileTable[0]) : -1;
+        HiresOverride_SetForceNearestUpload(
+            fidx == FILE_1ST_FONT16_TIM || fidx == FILE_TIM_FONT24_TIM);
+    }
 
     /* Virtual pool slot: decode the TIM (or a loose PNG/TIM replacement)
      * into the slot's persistent GL texture. slotId comes from the synthetic
@@ -937,6 +1372,13 @@ bool Fs_QueuePostLoadTim(s_FsQueueEntry* entry)
         s32 slotId = (((s32)entry->extra.image.clutY - HIRES_POOL_CLUT_ROW_BASE)
                       / HIRES_POOL_MAX_ROWS) * 64
                    + ((s32)entry->extra.image.clutX / 16);
+        /* Only PostLoadTim ever sees the disc TIM's real CLUT rect; record it
+         * so the restamp path can relate ABSOLUTE prim cluts to this slot. */
+        if (haveClut)
+        {
+            extern void HiresOverride_PoolSlotSetNativeClut(int, int, int);
+            HiresOverride_PoolSlotSetNativeClut(slotId, (int)clutRect.x, (int)clutRect.y);
+        }
         int nativeW = (discBitDepth == 4)  ? (int)pixelRect.w * 4 :
                       (discBitDepth == 8)  ? (int)pixelRect.w * 2 :
                       (discBitDepth == 24) ? ((int)pixelRect.w * 2) / 3 :
@@ -944,6 +1386,8 @@ bool Fs_QueuePostLoadTim(s_FsQueueEntry* entry)
         int nativeH = (int)pixelRect.h;
         const char* loosePath = HiresPending_PopPath(entry);
         int registered = 0;
+        /* Ownership is enforced inside HiresPending_PopPath now (file-keyed +
+         * name-checked), so every pop site is covered, not just this one. */
         int perRow = Loose_HasPerRow(loosePath);
 
         if (discBitDepth <= 0 || !FSQ_INFO_VALID(entry->info))
@@ -984,10 +1428,16 @@ bool Fs_QueuePostLoadTim(s_FsQueueEntry* entry)
              * loose replacement above fully covers the slot instead. */
             if (!registered)
             {
-                unsigned int discSize = (unsigned int)ALIGN(
-                    entry->info->blockCount * FS_BLOCK_SIZE, FS_SECTOR_SIZE);
-                HiresOverride_PoolSlotRegister(slotId, (const unsigned char*)entry->externalData,
-                                               discSize, nativeW, nativeH);
+                /* Skipped when resuming: this rewrites EVERY row of the slot with
+                 * the disc art, which would wipe the pack rows the earlier tick
+                 * already composed. */
+                if (!composeResume)
+                {
+                    unsigned int discSize = (unsigned int)ALIGN(
+                        entry->info->blockCount * FS_BLOCK_SIZE, FS_SECTOR_SIZE);
+                    HiresOverride_PoolSlotRegister(slotId, (const unsigned char*)entry->externalData,
+                                                   discSize, nativeW, nativeH);
+                }
 
                 /* Per-CLUT-row loose overlay: replace only the palette rows the
                  * modder supplied ("{base}.pNN.png"); untouched rows keep the
@@ -1006,8 +1456,17 @@ bool Fs_QueuePostLoadTim(s_FsQueueEntry* entry)
                     {
                         char  pr[176];
                         FILE* chk;
-                        snprintf(pr, sizeof(pr), "%s.p%02d.png", loosePath, r);
+                        /* BC7 .dds row first (a full compressed image for palette
+                         * r, 4x cheaper than RGBA): when both ship, .dds wins. */
+                        int   ddsRow = 1;
+                        snprintf(pr, sizeof(pr), "%s.p%02d.dds", loosePath, r);
                         chk = Loose_FOpen(pr, "rb");
+                        if (chk == NULL)
+                        {
+                            snprintf(pr, sizeof(pr), "%s.p%02d.png", loosePath, r);
+                            chk = Loose_FOpen(pr, "rb");
+                            ddsRow = 0;
+                        }
                         if (chk == NULL) continue; /* row not supplied — keep disc art */
                         fclose(chk);
                         {
@@ -1015,9 +1474,12 @@ bool Fs_QueuePostLoadTim(s_FsQueueEntry* entry)
                             unsigned char* pbuf = PcFile_Slurp(pr, &psz);
                             if (pbuf != NULL)
                             {
-                                if (HiresOverride_PoolSlotLoosePngRow(
-                                        slotId, r, pbuf, (unsigned int)psz, nativeW, nativeH) == 0)
-                                    looseRowsApplied++;
+                                int ok = ddsRow
+                                    ? (HiresOverride_PoolSlotRegisterDdsKeyed(
+                                           slotId, r, pbuf, (size_t)psz, nativeW, nativeH, 0) == 0)
+                                    : (HiresOverride_PoolSlotLoosePngRow(
+                                           slotId, r, pbuf, (unsigned int)psz, nativeW, nativeH) == 0);
+                                if (ok) looseRowsApplied++;
                                 free(pbuf);
                             }
                         }
@@ -1027,51 +1489,48 @@ bool Fs_QueuePostLoadTim(s_FsQueueEntry* entry)
                                slotId, looseRowsApplied, loosePath);
                 }
 
-                /* DuckStation texture pack: per-row palette match, composed rows
-                 * overwrite that row's texture. An explicit loose per-row override
-                 * wins over a pack for this slot (as on the VRAM path). */
+                /* DuckStation texture pack: DEMAND-DRIVEN (pc_port/src/texpack_lazy.c).
+                 * An explicit loose per-row override still wins for this slot.
+                 *
+                 * Composing every CLUT row here was the load hitch. The per-tick
+                 * compose budget above is bypassed roughly 1000x: it is refilled at
+                 * the top of EVERY Fs_QueueUpdatePostLoad, and Gfx_InGameDraw runs
+                 * 2 passes x up to 500 Fs_QueueUpdate() calls synchronously inside
+                 * one frame, so a cell crossing ran hundreds of ~7.6ms composes in a
+                 * single frame (worst measured ~1.36s). On top of that a measured
+                 * mean 9.23 rows/slot were composed when only 2-3 are ever drawn.
+                 *
+                 * So retain the compose inputs and let the rows a prim actually
+                 * SAMPLES compose from the frame pump. Until a row composes it draws
+                 * the disc art HiresOverride_PoolSlotRegister uploaded above at
+                 * native resolution - right art, right palette, no hole - so the only
+                 * visible cost is HD pop-in. PRECONDITION: that base registration
+                 * succeeded. Its return value is ignored above, and on failure
+                 * glTexture[row] stays 0 and the prim gets no override at all (raw
+                 * VRAM art), exactly as before packs existed.
+                 *
+                 * tim.paddr and tim.caddr point INTO entry->externalData, which the
+                 * queue hands to the next file it reads, so the retain COPIES both
+                 * blocks rather than holding pointers. */
                 if (!looseRowsApplied && TexPack_HasEntries())
                 {
-                    int clutW = (tim.caddr != NULL && tim.crect != NULL) ? (int)tim.crect->w : 0;
-                    int rows  = (haveClut && tim.crect != NULL) ? (int)clutRect.h : 1;
-                    int r;
+                    int  clutW = (tim.caddr != NULL && tim.crect != NULL) ? (int)tim.crect->w : 0;
+                    int  rows  = (haveClut && tim.crect != NULL) ? (int)clutRect.h : 1;
+                    char timName[16] = { 0 };
 
                     if (rows < 1) rows = 1;
                     if (rows > HIRES_POOL_MAX_ROWS) rows = HIRES_POOL_MAX_ROWS;
 
-                    for (r = 0; r < rows; r++)
+                    if (FSQ_INFO_VALID(entry->info))
                     {
-                        int cw = 0, ch = 0;
-                        const unsigned short* clutRow;
-                        const unsigned char* canvas;
-
-                        if (HiresOverride_PackBudgetExceeded())
-                        {
-                            static int s_budgetLog = 0;
-                            if (!s_budgetLog)
-                            {
-                                s_budgetLog = 1;
-                                SH_DBG("[TEXPACK] GL byte budget reached — further pool rows keep native art");
-                            }
-                            break;
-                        }
-
-                        clutRow = (tim.caddr != NULL)
-                            ? (const unsigned short*)tim.caddr + (size_t)r * (size_t)clutW
-                            : NULL;
-                        canvas = TexPack_Compose(
-                            (const unsigned char*)tim.paddr, (int)pixelRect.w, (int)pixelRect.h,
-                            clutRow, clutW, discBitDepth, &cw, &ch);
-                        if (canvas != NULL)
-                        {
-                            /* canvas is owned by the compose cache — no free. Key
-                             * the upload on the compose content hash so an
-                             * unchanged re-upload skips the glTexImage2D churn. */
-                            HiresOverride_PoolSlotRegisterRGBAKeyed(
-                                slotId, r, canvas, cw, ch, nativeW, nativeH,
-                                TexPack_LastComposeHash());
-                        }
+                        Fs_GetFileInfoName(timName, entry->info);
                     }
+
+                    TexPackLazy_RegisterSlotSource(
+                        slotId, timName,
+                        (const unsigned char*)tim.paddr, (int)pixelRect.w, (int)pixelRect.h,
+                        (const unsigned short*)tim.caddr, clutW, rows,
+                        discBitDepth, nativeW, nativeH);
                 }
             }
         }
@@ -1086,18 +1545,23 @@ bool Fs_QueuePostLoadTim(s_FsQueueEntry* entry)
         int         looseHires = 0;
 
         /* This upload just rewrote VRAM: any rect-keyed override covering
-         * those cells now shows the wrong image. */
+         * those cells now shows the wrong image. A resumed post-load wrote no
+         * VRAM this tick, and invalidating again would drop the pack rows the
+         * earlier tick already registered over this very rect. */
+        if (!composeResume)
         {
-            extern void Pc_PoolStompProbe(int x, int y, int w, int h);
-            Pc_PoolStompProbe((int)pixelRect.x, (int)pixelRect.y,
-                              (int)pixelRect.w, (int)pixelRect.h);
-        }
-        HiresOverride_InvalidateVramRect((int)pixelRect.x, (int)pixelRect.y,
-                                         (int)pixelRect.w, (int)pixelRect.h);
-        if (haveClut)
-        {
-            HiresOverride_InvalidateVramRect((int)clutRect.x, (int)clutRect.y,
-                                             (int)clutRect.w, (int)clutRect.h);
+            {
+                extern void Pc_PoolStompProbe(int x, int y, int w, int h);
+                Pc_PoolStompProbe((int)pixelRect.x, (int)pixelRect.y,
+                                  (int)pixelRect.w, (int)pixelRect.h);
+            }
+            HiresOverride_InvalidateVramRect((int)pixelRect.x, (int)pixelRect.y,
+                                             (int)pixelRect.w, (int)pixelRect.h);
+            if (haveClut)
+            {
+                HiresOverride_InvalidateVramRect((int)clutRect.x, (int)clutRect.y,
+                                                 (int)clutRect.w, (int)clutRect.h);
+            }
         }
 
         if (base && base[0])
@@ -1123,8 +1587,16 @@ bool Fs_QueuePostLoadTim(s_FsQueueEntry* entry)
                 {
                     char  pr[176];
                     FILE* chk;
-                    snprintf(pr, sizeof(pr), "%s.p%02d.png", base, r);
+                    /* .dds row first: when both ship, .dds wins. */
+                    int   ddsRow = 1;
+                    snprintf(pr, sizeof(pr), "%s.p%02d.dds", base, r);
                     chk = Loose_FOpen(pr, "rb");
+                    if (chk == NULL)
+                    {
+                        snprintf(pr, sizeof(pr), "%s.p%02d.png", base, r);
+                        chk = Loose_FOpen(pr, "rb");
+                        ddsRow = 0;
+                    }
                     if (chk == NULL) continue;
                     fclose(chk);
                     {
@@ -1133,14 +1605,20 @@ bool Fs_QueuePostLoadTim(s_FsQueueEntry* entry)
                         if (buf != NULL)
                         {
                             char label[24];
+                            int  clutY = haveClut ? ((int)clutRect.y + r) : -1;
+                            int  clutX = haveClut ? (int)clutRect.x : -1;
                             snprintf(label, sizeof(label), "loose row %d", r);
-                            if (HiresOverride_RegisterLoosePngRow(
-                                    label, buf, (unsigned int)sz,
-                                    (int)pixelRect.x, (int)pixelRect.y,
-                                    (int)pixelRect.w, (int)pixelRect.h,
-                                    haveClut ? (int)clutRect.x : -1,
-                                    haveClut ? ((int)clutRect.y + r) : -1,
-                                    discBitDepth) == 0)
+                            if ((ddsRow
+                                     ? HiresOverride_RegisterDdsKeyed(
+                                           label, buf, (size_t)sz,
+                                           (int)pixelRect.x, (int)pixelRect.y,
+                                           (int)pixelRect.w, (int)pixelRect.h,
+                                           clutX, clutY, discBitDepth, 0)
+                                     : HiresOverride_RegisterLoosePngRow(
+                                           label, buf, (unsigned int)sz,
+                                           (int)pixelRect.x, (int)pixelRect.y,
+                                           (int)pixelRect.w, (int)pixelRect.h,
+                                           clutX, clutY, discBitDepth)) == 0)
                                 applied++;
                             free(buf);
                         }
@@ -1175,14 +1653,129 @@ bool Fs_QueuePostLoadTim(s_FsQueueEntry* entry)
                             (int)pixelRect.x, (int)pixelRect.y,
                             (int)pixelRect.w, (int)pixelRect.h,
                             cx, cy, discBitDepth);
-                        looseHires = HiresOverride_RegisterLoosePngAllRows(
-                            whole, buf, (unsigned int)sz,
-                            (int)pixelRect.x, (int)pixelRect.y,
-                            (int)pixelRect.w, (int)pixelRect.h,
-                            cx, cy, rows, discBitDepth) == 0;
+                        /* A hi-res font pack is built for one region's atlas
+                         * shape, and this maps it onto the rect the descriptor
+                         * names, so the other region's pack came out garbled.
+                         * Re-lay its cells first; its pixel size says which
+                         * shape it is, because only one atlas divides it
+                         * evenly. A pack already matching is untouched. */
+                        int relaid   = 0;
+                        int declined = 0; /* a pack this language must not use */
+
+                        if (FSQ_INFO_VALID(entry->info) &&
+                            (int)(entry->info - &g_FileTable[0]) == FILE_1ST_FONT16_TIM)
+                        {
+                            unsigned char* rgba = NULL;
+                            int            rw = 0, rh = 0;
+
+                            if (HiresOverride_DecodeToRGBA(buf, (unsigned int)sz,
+                                                           &rgba, &rw, &rh) == 0)
+                            {
+                                /* A US-cut pack is for US English on a USA disc
+                                 * only; the PAL pack has all 126 cells and
+                                 * travels. And no Latin pack at all can stand in
+                                 * for Russian, which replaces every cell with
+                                 * Cyrillic: covering them drew Latin letterforms
+                                 * at Cyrillic byte values. The upload above has
+                                 * already dropped the previous override for this
+                                 * rect, so declining here leaves the native
+                                 * atlas showing, which is the right font. Only
+                                 * where Cyrillic is IN this rect, though: on a
+                                 * disc whose grid is the pinned override, the
+                                 * strip under this entry is never drawn by
+                                 * Russian, and the entry has to be ready for the
+                                 * next language that does draw the strip. */
+                                const char* why =
+                                    !Font_HiresPackUsable(Font_HiresPackShape(rw, rh))
+                                        ? "it is cut for the US atlas"
+                                  : Font_RussianLayoutActive() && !Font_HiresGridLive()
+                                        ? "Cyrillic is in force and the pack is Latin art"
+                                        : NULL;
+
+                                if (why != NULL)
+                                {
+                                    SH_LOG("[FONT] hi-res font pack declined: %s; "
+                                           "this language uses the disc font", why);
+                                    free(rgba);
+                                    rgba     = NULL;
+                                    declined = 1;
+                                }
+                            }
+                            if (rgba != NULL)
+                            {
+                                unsigned char* fit = NULL;
+                                unsigned char* use = rgba;
+                                int            fw = rw, fh = rh;
+                                int            units = (int)pixelRect.w;
+                                int            uh    = (int)pixelRect.h;
+                                int            built = 0;
+
+                                if (Font_FitHiresAtlasToLayout(rgba, rw, rh,
+                                                               &fit, &fw, &fh,
+                                                               &units, &uh))
+                                {
+                                    use = fit;
+                                }
+
+                                /* A pack language's built letters -- the
+                                 * Portuguese tildes, the Polish forms -- exist
+                                 * only in the 4bpp patch, which a hi-res pack
+                                 * never goes through. Same cell work, on the
+                                 * image. */
+                                built = Font_PatchPackGlyphsHires(
+                                    use, fw, fh, Font_HiresAtlasScale(fw, fh));
+
+                                if (use != rgba || built)
+                                {
+                                    looseHires = HiresOverride_RegisterRGBAKeyed(
+                                        whole, use, fw, fh,
+                                        (int)pixelRect.x, (int)pixelRect.y,
+                                        units, uh, cx, cy, discBitDepth, 0) == 0;
+                                    relaid = 1;
+                                }
+                                free(fit);
+                                free(rgba);
+                            }
+                        }
+
+                        if (!relaid && !declined)
+                        {
+                            looseHires = HiresOverride_RegisterLoosePngAllRows(
+                                whole, buf, (unsigned int)sz,
+                                (int)pixelRect.x, (int)pixelRect.y,
+                                (int)pixelRect.w, (int)pixelRect.h,
+                                cx, cy, rows, discBitDepth) == 0;
+                        }
                         free(buf);
                     }
                 }
+            }
+        }
+
+        /* The Cyrillic HD font has its own file, and the Latin pack above was
+         * declined (or absent): register it over the atlas the Russian cells
+         * were just built into. Where the grid is the pinned override instead
+         * (off PAL), Font_HiresGridSync carries it. */
+        if (!looseHires && discBitDepth > 0 &&
+            FSQ_INFO_VALID(entry->info) &&
+            (int)(entry->info - &g_FileTable[0]) == FILE_1ST_FONT16_TIM &&
+            Font_RussianLayoutActive() && !Font_HiresGridLive())
+        {
+            int                  rw = 0, rh = 0;
+            const unsigned char* ru = Font_RuHiresImage(&rw, &rh);
+
+            if (ru != NULL)
+            {
+                /* Gutterless glyph cells bleed under bilinear sampling, as in
+                 * Font_HiresGridSync. */
+                HiresOverride_SetForceNearestUpload(1);
+                looseHires = HiresOverride_RegisterRGBAKeyed(
+                    "FONT16_RU", ru, rw, rh,
+                    (int)pixelRect.x, (int)pixelRect.y,
+                    (int)pixelRect.w, (int)pixelRect.h,
+                    haveClut ? (int)clutRect.x : -1, haveClut ? (int)clutRect.y : -1,
+                    discBitDepth, 0) == 0;
+                HiresOverride_SetForceNearestUpload(0);
             }
         }
 
@@ -1200,11 +1793,13 @@ bool Fs_QueuePostLoadTim(s_FsQueueEntry* entry)
             int clutW = (haveClut && tim.crect != NULL) ? (int)tim.crect->w : 0;
             int rows  = haveClut ? (int)clutRect.h : 1;
             int r;
+            u32 missMask = 0;
+            s32 matched  = 0;
 
             if (rows < 1) rows = 1;
             if (rows > 16) rows = 16;
 
-            for (r = 0; r < rows; r++)
+            for (r = composeResume; r < rows; r++)
             {
                 int cw = 0, ch = 0;
                 const unsigned short* clutRow;
@@ -1221,12 +1816,25 @@ bool Fs_QueuePostLoadTim(s_FsQueueEntry* entry)
                     break;
                 }
 
+                /* Out of compose budget for this tick — park the cursor on row r
+                 * and report the post-load unfinished so the queue comes back to
+                 * it. Deferred, never dropped. */
+                if (s_texpackComposeBudget <= 0)
+                {
+                    s_composeResumeEntry = entry;
+                    s_composeResumeIdx   = g_FsQueue.postLoad.idx;
+                    s_composeResumeRow   = r;
+                    HiresOverride_SetForceNearestUpload(0);
+                    return false;
+                }
+
                 clutRow = (tim.caddr != NULL)
                     ? (const unsigned short*)tim.caddr + (size_t)r * (size_t)clutW
                     : NULL;
                 canvas = TexPack_Compose(
                     (const unsigned char*)tim.paddr, (int)pixelRect.w, (int)pixelRect.h,
                     clutRow, clutW, discBitDepth, &cw, &ch);
+                if (TexPack_LastComposeWasBuilt()) s_texpackComposeBudget--;
                 if (canvas != NULL)
                 {
                     char packLabel[24];
@@ -1240,10 +1848,33 @@ bool Fs_QueuePostLoadTim(s_FsQueueEntry* entry)
                                                haveClut ? (int)clutRect.x : -1,
                                                haveClut ? ((int)clutRect.y + r) : -1,
                                                discBitDepth, TexPack_LastComposeHash());
+                    matched++;
+                }
+                else if (TexPack_LastComposeIsDds())
+                {
+                    char                 packLabel[24];
+                    size_t               ddsSize = 0;
+                    const unsigned char* dds     = TexPack_LastComposeDds(&ddsSize);
+                    snprintf(packLabel, sizeof(packLabel), "texpack row %d", r);
+                    HiresOverride_RegisterDdsKeyed(packLabel, dds, ddsSize,
+                                               (int)pixelRect.x, (int)pixelRect.y,
+                                               (int)pixelRect.w, (int)pixelRect.h,
+                                               haveClut ? (int)clutRect.x : -1,
+                                               haveClut ? ((int)clutRect.y + r) : -1,
+                                               discBitDepth, TexPack_LastComposeHash());
+                    matched++;
+                }
+                else if (r < 32)
+                {
+                    missMask |= 1u << r;
                 }
             }
+
+            TexPack_ReportUncoveredRows(entry, -1, missMask, matched);
         }
     }
+
+    HiresOverride_SetForceNearestUpload(0);
 #endif
 
     return true;

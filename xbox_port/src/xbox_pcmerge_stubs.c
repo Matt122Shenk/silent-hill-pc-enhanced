@@ -146,11 +146,11 @@ void        Pc_SpawnList_Spawn(int i)             { (void)i; }
 void        Pc_Console_Print(const char* line)    { (void)line; }
 const char* Pc_Console_CharaName(int charaId)     { (void)charaId; return ""; }
 
-/* pc_combat.c is excluded (its reload/heal-flash/low-health glow draw through
- * the GL overlay); the manual-reload request it owns is never raised here. */
+/* pc_combat.c is excluded for its SDL binds; the manual-reload request it owns
+ * is never raised here, and the heal flash only follows a Quick Heal (also a
+ * bind). The low-health glow is plain prims: xbox_combat_fx.c. */
 int   g_PcReloadRequest = 0;
 void  Pc_HealFlashUpdate(void)                    { }
-void  Pc_LowHealthGlowUpdate(void)                { }
 
 /* Texture packs (tex_pack.c / texpack_lazy.c) are PC-only. */
 void  TexPackLazy_Pump(void)                      { }

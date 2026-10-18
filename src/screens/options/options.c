@@ -376,6 +376,26 @@ static const s_PcOpt PCOPT_X3[] = {
     { "Asset_Overrides", &g_PcConfig.allowLooseFiles,   "allow_loose_files",   VAL_ONOFF,   2, LBL_ONOFF,   NULL,            1, PCK_INT      },
     { "Hi_Res_Textures", &g_PcConfig.hiResTextures,     "hires_textures",      VAL_ONOFF,   2, LBL_ONOFF,   NULL,            1, PCK_INT      },
     { "Prev_Page",       NULL,                          NULL,                  NULL,        0, NULL,        NULL,            0, PCK_PREV     },
+    { "Next_Page",       NULL,                          NULL,                  NULL,        0, NULL,        NULL,            0, PCK_NEXT     },
+    { "Back",            NULL,                          NULL,                  NULL,        0, NULL,        NULL,            0, PCK_BACK     },
+};
+
+/* Page 4: the PC port's newer presentation and pacing settings, every one of
+ * which drives shared code that runs unchanged here. Dialog_Pause is the PC's
+ * four presets of cutscene_line_gap_ms, now the per-line PSX CD-seek model
+ * (xa_seek_model.c) scaled 0.5x / 1x / 2x. Dark_Harry is the PC's AFK easter
+ * egg (on by default there); it is listed so it can be switched off. */
+static const int         VAL_LINEGAP_X[] = { 0, 150, 300, 600 };
+static const char* const LBL_LINEGAP_X[] = { "Off", "Short", "Normal", "Long" };
+static const s_PcOpt PCOPT_X4[] = {
+    { "Text_Size",       NULL, "text_size",       NULL, 0, NULL, NULL, 1, PCK_SLIDER, &g_PcConfig.textSize,      NULL, 100.0f, 150.0f, 5.0f },
+    { "Crosshair_Size",  NULL, "crosshair_size",  NULL, 0, NULL, NULL, 1, PCK_SLIDER, &g_PcConfig.crosshairSize, NULL, 25.0f, 125.0f, 5.0f },
+    { "Dialog_Pause",    &g_PcConfig.cutsceneLineGapMs, "cutscene_line_gap_ms", VAL_LINEGAP_X, 4, LBL_LINEGAP_X, NULL, 1, PCK_INT },
+    { "Weather_Rate",    &g_PcConfig.weatherSimHz,      "weather_sim_hz",      VAL_WHZ,     2, LBL_WHZ,     NULL,            1, PCK_INT      },
+    { "Attract_Demos",   &g_PcConfig.attractDemos,      "attract_demos",       VAL_ONOFF,   2, LBL_ONOFF,   NULL,            1, PCK_INT      },
+    { "Low_HP_Glow",     &g_PcConfig.lowHealthGlow,     "low_health_glow",     VAL_ONOFF,   2, LBL_ONOFF,   NULL,            1, PCK_INT      },
+    { "Dark_Harry",      &g_PcConfig.darkHarry,         "dark_harry",          VAL_ONOFF,   2, LBL_ONOFF,   NULL,            1, PCK_INT      },
+    { "Prev_Page",       NULL,                          NULL,                  NULL,        0, NULL,        NULL,            0, PCK_PREV     },
     { "Back",            NULL,                          NULL,                  NULL,        0, NULL,        NULL,            0, PCK_BACK     },
 };
 #endif
@@ -421,9 +441,13 @@ const s_PcOpt* PcOpt_PageByIndex(int page, int* count)
 static const s_PcOpt* PcOpt_Page(int* count)
 {
 #ifdef SH_XBOX_PORT
-    /* Three pages. PCOPT_X ends in NEXT, PCOPT_X2 has PREV+NEXT, PCOPT_X3 ends
-     * in PREV, so the page index only ever reaches 0, 1 or 2. */
-    if (g_PcOptionsMenu_Page >= 2) {
+    /* Four pages. PCOPT_X ends in NEXT, X2 and X3 have PREV+NEXT, PCOPT_X4 ends
+     * in PREV, so the page index only ever reaches 0..3. */
+    if (g_PcOptionsMenu_Page >= 3) {
+        *count = (int)(sizeof(PCOPT_X4) / sizeof(PCOPT_X4[0]));
+        return PCOPT_X4;
+    }
+    if (g_PcOptionsMenu_Page == 2) {
         *count = (int)(sizeof(PCOPT_X3) / sizeof(PCOPT_X3[0]));
         return PCOPT_X3;
     }

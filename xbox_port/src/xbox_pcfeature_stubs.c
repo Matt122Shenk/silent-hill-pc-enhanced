@@ -848,14 +848,11 @@ unsigned long long TexPack_LastComposeHash(void)
  * and working (see MEMORY: DirectSound verified 2026-06-23). */
 float g_PcXaVolume  = 1.0f;
 float g_PcFmvVolume = 1.0f;
+int   g_PcFmvPsxVolume = 1;   /* fmv_player.cpp default: PSX 80/128 movie level */
 
-/* XaPlayer_SetMasterVolume: real semantics kept (clamp + store), matching
- * xa_player.c, so the in-game Options volume slider (routed through
- * pc_config.c's PcConfig_ApplyXaVolume, compiled on Xbox) has somewhere
- * correct to write; xa_xbox.c's mixer doesn't read g_PcXaVolume back yet
- * (it has its own per-source volQ7L/R path from XaPlayer_SetVolume), so
- * wiring g_PcXaVolume into Xa_XboxMixInto's gain stage is a real, tracked
- * follow-up, not something masked by this stub. */
+/* XaPlayer_SetMasterVolume: clamp + store, matching xa_player.c. The Options
+ * "Voice" slider writes it through PcConfig_ApplyXaVolume; xa_xbox.c's mixer
+ * applies it on top of the per-line XaPlayer_SetVolume gain. */
 void XaPlayer_SetMasterVolume(float v)
 {
     if (v < 0.0f) v = 0.0f;

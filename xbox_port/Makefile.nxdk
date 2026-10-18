@@ -261,6 +261,7 @@ XBOX_SRCS = \
 	$(XBOX_PORT)/src/pdclib_print_fp.c \
 	$(XBOX_PORT)/src/fs_path_xbox.c \
 	$(XBOX_PORT)/src/xbox_pcmerge_stubs.c \
+	$(XBOX_PORT)/src/xbox_combat_fx.c \
 	$(XBOX_PORT)/src/psycross_cxx_stubs.cpp \
 	$(XBOX_PORT)/src/crash_xbox.c \
 	$(XBOX_PORT)/src/sh_log_xbox.c \

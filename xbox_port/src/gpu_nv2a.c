@@ -872,6 +872,44 @@ void GpuNv2a_BindWhite(void)
     GpuNv2a_BindTexture(s_whiteTex, WHITE_TEX_DIM, WHITE_TEX_DIM);
 }
 
+/* Output brightness below 1.0 (g_cfg_brightness, the PC renderer's final
+ * multiply): one black quad over the content rect at alpha 1-b. The only
+ * writer on Xbox is the Dark Harry easter egg, whose "light going out" fade
+ * drives it; above 1.0 there is nothing to do (the game's own Brightness
+ * screen covers the usual adjustment). Called after the OT walk and before the
+ * present, so it darkens exactly the finished game picture. */
+void GpuNv2a_BrightnessDim(float brightness)
+{
+    ShVertex v[6];
+    float    a, x0, x1, y1;
+    int      i;
+
+    if (!(brightness < 0.999f))
+        return;
+    a = 1.0f - (brightness < 0.0f ? 0.0f : brightness);
+
+    x0 = (float)g_Nv2aContentX;
+    x1 = x0 + (float)g_Nv2aContentW;
+    y1 = (float)g_Nv2aContentH;
+
+    memset(v, 0, sizeof(v));
+    for (i = 0; i < 6; i++) {
+        v[i].col[3] = a;
+        v[i].pos[3] = 1.0f;
+    }
+    v[0].pos[0] = x0; v[0].pos[1] = 0.0f;
+    v[1].pos[0] = x1; v[1].pos[1] = 0.0f;
+    v[2].pos[0] = x0; v[2].pos[1] = y1;
+    v[3] = v[1];
+    v[4].pos[0] = x1; v[4].pos[1] = y1;
+    v[5] = v[2];
+
+    GpuNv2a_SetBlendMode(1);   /* src-alpha / one-minus-src-alpha */
+    GpuNv2a_SetScissor(0, 0, 0, 0);
+    GpuNv2a_BindWhite();
+    GpuNv2a_EmitTris(v, 6);
+}
+
 /* GPU-DMA-able contiguous, write-combined memory for decoded textures. */
 void* GpuNv2a_AllocTexMem(int bytes)
 {

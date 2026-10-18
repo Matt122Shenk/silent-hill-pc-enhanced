@@ -131,6 +131,15 @@ void XboxConfig_ApplyOverrides(void)
     g_PcConfig.audioOutput = 0;
     g_PcConfig.adsr        = 1;
 
+    /* Voice + movie master volumes, as main_pc.c applies them at boot. */
+    {
+        extern float g_PcXaVolume, g_PcFmvVolume;
+        extern int   g_PcFmvPsxVolume;
+        g_PcXaVolume     = g_PcConfig.xaVolume;
+        g_PcFmvVolume    = g_PcConfig.fmvVolume;
+        g_PcFmvPsxVolume = g_PcConfig.fmvPsxVolume;
+    }
+
     strncpy(g_PcConfig.mapName, "map0_s00", sizeof(g_PcConfig.mapName) - 1);
     g_PcConfig.mapName[sizeof(g_PcConfig.mapName) - 1] = '\0';
 }

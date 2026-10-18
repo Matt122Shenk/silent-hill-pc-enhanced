@@ -98,10 +98,22 @@ typedef struct {
 
     int            reverb;      /* SpuSetReverbVoice send enable (PSX reverb bus) */
     int            isWide;      /* libsd "wide" latch: volL>0 && volR<0 -> route to rears */
+
+    /* Loose sound replacement (pc_sfx_override.c via g_PsyX_SfxOverride),
+     * keyed on the SPU address this voice keys on. ovrScale turns the game's
+     * pitch into the replacement's own rate: 1.0 for the original ADPCM or a
+     * replacement of unknown rate (a whole-bank VAB mod, which only the
+     * game's pitch can pace). */
+    double         ovrScale;
 } Voice;
 
 static Voice s_v[SPU_VOICES];
 static short s_voicePcm[SPU_VOICES][VOICE_PCM_CAP];  /* ~3 MB BSS, CPU-only */
+
+/* Set by the shared VAB loader (pc_sfx_override.c arms it on every bank load);
+ * same signature as PsyX_public.h's PsyX_SfxOverrideFn. */
+typedef int (*Xbox_SfxOverrideFn)(int spuAddr, const short** outPcm, int* outSampleCount, int* outRate);
+extern Xbox_SfxOverrideFn g_PsyX_SfxOverride;
 
 /* --- PSX VAG ADPCM decode (ported from PsyCross PsyX_SPUAL.cpp) ------------ */
 
@@ -620,6 +632,7 @@ void SpuInit(void)
         s_v[i].pcm       = s_voicePcm[i];
         s_v[i].loopStart = -1;
         s_v[i].loopEnd   = -1;
+        s_v[i].ovrScale  = 1.0;
         s_v[i].volL      = 0x3FFF;
         s_v[i].volR      = 0x3FFF;
         s_v[i].pitch     = 4096;
@@ -699,7 +712,7 @@ void SpuSetVoiceAttr(SpuVoiceAttr* a)
         }
         if (a->mask & SPU_VOICE_PITCH) {
             v->pitch = a->pitch;
-            v->step  = ((double)SRC_HZ / (double)OUT_HZ) * ((double)a->pitch / 4096.0);
+            v->step  = ((double)SRC_HZ / (double)OUT_HZ) * ((double)a->pitch / 4096.0) * v->ovrScale;
         }
         /* Capture the ADSR registers the sequencer programs (key_on mask 0x6019F,
          * adsr_set, rr_off). A voice with a programmed envelope runs the ADSR. */
@@ -740,8 +753,33 @@ void SpuSetKey(int on_off, unsigned int voice_bit)
         v = &s_v[i];
 
         if (on_off == SPU_ON) {
-            int ls, le;
-            v->pcmLen = decodeVag(v->addr, v->pcm, VOICE_PCM_CAP, &ls, &le);
+            int          ls, le;
+            const short* modPcm   = NULL;
+            int          modCount = 0, modRate = 0;
+            double       oldScale = v->ovrScale;
+
+            v->pcm      = s_voicePcm[i];
+            v->ovrScale = 1.0;
+            if (g_PsyX_SfxOverride != NULL &&
+                g_PsyX_SfxOverride((int)v->addr, &modPcm, &modCount, &modRate) &&
+                modPcm != NULL && modCount > 0) {
+                /* A replacement that fits is copied, so the voice never reads
+                 * registry memory a bank reload frees; a longer one plays in
+                 * place, the same trade PsyCross's software SPU makes. */
+                if (modCount <= VOICE_PCM_CAP) {
+                    memcpy(v->pcm, modPcm, (size_t)modCount * sizeof(short));
+                } else {
+                    v->pcm = (short*)modPcm;
+                }
+                v->pcmLen = modCount;
+                ls = le = -1;
+                if (modRate > 0 && v->pitch > 0)
+                    v->ovrScale = ((double)modRate * 4096.0) / ((double)SRC_HZ * (double)v->pitch);
+            } else {
+                v->pcmLen = decodeVag(v->addr, v->pcm, VOICE_PCM_CAP, &ls, &le);
+            }
+            if (v->ovrScale != oldScale && oldScale > 0.0)
+                v->step = v->step / oldScale * v->ovrScale;
             v->loopStart = ls;
             v->loopEnd   = le;
             v->looping   = (le > 0 && ls >= 0 && le <= v->pcmLen);

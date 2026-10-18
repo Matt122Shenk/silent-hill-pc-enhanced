@@ -278,6 +278,13 @@ int main(void)
      * volume descriptor) and returns garbage. */
     Fs_InitFileTableForRegion(0 /* Region_USA */);
 
+    /* Language: resolve the saved language_code and install a gamedata/lang
+     * pack if one is selected (main_pc.c runs this at the same point). Before
+     * this, a language chosen in Options only applied after a switch on the
+     * title screen and was lost on the next boot. Disc re-reads inside it see
+     * PcPort_GetGameDiscPath() == NULL and keep the compiled text. */
+    { extern void Pc_LangInit(void); Pc_LangInit(); }
+
     /* PSX subsystem init (mirrors main_pc.c order). */
     Sh_InitGameData();
     SpuInit();

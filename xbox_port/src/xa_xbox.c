@@ -309,10 +309,34 @@ static void PushResampled(const int16_t* pcm, int sampleCount, int isStereo)
  * the ring holds ~400 ms, the duration countdown hits 0, or the per-call cap
  * is reached. Main thread only — called from XaPlayer_Update (MainLoop) and
  * Audio_XboxPump (VSync). */
+/* Master gains, Q8 (256 = unity), refreshed once per pump (the mixer reads
+ * them per sample): the Options "Voice" slider (g_PcXaVolume, xa_volume) for
+ * disc and loose voice lines, and the FMV movie volume for stream mode, with
+ * the PSX's own SsSetSerialVol 80/128 movie attenuation when fmv_psx_volume
+ * is on -- the same product fmv_player.cpp applies on PC. */
+extern float g_PcXaVolume, g_PcFmvVolume;
+extern int   g_PcFmvPsxVolume;
+static int   s_voiceGainQ8 = 256;
+static int   s_fmvGainQ8   = 256;
+
+static int Xa_GainQ8(float g)
+{
+    if (!(g > 0.0f)) return 0;
+    if (g > 1.0f)    g = 1.0f;
+    return (int)(g * 256.0f + 0.5f);
+}
+
+static void Xa_RefreshMasterGain(void)
+{
+    s_voiceGainQ8 = Xa_GainQ8(g_PcXaVolume);
+    s_fmvGainQ8   = Xa_GainQ8(g_PcFmvVolume * (g_PcFmvPsxVolume ? (80.0f / 128.0f) : 1.0f));
+}
+
 void Xa_XboxPump(void)
 {
     int decoded = 0;
 
+    Xa_RefreshMasterGain();
     if (!s_xa.isPlaying)
         return;
 
@@ -407,6 +431,7 @@ void Xa_XboxStreamBegin(void)
     s_ringRead        = 0;
     s_ringWrite       = 0;
     s_fmvStream       = 1;
+    Xa_RefreshMasterGain();
     s_fmvStreamOpened = 0;
     s_fmvStreamStereo = 1;
     s_fmvSectorsFed   = 0;
@@ -521,12 +546,17 @@ void Xa_XboxMixInto(int* accL, int* accR, int* accC)
     s_inUnderrun = 0;
 
     idx = (s_ringRead & XA_RING_MASK) * 2;
-    if (accC != NULL && s_xa.isPlaying && !s_xa.isStereo && !s_fmvStream) {
-        /* Mono voice line -> center (ring holds it duplicated L==R; take L). */
-        *accC += ((int)s_ring[idx] * s_xa.volQ7L) >> 7;
-    } else {
-        *accL += ((int)s_ring[idx]     * s_xa.volQ7L) >> 7;
-        *accR += ((int)s_ring[idx + 1] * s_xa.volQ7R) >> 7;
+    {
+        const int gq8 = s_fmvStream ? s_fmvGainQ8 : s_voiceGainQ8;
+        const int gL  = (s_xa.volQ7L * gq8) >> 8;   /* Q7 */
+        const int gR  = (s_xa.volQ7R * gq8) >> 8;
+        if (accC != NULL && s_xa.isPlaying && !s_xa.isStereo && !s_fmvStream) {
+            /* Mono voice line -> center (ring holds it duplicated L==R; take L). */
+            *accC += ((int)s_ring[idx] * gL) >> 7;
+        } else {
+            *accL += ((int)s_ring[idx]     * gL) >> 7;
+            *accR += ((int)s_ring[idx + 1] * gR) >> 7;
+        }
     }
     s_ringRead++;
 }

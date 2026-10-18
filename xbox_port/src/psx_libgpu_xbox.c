@@ -209,8 +209,13 @@ int VSync(int mode)
     /* RA unlock badge: emit its textured quad NOW (after the game's OT walk that
      * ran before this VSync, so on top of world + toast text) and before the
      * present flush inside GpuNv2a_FrameEnd. No-op unless a badge is armed. */
+    {
+        extern float g_cfg_brightness;
+        extern void  GpuNv2a_BrightnessDim(float brightness);
+        GpuNv2a_BrightnessDim(g_cfg_brightness);
+    }
     RaBadge_RenderDirect();
-    GpuNv2a_FrameEnd();              /* present the rendered frame (swap at vblank) */
+    GpuNv2a_FrameEnd();             /* present the rendered frame (swap at vblank) */
     GpuXbox_FbStoreFrameTick();      /* latch+reset the per-frame TIM-protect gate
                                       * (g_PsxSkipFramebufferStore) — PsyX_EndScene parity */
 

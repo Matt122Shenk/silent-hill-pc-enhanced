@@ -134,6 +134,11 @@ static int PoolChara_Load(s32 id)
     {
         return 0;
     }
+    /* Before any read is queued: a queued TIM load targets the local desc. */
+    if (id >= POOL_BONE_ROWS)
+    {
+        return 0;
+    }
 
     /* Validated oversized loose ILM: size the pool buffer from the real
      * file (+tail slack for the 3-at-a-time GTE strides). <= 0 means the file
@@ -237,11 +242,6 @@ static int PoolChara_Load(s32 id)
         saved = *tbl;
         *tbl  = want;
 
-        if (id >= POOL_BONE_ROWS)
-        {
-            *tbl = saved;
-            return 0;
-        }
         Fs_CharaAnimDataAlloc(PC_CHARA_ANIM_SLOT(id), id, (s_AnmHeader*)p->anmBuf, s_poolBoneCoords[id]);
 
         /* Drain synchronously by pumping the queue directly. Reads are

@@ -25,8 +25,12 @@ int Xbox_ImageAdjustInScope(void)
 {
     extern int g_cfg_calibBar;
 
-    return !g_PcConfig.imageAdjustScope || g_cfg_calibBar ||
-           g_GameWork.gameState == GameState_InGame ||
+    if (g_cfg_calibBar || !g_PcConfig.imageAdjustScope)
+        return 1;
+    /* In-game movies play under GameState_InGame through the real VSync. */
+    if (g_SysWork.sysState == SysState_Fmv)
+        return 0;
+    return g_GameWork.gameState == GameState_InGame ||
            g_GameWork.gameState == GameState_MapEvent;
 }
 

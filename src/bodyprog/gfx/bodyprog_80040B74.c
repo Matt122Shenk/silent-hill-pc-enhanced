@@ -1126,6 +1126,12 @@ void Ipd_ActiveChunksClear(s_MapTerrain* map, s32 arg1) // 0x80042300
                 {
                     if (i < XBOX_OWNED_SLOT_CAP && s_pcSlotOwnedBuf[i] != NULL)
                     {
+                        extern void IpdReformat_ForgetRange(const void*, size_t);
+                        extern void LmReformat_ForgetRange(const void*, size_t);
+                        extern void Pc_BigIpd_ForgetBuffer(const void*);
+                        IpdReformat_ForgetRange(s_pcSlotOwnedBuf[i], (size_t)s_xbSlotOwnedSize[i]);
+                        LmReformat_ForgetRange(s_pcSlotOwnedBuf[i], (size_t)s_xbSlotOwnedSize[i]);
+                        Pc_BigIpd_ForgetBuffer(s_pcSlotOwnedBuf[i]);
                         free(s_pcSlotOwnedBuf[i]);
                         s_pcSlotOwnedBuf[i]  = NULL;
                         s_xbSlotOwnedSize[i] = 0;

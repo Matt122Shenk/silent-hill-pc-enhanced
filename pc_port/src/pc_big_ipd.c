@@ -94,6 +94,30 @@ static PcBigIpdSlot* BigIpd_FindGrown(const void* p)
     return NULL;
 }
 
+#ifdef SH_XBOX_PORT
+/* The slot buffer is being freed (Xbox gives back chunk slots past the active
+ * count): drop its entry, and a grown replacement with whatever the
+ * reformatters allocated against it, so neither outlives the buffer. */
+void Pc_BigIpd_ForgetBuffer(const void* slot)
+{
+    extern void IpdReformat_ForgetRange(const void*, size_t);
+    extern void LmReformat_ForgetRange(const void*, size_t);
+    PcBigIpdSlot* e = BigIpd_Find(slot);
+
+    if (e == NULL)
+    {
+        return;
+    }
+    if (e->grown != NULL)
+    {
+        IpdReformat_ForgetRange(e->grown, e->grownCap);
+        LmReformat_ForgetRange(e->grown, e->grownCap);
+        free(e->grown);
+    }
+    *e = s_slots[--s_slotCount];
+}
+#endif
+
 void Pc_BigIpd_RegisterSlot(const void* slot, size_t cap)
 {
     PcBigIpdSlot* e;

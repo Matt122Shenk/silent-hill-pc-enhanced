@@ -161,6 +161,7 @@ extern void GpuNv2a_WaitVbl(void);
 extern void Pad_Poll(void);       /* refresh the PSX pad buffer (pad_xbox.c) */
 extern void Audio_XboxPump(void); /* refill the DirectSound ring (dsound_xbox.c) */
 extern void RaBadge_RenderDirect(void); /* RA unlock badge quad (ra_badge_xbox.c) */
+static int  s_freezePrev = 0;          /* g_PsxPresentLastFrame as of the last VSync */
 
 static volatile int s_vblanks = 0;
 static void (*s_vsyncCb)(void) = 0;   /* the game's per-vblank callback */
@@ -216,10 +217,18 @@ int VSync(int mode)
         extern float g_cfg_brightness, g_cfg_contrast;
         extern int   Xbox_ImageAdjustInScope(void);
         extern void  GpuNv2a_ImageAdjust(float brightness, float contrast);
-        if (Xbox_ImageAdjustInScope())
+        extern int   g_PsxPresentLastFrame;
+        /* A held frame was captured already graded: grading the blit again
+         * would square brightness/contrast for the whole pause. The capture
+         * tick itself (flag just raised) is still graded, and keeps the badge
+         * out of the capture so it is not frozen on screen. */
+        int holding   = g_PsxPresentLastFrame && s_freezePrev;
+        int capturing = g_PsxPresentLastFrame && !s_freezePrev;
+        if (!holding && Xbox_ImageAdjustInScope())
             GpuNv2a_ImageAdjust(g_cfg_brightness, g_cfg_contrast);
+        if (!capturing)
+            RaBadge_RenderDirect();
     }
-    RaBadge_RenderDirect();
     GpuNv2a_FrameEnd();             /* present the rendered frame (swap at vblank) */
     GpuXbox_FbStoreFrameTick();      /* latch+reset the per-frame TIM-protect gate
                                       * (g_PsxSkipFramebufferStore) — PsyX_EndScene parity */
@@ -233,7 +242,6 @@ int VSync(int mode)
         extern int  g_PsxPresentLastFrame;
         extern int  GpuNv2a_FreezeCapture(void);
         extern void GpuNv2a_FreezeRelease(void);
-        static int  s_freezePrev = 0;
         if (g_PsxPresentLastFrame && !s_freezePrev)
             GpuNv2a_FreezeCapture();
         else if (!g_PsxPresentLastFrame && s_freezePrev)

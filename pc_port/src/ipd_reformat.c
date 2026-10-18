@@ -117,6 +117,19 @@ static void IpdTrack_Record(void* raw, s_IpdModelInfo* modelInfos,
     s_ipdTrack[slot].relocCount = s_ipdPendingRelocN;
     s_ipdTrack[slot].used = 1;
 }
+
+/* A chunk slot buffer is about to be freed (bodyprog_80040B74.c gives back
+ * slots past the active count): release what its parses allocated, or the
+ * entries outlive the buffer, never match again and fill the table. */
+void IpdReformat_ForgetRange(const void* base, size_t size)
+{
+    const char* lo = (const char*)base;
+    int i;
+    for (i = 0; i < IPD_TRACK_MAX; i++)
+        if (s_ipdTrack[i].used && (const char*)s_ipdTrack[i].raw >= lo &&
+            (const char*)s_ipdTrack[i].raw < lo + size)
+            IpdTrack_Free(&s_ipdTrack[i]);
+}
 #endif
 
 static void ParseIpdModelInfo(s_IpdModelInfo* dst, const u8* src)

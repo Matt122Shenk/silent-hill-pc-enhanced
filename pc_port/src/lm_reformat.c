@@ -91,6 +91,17 @@ static void LmTrack_Record(void* raw, s_Material* mats, s_ModelHeader* models, i
     s_lmTrack[slot].modelCount = modelCount;
     s_lmTrack[slot].used = 1;
 }
+
+/* Same contract as IpdReformat_ForgetRange: the LM inside a freed chunk slot. */
+void LmReformat_ForgetRange(const void* base, size_t size)
+{
+    const char* lo = (const char*)base;
+    int i;
+    for (i = 0; i < LM_TRACK_MAX; i++)
+        if (s_lmTrack[i].used && (const char*)s_lmTrack[i].raw >= lo &&
+            (const char*)s_lmTrack[i].raw < lo + size)
+            LmTrack_Free(&s_lmTrack[i]);
+}
 #endif
 
 static void ParseMeshHeader(s_MeshHeader* dst, const u8* src, u8* base)

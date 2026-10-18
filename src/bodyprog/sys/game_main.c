@@ -2880,8 +2880,14 @@ void MainLoop(void) // 0x80032EE0
             /* RetroAchievements: dispatch finished server calls and evaluate
              * the achievement set. Placed after the game-state update so the
              * frame's world state is settled; self-gated to live gameplay and
-             * to being signed in. */
+             * to being signed in. The Xbox already called it once this loop
+             * (after the state update, for every game state) -- a second call
+             * here ran rc_client_do_frame twice per frame in gameplay: hit
+             * counts filled at double speed and delta conditions saw no
+             * change. */
+#ifndef SH_XBOX_PORT
             { extern void Pc_Ra_Update(void); Pc_Ra_Update(); }
+#endif
 
             /* Gameplay plugins: per-frame hooks after the frame's game state is
              * settled. Both are no-op loops over zero plugins unless the user

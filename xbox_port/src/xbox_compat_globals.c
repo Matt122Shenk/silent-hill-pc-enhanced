@@ -31,6 +31,7 @@ int g_PcMenuPillarbox        = 0;
 int g_windowWidth            = 640;
 int g_windowHeight           = 480;
 int g_CollVisEnabled         = 0;
+char g_RaSfxName[16]         = "";   /* ra_sfx, copied in XboxConfig_ApplyOverrides */
 /* g_PcTrustedBloodColor: defined by pc_config.c (compiled on Xbox now). */
 s_CollStateDbg g_CollStateDbg = { 0 };
 
@@ -137,6 +138,14 @@ void XboxConfig_ApplyOverrides(void)
         g_cfg_brightness = g_PcConfig.brightness;
         g_cfg_contrast   = g_PcConfig.contrast;
         g_cfg_saturation = 1.0f;   /* no blend-only form on Xbox (gpu_nv2a.c) */
+    }
+
+    /* RetroAchievements unlock cue (ra_sfx), for dsound_xbox.c, which keeps
+     * its RXDK headers away from the game's. */
+    {
+        extern char g_RaSfxName[16];
+        strncpy(g_RaSfxName, g_PcConfig.raSfx, sizeof(g_RaSfxName) - 1);
+        g_RaSfxName[sizeof(g_RaSfxName) - 1] = '\0';
     }
 
     /* Voice + movie master volumes, as main_pc.c applies them at boot. */

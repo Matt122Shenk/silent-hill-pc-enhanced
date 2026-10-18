@@ -483,17 +483,23 @@ int RaSound_PlayUnlock(void)
         return 0;
 
     if (!s_raBuf && !s_raTried) {
-        static const char* const cand[] = {
-            "Q:\\achievement.wav",   /* the xbe's own dir (cd_xbox mount) */
-            "D:\\achievement.wav",
-            "E:\\achievement.wav",
-            "achievement.wav"
-        };
-        int i;
+        /* ra_sfx picks the cue like the PC toast does: "xbox" (default) =
+         * achievement.wav, "playstation" = trophy.wav, "steam" = steam.wav.
+         * Looked for beside the xbe first (the original Xbox convention), then
+         * in gamedata/sound where the PC port ships all three. */
+        static const char* const dirs[] = { "Q:\\", "Q:\\gamedata\\sound\\", "D:\\", "E:\\" };
+        extern char        g_RaSfxName[16];
+        const char*        name = "achievement.wav";
+        char               path[96];
+        int                i;
+        if (strcmp(g_RaSfxName, "playstation") == 0)  name = "trophy.wav";
+        else if (strcmp(g_RaSfxName, "steam") == 0)   name = "steam.wav";
         s_raTried = 1;
-        for (i = 0; i < (int)(sizeof(cand) / sizeof(cand[0])); i++)
-            if (RaSound_Load(cand[i]))
+        for (i = 0; i < (int)(sizeof(dirs) / sizeof(dirs[0])); i++) {
+            snprintf(path, sizeof(path), "%s%s", dirs[i], name);
+            if (RaSound_Load(path))
                 break;
+        }
         if (!s_raBuf)
             SH_DBG("[RASND] no achievement.wav found (Q:/D:/E:/rel) - game chime fallback");
     }

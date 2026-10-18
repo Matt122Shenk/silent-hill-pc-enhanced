@@ -94,7 +94,7 @@ typedef struct
     const char* name;
 } s_RaRegion;
 
-static s_RaRegion s_map[48];
+static s_RaRegion s_map[64];
 static int        s_mapCount;
 
 #define RA_MAP(psxOffset, sym) do { \
@@ -187,6 +187,13 @@ static void Ra_BuildMap(void)
     }
 
     RA_MAP(0x0AE184u, g_Inventory_EquippedItem);
+    /* The map-message display's current message (map_msg_display.c, a file-scope
+     * global under SH_PC_PORT for exactly this). "Wounds That Won't Heal" reads
+     * it; unmapped it served the RAM fallback's 0. */
+    {
+        extern s32 msgIdx;
+        RA_MAP(0x0BCD6Cu, msgIdx);
+    }
     RA_MAP(0x0BCE18u, g_WorldGfxWork);
     RA_MAP(0x0C3BB8u, g_Item_MapLoadableItems);
     RA_MAP(0x0C4478u, g_ActiveCollisionTriggers);
@@ -926,6 +933,28 @@ static void Ra_ShowUnlock(const char* title, unsigned points, const char* badge_
         RaBadge_Fetch(badge_name);
 }
 
+/* RetroAchievements injects 0-point "Warning: Unknown Emulator" / "Unsupported
+ * Game Version" entries for clients or discs it does not recognise (our user
+ * agent is SilentHillXbox/1.0). They are notices, not achievements: log them,
+ * never show an unlock card for them (PC b0972a47b). */
+static int Ra_IsPseudoAchievement(const char* title, unsigned points)
+{
+    static const char* const prefixes[] = {
+        "Warning:",
+        "Unsupported Game Version",
+        "Unsupported Emulator",
+        "Unknown Emulator",
+    };
+    size_t i;
+
+    if (title == NULL || points != 0)
+        return 0;
+    for (i = 0; i < sizeof(prefixes) / sizeof(prefixes[0]); i++)
+        if (strncmp(title, prefixes[i], strlen(prefixes[i])) == 0)
+            return 1;
+    return 0;
+}
+
 static void RC_CCONV Ra_EventHandler(const rc_client_event_t* event, rc_client_t* client)
 {
     char line[128];
@@ -940,6 +969,13 @@ static void RC_CCONV Ra_EventHandler(const rc_client_event_t* event, rc_client_t
          * rc_client_do_frame in settled gameplay (main thread, SPU pumping), so the
          * chime + blocking badge fetch inside Ra_ShowUnlock are safe. Already-
          * unlocked achievements loaded at boot do NOT fire this event. */
+        if (Ra_IsPseudoAchievement(event->achievement->title,
+                                   (unsigned)event->achievement->points))
+        {
+            SH_DBG("[RA] notice (not an unlock): %s", event->achievement->title);
+            Ra_RefreshStatus();
+            break;
+        }
         Ra_ShowUnlock(event->achievement->title,
                       (unsigned)event->achievement->points,
                       event->achievement->badge_name);
@@ -1037,6 +1073,23 @@ static void RC_CCONV Ra_LoginCallback(int result, const char* error_message,
     SH_DBG("[RA] logged in as %s", g_PcConfig.raUsername);
     { char t[80]; snprintf(t, sizeof(t), "RA: signed in as %s", g_PcConfig.raUsername); Ra_Toast(t); }
 
+    /* A password login hands back a connect token. Keep it and blank the
+     * password, so silenthill.cfg stops holding the plaintext password after
+     * the first successful boot; every later boot logs in by token. */
+    if (!g_PcConfig.raToken[0] && g_PcConfig.raPassword[0])
+    {
+        const rc_client_user_t* u = rc_client_get_user_info(client);
+        if (u && u->token && u->token[0])
+        {
+            strncpy(g_PcConfig.raToken, u->token, sizeof(g_PcConfig.raToken) - 1);
+            g_PcConfig.raToken[sizeof(g_PcConfig.raToken) - 1] = '\0';
+            g_PcConfig.raPassword[0] = '\0';
+            PcConfig_SaveKeyValue("ra_token", g_PcConfig.raToken);
+            PcConfig_SaveKeyValue("ra_password", "");
+            SH_DBG("[RA] token saved to the config; password cleared");
+        }
+    }
+
     if (!g_CdBinPath[0] || g_CdBinPath[0] == 'N') /* "NOT FOUND..." */
     {
         SH_DBG("[RA] no BIN resolved (g_CdBinPath='%s') - cannot identify the game", g_CdBinPath);
@@ -1118,6 +1171,13 @@ void Pc_Ra_Init(void)
     rc_client_set_host(s_client, "http://retroachievements.org");
 
     rc_client_set_hardcore_enabled(s_client, 0); /* softcore, permanently */
+    /* ra_spectator=1: evaluate and show everything, post nothing -- a way to
+     * test a set on the console without spending a real unlock (PC parity). */
+    if (g_PcConfig.raSpectator)
+    {
+        rc_client_set_spectator_mode_enabled(s_client, 1);
+        SH_DBG("[RA] spectator mode: unlocks are shown, never submitted");
+    }
     rc_client_set_event_handler(s_client, Ra_EventHandler);
 
     s_enabled = 1;
@@ -1143,98 +1203,33 @@ void Pc_Ra_Update(void)
      * call (including the response callbacks) on the main thread. */
     Ra_PumpOne();
 
-    /* Evaluate only in settled gameplay; menus, FMV and load fades hold no
-     * coherent world state. rc_client_idle still services pings/retries.
-     * !DemoActive: the attract demo runs real gameplay state -- without this a
-     * menu-idle demo loop could earn achievements (PC gates the same way). */
-    if (s_active &&
-        g_GameWork.gameState == GameState_InGame &&
-        g_SysWork.sysState   == SysState_Gameplay &&
-        !(g_SysWork.sysFlags & SysFlag_DemoActive))
+    /* Evaluate for the whole live SESSION, not only SysState_Gameplay (PC
+     * 71c29a0ac). The ranking block the rank-tier, ending and "Scary Harry"
+     * achievements read (D_800C48xx) is filled as the RESULTS screen opens,
+     * which is not gameplay -- gated to gameplay, those could never fire. The
+     * session opens on the first real gameplay frame (a save loaded or a new
+     * game started, so memory holds this run, not the last one) and closes when
+     * the game drops back to the pre-game states. The attract demo never opens
+     * one: it drives real gameplay state from recorded input. */
     {
-        rc_client_do_frame(s_client);
+        static int s_sessionLive = 0;
+        const int  isDemo = (g_SysWork.sysFlags & SysFlag_DemoActive) != 0;
 
-        /* Kill-frame capture: the 30s watch dumped conditions long AFTER the
-         * kill, by which time the player had left the boss room -- so the map
-         * condition (mapIdx16 BE == 0x0802 = MAP1_S05 room 2) read as the NEXT
-         * room and looked like the blocker. Detect the flag's RISING EDGE every
-         * frame and dump the trigger THEN, when every condition still holds the
-         * value rcheevos actually evaluated. One byte read per frame. */
+        if (g_GameWork.gameState < GameState_MainLoadScreen)
         {
-            static uint8_t s_prevFlagByte;
-            static int     s_edgeDumps;
-            uint8_t        fb = 0;
-            Ra_ReadMemory(0x0BCBACu, &fb, 1, s_client);
-            if ((fb & 0x08u) && !(s_prevFlagByte & 0x08u) && s_edgeDumps < 2)
-            {
-                uint8_t mi = 0, mr = 0;
-                s_edgeDumps++;
-                Ra_ReadMemory(0x0BCAD8u, &mi, 1, s_client);
-                Ra_ReadMemory(0x0BCAD9u, &mr, 1, s_client);
-                SH_DBG("[RACOND] *** KILL-FRAME EDGE: flagByte %02X -> %02X, mapIdx=%u room=%u"
-                       " (set wants mapIdx=8 room=2)", s_prevFlagByte, fb, mi, mr);
-                Ra_DumpTriggerConds(s_client);
-            }
-            s_prevFlagByte = fb;
+            s_sessionLive = 0;
+        }
+        else if (!isDemo &&
+                 g_GameWork.gameState == GameState_InGame &&
+                 g_SysWork.sysState == SysState_Gameplay)
+        {
+            s_sessionLive = 1;
         }
 
-        /* [RA] watch (~1/30s of evaluated gameplay): the traced achievement's
-         * LIVE client state + its two eventFlags operand bytes served through
-         * the real read path. Log 024 proved every operand SERVES correctly at
-         * load yet the kill still never fired -- state here distinguishes:
-         * state=ACTIVE(3) + flag bytes flipping at the kill but no unlock =
-         * evaluation/trigger logic; state=WAITING/INACTIVE = the trigger was
-         * true at activation (e.g. a save made after an earlier kill) and can
-         * never fire until it sees the condition false once. */
-        {
-            static unsigned s_watchFrames;
-            if ((++s_watchFrames % 1800u) == 0)
-            {
-                const rc_client_achievement_t* a =
-                    rc_client_get_achievement_info(s_client, RA_TRACE_ACH_ID);
-                uint8_t f1 = 0, f2 = 0;
-                Ra_ReadMemory(0x0BCBACu, &f1, 1, s_client);
-                Ra_ReadMemory(0x0BCBC9u, &f2, 1, s_client);
-                /* Also a digest of the WHOLE flag array through the same read
-                 * path: popcount proves RA sees the game's flag writes at all
-                 * (it should climb as the user progresses), while word4 isolates
-                 * the Split Head bit. word4==0 with a climbing popcount = the
-                 * read path is fine and the flag specifically is never set. */
-                unsigned pop = 0, w4 = 0, k;
-                for (k = 0; k < 52u * 4u; k++) {
-                    uint8_t b = 0; unsigned m;
-                    Ra_ReadMemory(0x0BCB9Cu + k, &b, 1, s_client);
-                    for (m = 0; m < 8; m++) if (b & (1u << m)) pop++;
-                }
-                { uint8_t wb[4] = {0,0,0,0};
-                  Ra_ReadMemory(0x0BCBACu, wb, 4, s_client);
-                  w4 = (unsigned)wb[0] | ((unsigned)wb[1] << 8) |
-                       ((unsigned)wb[2] << 16) | ((unsigned)wb[3] << 24); }
-                { uint8_t mi = 0, mr = 0;
-                  Ra_ReadMemory(0x0BCAD8u, &mi, 1, s_client);
-                  Ra_ReadMemory(0x0BCAD9u, &mr, 1, s_client);
-                  SH_DBG("[RA] watch %u: state=%d unlocked=%d flags[4B4]=%02X flags[4A1]=%02X word4=0x%08X setbits=%u map=%u/%u",
-                         RA_TRACE_ACH_ID, a ? (int)a->state : -1,
-                         a ? (int)a->unlock_time : 0, f1, f2, w4, pop,
-                         (unsigned)mi, (unsigned)mr); }
-                /* Once the kill flag is actually set, dump the trigger's
-                 * condition-level state -- that is the frame where "flag set but
-                 * no unlock" becomes diagnosable. Capped so it can't flood. */
-                if ((w4 & 0x08u) != 0)
-                {
-                    static int s_condDumps;
-                    if (s_condDumps < 3)
-                    {
-                        s_condDumps++;
-                        Ra_DumpTriggerConds(s_client);
-                    }
-                }
-            }
-        }
-    }
-    else
-    {
-        rc_client_idle(s_client);
+        if (s_active && s_sessionLive && !isDemo)
+            rc_client_do_frame(s_client);
+        else
+            rc_client_idle(s_client);
     }
 }
 

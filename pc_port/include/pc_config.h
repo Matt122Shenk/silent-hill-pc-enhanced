@@ -216,9 +216,9 @@ typedef struct {
                            * AI update funcs, so console SPAWN works for every type in any map. Native
                            * maps keep their native slots/variants; 0 = vanilla 3-types-per-map.
                            * (config key: global_chara_pool; docs/Global_Chara_Pool.md) */
-    int wholeMapExteriors; /* EXPERIMENTAL, default 0: texture + draw every loaded exterior chunk (whole
-                            * town resident — combine with fogstr to see it). Costs draw time and shows
-                            * geometry vanilla never rendered at once. Requires preload_chunks and
+    int wholeMapExteriors; /* 0 off, 1 on, 2 auto (default): texture + draw every loaded exterior chunk
+                            * (whole town resident). Auto engages only while fog strength is below 1.0,
+                            * since denser fog hides it anyway. Requires preload_chunks and
                             * resident_textures. (config key: whole_map_exteriors) */
     int usePgxp;         /* 1 = enable PGXP precision/perspective-correct textures (work-in-progress) */
     int itemDepthProbe;  /* DIAGNOSTIC, default 0: one-shot [ITEMDEPTH] dump per item-screen entry
@@ -337,6 +337,7 @@ typedef struct {
     int anisoLevel;          /* max anisotropic taps, 1..16 (config key: aniso_level); default 8 */
     int shadowMapSize;       /* flashlight shadow-map resolution, 256..8192 (config key: shadow_resolution); default 1024 */
     int minimapCorner;       /* minimap screen corner: 0 = top-left, 1 = top-right, 2 = bottom-left, 3 = bottom-right (config key: minimap_corner); default 0 */
+    int fpsDisplay;          /* FPS counter: 0 = off, 1 = top-left, 2 = top-right, 3 = bottom-left, 4 = bottom-right (config key: fps_display); default 0 */
     int minimapShape;        /* DEPRECATED, folded into `minimap`; still read to migrate old configs (config key: minimap_shape) */
     int configVersion;       /* PC_CONFIG_VERSION the file was last written at; 0 = pre-versioning. Drives the default-migration in PcConfig_Load (config key: config_version) */
     float minimapScale;      /* minimap size percentage, MINIMAP_SCALE_MIN..MAX (config key: minimap_scale); default 100 */
@@ -587,6 +588,14 @@ extern s_PcConfig g_PcConfig;
  * street room, whole_map_exteriors + preload_chunks + resident_textures all
  * on. Implemented in bodyprog_80040B74.c (needs g_Map/g_SavegamePtr). */
 int Pc_WholeMapDrawActive(void);
+/* whole_map_exteriors resolved against the live fog strength (auto mode)
+ * and PGXP, which the far band's depth test needs. */
+int Pc_WholeMapEnabled(void);
+/* Fog thinned below 1.0: the world is visible past where monsters spawn and
+ * despawn, so npc_main.c moves both out of the camera's view. */
+int Pc_LongViewActive(void);
+/* World point (Q12 x/z) inside the camera's horizontal view cone. */
+int Pc_WorldPointInView(int x, int z);
 
 /* Apply a flashlight mode (0..3, see flashlightMode) to the config + all PsyX
  * globals. Swaps flashlight_intensity/size between the two per-pixel styles'

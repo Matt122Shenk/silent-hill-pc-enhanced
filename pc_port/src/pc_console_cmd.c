@@ -1778,6 +1778,61 @@ void Pc_ConsoleExec(const char* line)
             g_PcConfig.drawDistancePct = (v < 25) ? 25 : ((v > 200) ? 200 : v);
         }
         cprintf("draw distance: %d%% (25..200; config key draw_distance_pct)", g_PcConfig.drawDistancePct);
+    } else if (strcmp(cmd, "WHOLEMAP") == 0) {
+        /* Live, not saved. */
+        int on;
+        if (strncmp(arg, "PROBE", 5) == 0 || strncmp(arg, "probe", 5) == 0) {
+            extern int g_PsxWholeMapProbe;
+            g_PsxWholeMapProbe = 2;
+            cprintf("whole map: one-frame [WMPROBE] queued (see the log)");
+            return;
+        }
+        if (strncmp(arg, "FAST", 4) == 0) {
+            extern int g_PcWholeMapFast;
+            const char* v = arg + 4;
+            while (*v == ' ') v++;
+            g_PcWholeMapFast = (*v == '0') ? 0 : ((*v == '1') ? 1 : !g_PcWholeMapFast);
+            cprintf("whole map fast far path: %s", g_PcWholeMapFast ? "ON" : "OFF (all chunks through the PSX path)");
+            return;
+        }
+        if (strncmp(arg, "GPU", 3) == 0) {
+            extern int g_PcWholeMapGpu;
+            const char* v = arg + 3;
+            while (*v == ' ') v++;
+            g_PcWholeMapGpu = (*v == '0') ? 0 : ((*v == '1') ? 1 : !g_PcWholeMapGpu);
+            cprintf("whole map GPU far meshes: %s", g_PcWholeMapGpu ? "ON" : "OFF (far quads built on the CPU)");
+            return;
+        }
+        if (strncmp(arg, "LAYER", 5) == 0) {
+            extern float g_PsxFarLayerK;
+            const char* v = arg + 5;
+            while (*v == ' ') v++;
+            if (*v) g_PsxFarLayerK = (float)atof(v);
+            cprintf("whole map far layer bias: %.4f (0 = none; default 0.0625)", g_PsxFarLayerK);
+            return;
+        }
+        if (strncmp(arg, "DEPTH", 5) == 0 || strncmp(arg, "depth", 5) == 0) {
+            extern int g_PsxWholeMapFarDepth;
+            const char* v = arg + 5;
+            while (*v == ' ') v++;
+            g_PsxWholeMapFarDepth = (*v == '0') ? 0 : ((*v == '1') ? 1 : !g_PsxWholeMapFarDepth);
+            cprintf("whole map far depth test: %s", g_PsxWholeMapFarDepth ? "ON" : "OFF (painter order)");
+            return;
+        }
+        if (strncmp(arg, "AUTO", 4) == 0 || strncmp(arg, "auto", 4) == 0) on = 2;
+        else if (arg[0] == '1') on = 1;
+        else if (arg[0] == '0') on = 0;
+        else on = !g_PcConfig.wholeMapExteriors;
+        g_PcConfig.wholeMapExteriors = on;
+        cprintf("whole map: %s (engaged here: %s)%s", on == 2 ? "AUTO (on below fogstr 1.0)" : (on ? "ON" : "OFF"),
+                Pc_WholeMapDrawActive() ? "yes" : "no",
+                (on && !(g_PcConfig.preloadChunks && g_PcConfig.residentTextures))
+                    ? " -- needs preload_chunks=1 and resident_textures=1" : "");
+        {
+            extern int g_PsxUsePgxp;
+            if (on && !g_PsxUsePgxp)
+                cprintf("distant geometry needs PGXP: pgxp 1");
+        }
     } else if (strcmp(cmd, "FOGDIST") == 0) {
         /* Push the fog planes out (or in). Indoors the fog is BLACK, so this is
          * also the "see further in the sewers" knob: the wall of black is the fog
@@ -2064,6 +2119,11 @@ void Pc_ConsoleExec(const char* line)
         g_PcConfig.usePgxp = g_PsxUsePgxp ? 1 : 0;
         PcConfig_SaveKeyValue("use_pgxp", g_PsxUsePgxp ? "1" : "0");
         cprintf("PGXP %s (perspective-correct, WIP)", g_PsxUsePgxp ? "ON" : "OFF");
+    } else if (strcmp(cmd, "PGXPDBG") == 0) {
+        /* Diagnostic: switch off one PGXP subsystem at a time with PGXP still on. */
+        extern int g_PsxPgxpDbg;
+        if (arg[0]) g_PsxPgxpDbg = atoi(arg);
+        cprintf("pgxpdbg %d: 1=no precise verts 2=legacy depth 4=opaque alpha 8=no world split 16=no exact twin 32=precise from MAC 64=W=1 128=integer xy", g_PsxPgxpDbg);
     } else if (strcmp(cmd, "WORLDDEPTH") == 0) {
         /* worlddepth 0|1 -- depth function for static opaque world under PGXP.
          * 1 = GL_ALWAYS (paint order alone decides), 0 = GL_LEQUAL (a nearer

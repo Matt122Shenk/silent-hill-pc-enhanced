@@ -158,6 +158,23 @@ typedef struct
 
 static s_TouchFinger s_Fingers[TC_MAX_FINGERS];
 
+/* Android hands a lone finger pointer id 0 every time, so a lift and a fresh
+ * touch landing between two polls look like one contact that jumped: the new
+ * touch inherited the old one's role and stick origin. The finger-down EVENT
+ * still says a new contact began, so the event watch records when each id last
+ * went down (it runs on the thread that posts events, hence atomics). */
+#define TC_DOWN_IDS 32
+static SDL_atomic_t s_DownMs[TC_DOWN_IDS];
+/* A contact seen in an earlier poll is at least one frame old. Anything less
+ * than this between its start and the id's latest down is the same touch,
+ * timestamped either side of the poll that created it. */
+#define TC_REUSE_MS 4
+
+void Pc_Touch_NoteFingerDown(long long fingerId, unsigned ms)
+{
+    SDL_AtomicSet(&s_DownMs[(unsigned)fingerId % TC_DOWN_IDS], (int)ms);
+}
+
 /* Built state, read by Pc_Touch_GetPad and the draw. */
 static unsigned short s_PadWord = 0xFFFF;
 static unsigned char  s_LeftX = 128, s_LeftY = 128, s_RightX = 128, s_RightY = 128;
@@ -1179,13 +1196,49 @@ int Pc_Touch_OwnsMouse(void)
     return Tc_ContactPresent() || (s_ContactMs != 0 && (SDL_GetTicks() - s_ContactMs) < 250);
 }
 
+/* Another contact already steering. Asked of the fingers themselves rather than
+ * s_StickActive, which is last frame's drawing state. */
+static int Tc_MoveHeld(const s_TouchFinger* self)
+{
+    int i;
+
+    for (i = 0; i < TC_MAX_FINGERS; i++)
+    {
+        if (&s_Fingers[i] != self && s_Fingers[i].active && s_Fingers[i].role == TR_MOVE)
+            return 1;
+    }
+    return 0;
+}
+
+/* Whether this tracked contact is still the same touch on the picture. */
+static int Tc_StillDown(const s_TouchFinger* t, int winW, int winH)
+{
+    const int n = SDL_GetNumTouchFingers(t->dev);
+    int       i;
+
+    for (i = 0; i < n; i++)
+    {
+        SDL_Finger* f = SDL_GetTouchFinger(t->dev, i);
+        float       fx, fy;
+        Uint32      downMs;
+
+        if (f == NULL || f->id != t->id)
+            continue;
+        if (!PsyX_MapWindowToViewport((int)(f->x * (float)winW), (int)(f->y * (float)winH), &fx, &fy))
+            return 0;
+        downMs = (Uint32)SDL_AtomicGet(&s_DownMs[(unsigned)t->id % TC_DOWN_IDS]);
+        return (Sint32)(downMs - t->startMs) <= TC_REUSE_MS;
+    }
+    return 0;
+}
+
 void Pc_Touch_Update(void)
 {
     SDL_TouchID dev;
     Uint32      now;
     float       aspect;
     int         nDev, nFingers, i, d, mode;
-    int         seen[TC_MAX_FINGERS];
+    int         present[TC_MAX_FINGERS];
     float       lookDx = 0.0f, lookDy = 0.0f;
     int         winW = 0, winH = 0;
 
@@ -1233,7 +1286,7 @@ void Pc_Touch_Update(void)
     PsyX_GetScreenSize(&winW, &winH);
 
     for (i = 0; i < TC_MAX_FINGERS; i++)
-        seen[i] = 0;
+        present[i] = s_Fingers[i].active && Tc_StillDown(&s_Fingers[i], winW, winH);
 
     s_PadWord     = 0xFFFF;
     s_AdvanceFrames = 0;
@@ -1255,6 +1308,117 @@ void Pc_Touch_Update(void)
             s_Buttons[i].holdFrames--;
     }
 
+    /* Released contacts: a short, stationary one was a tap. Buttons already
+     * fired while held, so only the free zones produce Action.
+     *
+     * BEFORE the new contacts are given roles, not after. A thumb lifting and
+     * the next one landing between two polls used to meet here in the wrong
+     * order: the new touch was placed while the old one still held the stick
+     * (s_StickActive), so it fell to the look role -- no stick drawn, and a
+     * drag that did nothing in classic camera -- for the whole of that touch. */
+    for (i = 0; i < TC_MAX_FINGERS; i++)
+    {
+        s_TouchFinger* t = &s_Fingers[i];
+
+        if (!t->active || present[i])
+            continue;
+
+        /* Every role that IS a control, not just the context style's. TR_TG_BTN
+         * and TR_TG_STICK were missing, so releasing a Gamepad-style pad button
+         * inside the tap window ALSO pressed Action: the log shows heldBtnFlags
+         * going 0x0400 (L1) -> 0x4000 (Cross) two ticks after an L1 press, with
+         * no face button touched. Pressing a shoulder must never press Cross --
+         * on a pad every control is drawn, so there is no free zone to tap. */
+        if (mode == TC_MODE_GAMEPLAY && Tc_AltCam())
+        {
+            /* Only the right side presses Action here. On the left a tap is
+             * half of the aim toggle, and while aiming Action is the trigger:
+             * toggling aim off would otherwise fire a shot on the way out. */
+            if (!t->movedFar && (now - t->startMs) <= TC_TAP_MS)
+            {
+                if (t->role == TR_LOOK)
+                {
+                    if (!t->fireHold)
+                        s_ActionFrames = TC_ACTION_FRAMES;
+                    s_RightTapMs = now;
+                }
+                else if ((t->role == TR_MOVE || t->role == TR_TG_STICK || t->role == TR_NONE) &&
+                         !t->noTap)
+                {
+                    s_LeftTapMs = now;
+                }
+            }
+        }
+        else if (mode == TC_MODE_GAMEPLAY &&
+            t->role != TR_BUTTON && t->role != TR_TG_BTN && t->role != TR_TG_STICK &&
+            !t->movedFar && (now - t->startMs) <= TC_TAP_MS)
+        {
+            s_ActionFrames = TC_ACTION_FRAMES;
+        }
+
+        /* Tap anywhere else on a cancel-only screen to leave it.
+         *
+         * The corner button is still drawn and still works; this is the half
+         * that stops a player hunting for it. Each of these screens has turned
+         * into a reported softlock in its turn -- the map, the brightness
+         * screen -- because the way out was one small target on a phone. The
+         * honest fix is that the whole background is the target.
+         *
+         * Buttons keep priority: a contact that landed on the corner already
+         * has role TR_BUTTON and is excluded, so this never doubles up.
+         *
+         * Only for screens with nothing else to tap. The save screen and the
+         * free-cursor puzzles are TC_MODE_BACK_CURSOR precisely so a tap there
+         * reaches the screen instead of leaving it. */
+        /* Never while a selection is on screen. "Take this map?" and "Is it OK
+         * to save?" are both drawn over a TC_MODE_BACK screen, and a blind
+         * Cancel ANSWERS them -- always with No. That is how the map became
+         * impossible to pick up. A screen asking a question is not a screen you
+         * dismiss by tapping it; maxIdx is NO_VALUE the rest of the time, so
+         * this costs the cancel-only screens nothing. */
+        /* The credits, skipped by a tap anywhere. */
+        if (mode == TC_MODE_SKIP && !t->movedFar &&
+            (now - t->startMs) >= TC_TAP_MIN_MS &&
+            (now - t->startMs) <= TC_TAP_MS)
+        {
+            s_SkipTapFrames = TC_ACTION_FRAMES;
+        }
+
+        /* Yes on the save prompt, from a tap anywhere that did not land on the
+     * No button. Spelled out rather than reusing the tap-anywhere Cancel,
+     * because that screen reads neither cancel nor a bare enter: the selection
+     * has to be set before the press. */
+        if (mode == TC_MODE_SAVEASK && t->role != TR_BUTTON && !t->movedFar &&
+            (now - t->startMs) >= TC_TAP_MIN_MS &&
+            (now - t->startMs) <= TC_TAP_MS)
+        {
+            s_SaveYesFrames = TC_ACTION_FRAMES;
+        }
+
+        if ((mode == TC_MODE_BACK || mode == TC_MODE_PAPERMAP) &&
+            t->role != TR_BUTTON && !t->movedFar &&
+            g_MapMsg_Select.maxIdx == NO_VALUE &&
+            (now - t->startMs) >= TC_TAP_MIN_MS &&
+            (now - t->startMs) <= TC_TAP_MS)
+        {
+            s_CancelFrames = TC_ACTION_FRAMES;
+        }
+
+        if (t->role == TR_MOVE || t->role == TR_TG_STICK)
+        {
+            /* TR_TG_STICK was missing here, so the fixed pad's knob stayed
+             * wherever it was let go of -- and because s_LeftX/s_LeftY are only
+             * written while a finger is on the stick, the last deflection kept
+             * being reported and the character kept walking. */
+            s_StickActive = 0;
+            s_LeftX = s_LeftY = 128;
+            s_Running = 0;
+        }
+
+        t->active = 0;
+        t->role   = TR_NONE;
+    }
+
     /* EVERY touch device, not just index 0. An Android phone registers several
      * (this one: 4) and the touchscreen is not necessarily the first -- polling
      * only device 0 reported zero fingers no matter where the screen was
@@ -1272,7 +1436,6 @@ void Pc_Touch_Update(void)
         SDL_Finger*    f = SDL_GetTouchFinger(dev, i);
         s_TouchFinger* t;
         float          vx, vy;
-        int            slot;
 
         if (f == NULL)
             continue;
@@ -1434,7 +1597,7 @@ void Pc_Touch_Update(void)
                     t->role      = TR_BUTTON;
                     t->buttonIdx = b;
                 }
-                else if (vx < TC_LEFT_ZONE && !s_StickActive)
+                else if (vx < TC_LEFT_ZONE && !Tc_MoveHeld(t))
                 {
                     t->role = TR_MOVE;
                     if (Tc_FixedStick())
@@ -1468,9 +1631,6 @@ void Pc_Touch_Update(void)
                 t->movedFar = 1;
         }
 
-        slot = (int)(t - s_Fingers);
-        if (slot >= 0 && slot < TC_MAX_FINGERS)
-            seen[slot] = 1;
 
         switch (t->role)
         {
@@ -1664,110 +1824,6 @@ void Pc_Touch_Update(void)
     }
     }
 
-    /* Released contacts: a short, stationary one was a tap. Buttons already
-     * fired while held, so only the free zones produce Action. */
-    for (i = 0; i < TC_MAX_FINGERS; i++)
-    {
-        s_TouchFinger* t = &s_Fingers[i];
-
-        if (!t->active || seen[i])
-            continue;
-
-        /* Every role that IS a control, not just the context style's. TR_TG_BTN
-         * and TR_TG_STICK were missing, so releasing a Gamepad-style pad button
-         * inside the tap window ALSO pressed Action: the log shows heldBtnFlags
-         * going 0x0400 (L1) -> 0x4000 (Cross) two ticks after an L1 press, with
-         * no face button touched. Pressing a shoulder must never press Cross --
-         * on a pad every control is drawn, so there is no free zone to tap. */
-        if (mode == TC_MODE_GAMEPLAY && Tc_AltCam())
-        {
-            /* Only the right side presses Action here. On the left a tap is
-             * half of the aim toggle, and while aiming Action is the trigger:
-             * toggling aim off would otherwise fire a shot on the way out. */
-            if (!t->movedFar && (now - t->startMs) <= TC_TAP_MS)
-            {
-                if (t->role == TR_LOOK)
-                {
-                    if (!t->fireHold)
-                        s_ActionFrames = TC_ACTION_FRAMES;
-                    s_RightTapMs = now;
-                }
-                else if ((t->role == TR_MOVE || t->role == TR_TG_STICK || t->role == TR_NONE) &&
-                         !t->noTap)
-                {
-                    s_LeftTapMs = now;
-                }
-            }
-        }
-        else if (mode == TC_MODE_GAMEPLAY &&
-            t->role != TR_BUTTON && t->role != TR_TG_BTN && t->role != TR_TG_STICK &&
-            !t->movedFar && (now - t->startMs) <= TC_TAP_MS)
-        {
-            s_ActionFrames = TC_ACTION_FRAMES;
-        }
-
-        /* Tap anywhere else on a cancel-only screen to leave it.
-         *
-         * The corner button is still drawn and still works; this is the half
-         * that stops a player hunting for it. Each of these screens has turned
-         * into a reported softlock in its turn -- the map, the brightness
-         * screen -- because the way out was one small target on a phone. The
-         * honest fix is that the whole background is the target.
-         *
-         * Buttons keep priority: a contact that landed on the corner already
-         * has role TR_BUTTON and is excluded, so this never doubles up.
-         *
-         * Only for screens with nothing else to tap. The save screen and the
-         * free-cursor puzzles are TC_MODE_BACK_CURSOR precisely so a tap there
-         * reaches the screen instead of leaving it. */
-        /* Never while a selection is on screen. "Take this map?" and "Is it OK
-         * to save?" are both drawn over a TC_MODE_BACK screen, and a blind
-         * Cancel ANSWERS them -- always with No. That is how the map became
-         * impossible to pick up. A screen asking a question is not a screen you
-         * dismiss by tapping it; maxIdx is NO_VALUE the rest of the time, so
-         * this costs the cancel-only screens nothing. */
-        /* The credits, skipped by a tap anywhere. */
-        if (mode == TC_MODE_SKIP && !t->movedFar &&
-            (now - t->startMs) >= TC_TAP_MIN_MS &&
-            (now - t->startMs) <= TC_TAP_MS)
-        {
-            s_SkipTapFrames = TC_ACTION_FRAMES;
-        }
-
-        /* Yes on the save prompt, from a tap anywhere that did not land on the
-     * No button. Spelled out rather than reusing the tap-anywhere Cancel,
-     * because that screen reads neither cancel nor a bare enter: the selection
-     * has to be set before the press. */
-        if (mode == TC_MODE_SAVEASK && t->role != TR_BUTTON && !t->movedFar &&
-            (now - t->startMs) >= TC_TAP_MIN_MS &&
-            (now - t->startMs) <= TC_TAP_MS)
-        {
-            s_SaveYesFrames = TC_ACTION_FRAMES;
-        }
-
-        if ((mode == TC_MODE_BACK || mode == TC_MODE_PAPERMAP) &&
-            t->role != TR_BUTTON && !t->movedFar &&
-            g_MapMsg_Select.maxIdx == NO_VALUE &&
-            (now - t->startMs) >= TC_TAP_MIN_MS &&
-            (now - t->startMs) <= TC_TAP_MS)
-        {
-            s_CancelFrames = TC_ACTION_FRAMES;
-        }
-
-        if (t->role == TR_MOVE || t->role == TR_TG_STICK)
-        {
-            /* TR_TG_STICK was missing here, so the fixed pad's knob stayed
-             * wherever it was let go of -- and because s_LeftX/s_LeftY are only
-             * written while a finger is on the stick, the last deflection kept
-             * being reported and the character kept walking. */
-            s_StickActive = 0;
-            s_LeftX = s_LeftY = 128;
-            s_Running = 0;
-        }
-
-        t->active = 0;
-        t->role   = TR_NONE;
-    }
 
     /* Look is a RATE: deflection tracks drag speed, so the camera stops the
      * moment the thumb does instead of drifting to an absolute position. */

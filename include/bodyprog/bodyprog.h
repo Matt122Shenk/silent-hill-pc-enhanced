@@ -1211,6 +1211,18 @@ void WorldObject_ModelNameSet(s_WorldObjectModel* model, char* newStr);
 
 /** Submits a world object to draw. */
 void WorldGfx_ObjectAdd(s_WorldObjectModel* model, const VECTOR3* pos, const SVECTOR3* rot);
+#ifdef SH_PC_PORT
+/* Interiors only. Map scripts draw a common pickup only while the player stands in its 40u map
+ * cell. Behind fog and fixed cameras that edge never showed; in first person or
+ * with the fog thinned the item blinked out a few steps away. ORed into each
+ * pickup's cell test so a nearby item stays drawn. Drawing only: taking an
+ * item is a separate map event and is unchanged. */
+bool Pc_CommonPickupInRange(const VECTOR3* pos);
+/* Hold the live fog at >= 1.0 this frame (call every frame the scene needs it);
+ * Pc_FogFloorFrameEnd restores the user's value once no one asks. */
+void Pc_FogFloorRequest(void);
+void Pc_FogFloorFrameEnd(void);
+#endif
 
 /** @unused Returns held item ID. */
 s32 WorldGfx_HeldItemIdGet(void);

@@ -164,6 +164,12 @@ static int SDLCALL Pc_TouchMouseWatch(void* userdata, SDL_Event* e)
 {
     (void)userdata;
 
+    if (e->type == SDL_FINGERDOWN)
+    {
+        extern void Pc_Touch_NoteFingerDown(long long fingerId, unsigned ms);
+        Pc_Touch_NoteFingerDown((long long)e->tfinger.fingerId, e->tfinger.timestamp);
+    }
+
     if (e->type == SDL_FINGERDOWN ||
         (e->type == SDL_MOUSEBUTTONDOWN && e->button.which == SDL_TOUCH_MOUSEID))
     {

@@ -41,15 +41,17 @@ void XaPlayer_SetPauseHold(int hold);
  * drain instead of pad-end — see the definition for the map6_s04 rationale. */
 int Xa_IsVoiceAudioDraining(void);
 
-/* True while the post-voice inter-line gap (cutscene_line_gap_ms) is still
- * running after a cutscene voice's real audio ended — held by the cutscene
- * page-advance so the next line doesn't fire back-to-back. */
-int Xa_VoiceGapHold(void);
-
 /* Master XA (FMV/voice) volume multiplier in [0,1], applied on top of the
  * game-driven per-track gain. Set from config / console / options menu. */
 extern float g_PcXaVolume;
 void XaPlayer_SetMasterVolume(float v);
+
+/* PSX voice-start delay model (xa_seek_model.c). The sound task pool reports
+ * its Stop and Play tasks; the players hold each disc line's audio start by
+ * the modelled CD seek + task-state time, consumed once per line. */
+void     Pc_XaSeek_OnStopTask(void);
+void     Pc_XaSeek_OnPlayTask(uint16_t xaIdx, int xaVol);
+uint32_t Pc_XaSeek_LineDelayMs(void);
 
 #ifdef __cplusplus
 }

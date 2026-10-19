@@ -32,6 +32,7 @@
 #include "pc_mouse_click_icons.h"
 #include "pc_dpad_icons.h"
 #include "pc_bind_panel.h"
+#include "pc_confirm_dialog.h"
 #include "pc_mouse_cursor.h"
 #include "pc_config.h"
 #include "lang_text.h"
@@ -72,13 +73,20 @@ enum { QO_X_SHADOW = 0, QO_X_SPEAKERS, QO_X_BGM, QO_X_SFX,
        QO_X_OTSRESTX, QO_X_OTSRESTY, QO_X_OTSAIMX, QO_X_OTSAIMY,
        QO_X_SPU,
        QO_X_DREAMSTR, QO_X_DREAMBLUR, QO_X_DPADMOVE,
-       QO_X_CAMSTYLE, QO_X_OTSSIDE, QO_X_CROSSHAIRSTYLE };
+       QO_X_CAMSTYLE, QO_X_OTSSIDE, QO_X_CROSSHAIRSTYLE,
+       QO_X_LINEGAP };
 extern const char* PcOpt_QuickExtraLabel(int which, char* buf, int bufsz);
 extern void        PcOpt_QuickExtraAdjust(int which, int dir);
 extern void        PcOpt_QuickViewReset(int mode);
+#if defined(SH_IOS) || defined(__ANDROID__)
+extern int               PcOpt_PgxpFogAskTake(void);
+extern void              PcOpt_PgxpFogAnswer(int yes);
+extern const char* const PC_PGXP_FOG_TITLE;
+extern const char* const PC_PGXP_FOG_MSG;
+#endif
 
 #define QO_GARBAGE  48
-#define QO_MAX_ROWS 16
+#define QO_MAX_ROWS 18
 /* CONTROLS is appended last, so every existing section index -- and the "Next
  * page (X)" label baked into each table -- stays where it was. Its rows differ
  * by platform (s_page5 / s_pageControls). */
@@ -155,7 +163,7 @@ typedef struct
  * pages clamp themselves to it, so a page past the ceiling is a build error
  * here rather than a row that silently never draws.
  *
- * s_page0, s_page1 and s_pageControls are AT capacity on a phone. Anything
+ * s_page0 and s_pageControls are AT capacity on a phone. Anything
  * further on those three needs the ceiling raised, or the rows split onto
  * another page. */
 static const QoRowDef s_page0[] = {
@@ -217,6 +225,7 @@ static const QoRowDef s_page1[] = {
     { ROW_EXTRA, NULL, QO_X_BGM,            "Music Volume" },
     { ROW_EXTRA, NULL, QO_X_SFX,            "Effects Volume" },
     { ROW_OPT,   "fmv_volume",           0, NULL },
+    { ROW_EXTRA, NULL, QO_X_LINEGAP,        "Dialog Pause" },
     { ROW_PAGE,  NULL, 0,                   "Next page  (View)" },
     { ROW_CLOSE, NULL, 0,                   "Close" },
 };
@@ -734,6 +743,9 @@ static GLuint s_ddTex[QO_DD_MAX];
 static int    s_ddW[QO_DD_MAX], s_ddH[QO_DD_MAX];
 static float  s_ddL, s_ddR, s_ddTop, s_ddRowH; /* published for the hit-test */
 static int    s_ddShown;
+/* Which list s_ddTex holds. The Map and Spawn rows share the cache, so a list
+ * opened after the other drew the first one's names until this was keyed. */
+static int    s_ddTexKey = -1;
 
 static int qo_row_is_list(const QoRowDef* r)
 {
@@ -1511,6 +1523,7 @@ static void qo_free_text(void)
     {
         qo_retire(s_ddTex[i]); s_ddTex[i] = 0;
     }
+    s_ddTexKey = -1;
 }
 
 /* The overlay's baked textures have twice been seen drawing as solid blocks
@@ -1731,6 +1744,14 @@ void Pc_QuickOptions_Close(void)
      * Update, so closing the menu under it left it drawn with nothing able to
      * close it. Whatever closes the menu closes it too. */
     Pc_BindPanel_Close();
+#if defined(QO_MOBILE)
+    /* Same for the fog row's PGXP question, which only this Update answers. */
+    if (Pc_ConfirmDialog_IsOpen())
+    {
+        Pc_ConfirmDialog_Cancel();
+        PcOpt_PgxpFogAnswer(0);
+    }
+#endif
     s_phase      = QO_CLOSING;
     s_phaseStart = SDL_GetTicks();
 }
@@ -1898,6 +1919,28 @@ void Pc_QuickOptions_Update(int up, int down, int left, int right,
     if (s_phase != QO_SHOWN) /* ignore input while animating in/out */
         return;
 
+#if defined(QO_MOBILE)
+    /* The fog row's PGXP offer (see PcOpt_PgxpFogCheck). The dialog reads the
+     * pointer itself; this menu sits still underneath until it is answered. */
+    if (Pc_ConfirmDialog_IsOpen())
+    {
+        const int res = Pc_ConfirmDialog_Update(left, right, confirm, close);
+        if (res != PC_CONFIRM_NONE)
+        {
+            qo_beep(res == PC_CONFIRM_YES ? Sfx_MenuConfirm : Sfx_MenuCancel);
+            PcOpt_PgxpFogAnswer(res == PC_CONFIRM_YES);
+        }
+        else if (left || right)
+            qo_beep(Sfx_MenuMove);
+        return;
+    }
+    if (PcOpt_PgxpFogAskTake())
+    {
+        Pc_ConfirmDialog_Open(PC_PGXP_FOG_TITLE, PC_PGXP_FOG_MSG);
+        return;
+    }
+#endif
+
     /* Dropdown open: it owns every input until it closes. */
     if (s_ddRow >= 0 && s_ddRow < nRows && qo_row_is_list(&rows[s_ddRow]))
     {
@@ -1905,6 +1948,9 @@ void Pc_QuickOptions_Update(int up, int down, int left, int right,
         int n = Pc_Cheats_ListCount(r->cpage, r->extra);
         int pick = -1, mMoved2, mClick2, wheel2;
         float mx2, my2;
+
+        if (n > QO_DD_MAX) n = QO_DD_MAX;
+        if (n <= 0) { s_ddRow = -1; return; }
 
         if (close) { qo_beep(Sfx_MenuCancel); s_ddRow = -1; return; }
         if (up)   s_ddSel = (s_ddSel + n - 1) % n;
@@ -1917,8 +1963,8 @@ void Pc_QuickOptions_Update(int up, int down, int left, int right,
          * the selection instead, which hover re-snapped to the line under the
          * cursor on the next jitter -- so with the pointer resting over the
          * list the wheel felt dead. */
-        wheel2 = Pc_MouseCursor_WheelStep();
-        if (wheel2) s_ddScroll += (wheel2 > 0) ? -1 : 1;
+        wheel2 = Pc_MouseCursor_WheelNotches();
+        if (wheel2) s_ddScroll -= wheel2 * 3;
         {
             int vis = (n < QO_DD_VISIBLE) ? n : QO_DD_VISIBLE;
             if (s_ddScroll > n - vis) s_ddScroll = n - vis;
@@ -2728,6 +2774,17 @@ void Pc_QuickOptions_Draw(void)
         const QoRowDef* r  = &rows[s_ddRow];
         int   n   = Pc_Cheats_ListCount(r->cpage, r->extra);
         int   vis = (n < QO_DD_VISIBLE) ? n : QO_DD_VISIBLE;
+        const int key = (r->cpage << 8) | (r->extra & 0xFF);
+
+        if (key != s_ddTexKey)
+        {
+            int i;
+            for (i = 0; i < QO_DD_MAX; i++)
+            {
+                qo_retire(s_ddTex[i]); s_ddTex[i] = 0;
+            }
+            s_ddTexKey = key;
+        }
         float ddL = panelL + panelW * 0.5f;
         float ddR = panelR - 4.0f;
         float ddTop = listT - (float)(s_ddRow + 1) * rowPitch + rowPitch * 0.08f;

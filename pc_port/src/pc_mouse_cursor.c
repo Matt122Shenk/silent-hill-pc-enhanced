@@ -82,6 +82,8 @@ static float s_gameCurX, s_gameCurY;
 static int   s_haveGameCur;
 static int   s_servoActive;
 static int   s_wheelStep;    /* +1/-1 on a new wheel notch this frame, else 0 */
+static int   s_wheelNotches; /* every notch this frame, signed */
+static int   s_prevWheelTotal;
 static int   s_prevWheelUp, s_prevWheelDown;
 
 static int Mc_Enabled(void)
@@ -158,6 +160,11 @@ int Pc_MouseCursor_RightClicked(void)
 int Pc_MouseCursor_WheelStep(void)
 {
     return Mc_Enabled() ? s_wheelStep : 0;
+}
+
+int Pc_MouseCursor_WheelNotches(void)
+{
+    return Mc_Enabled() ? s_wheelNotches : 0;
 }
 
 unsigned int Pc_MouseCursor_BoundPadBits(void)
@@ -322,6 +329,13 @@ void Pc_MouseCursor_FrameUpdate(void)
         s_havePrev  = 0;
         s_wheelStep = 0;
         Mc_TouchClear();
+        {
+            /* Notches spun while the cursor was off must not land as one
+             * burst when it comes back. */
+            extern int g_PsyX_WheelTotal;
+            s_wheelNotches   = 0;
+            s_prevWheelTotal = g_PsyX_WheelTotal;
+        }
         if (s_puzzleFrames > 0)
             s_puzzleFrames--;
         return;
@@ -331,7 +345,10 @@ void Pc_MouseCursor_FrameUpdate(void)
      * rise back to 2 (prev<2). Two notches in one frame collapse to one step. */
     {
         extern int g_PsyX_WheelUpFrames, g_PsyX_WheelDownFrames;
+        extern int g_PsyX_WheelTotal;
 
+        s_wheelNotches   = g_PsyX_WheelTotal - s_prevWheelTotal;
+        s_prevWheelTotal = g_PsyX_WheelTotal;
         s_wheelStep = 0;
         if (g_PsyX_WheelUpFrames == 2 && s_prevWheelUp < 2)
             s_wheelStep = 1;
@@ -515,12 +532,20 @@ int Pc_MouseCursor_MenuRowHover(int baseY, int stepY, int count, unsigned int vi
     return hovered;
 }
 
+/* Only the picture hides: hover and clicks stay live, and any real mouse use
+ * clears the flag before they could matter. */
+static int Mc_HiddenForPad(void)
+{
+    extern int g_PsyX_PadInputLast;
+    return g_PsyX_PadInputLast;
+}
+
 void Pc_MouseCursor_Draw(void)
 {
     POLY_FT4* poly;
     s32       cx, cy;
 
-    if (!Mc_Enabled() || !s_inView)
+    if (!Mc_Enabled() || !s_inView || Mc_HiddenForPad())
         return;
     /* A GL overlay dialog composites above this whole frame, so it draws the
      * cursor itself (Pc_MouseCursor_SpriteRgba/GlRect); ours would sit under it. */
@@ -614,7 +639,7 @@ int Pc_MouseCursor_GlRect(float vpW, float vpH, float* outX, float* outY, float*
 {
     float w, h, fbH;
 
-    if (!Mc_Enabled() || !s_inView)
+    if (!Mc_Enabled() || !s_inView || Mc_HiddenForPad())
         return 0;
 
     /* The PSX draw is 16x16 framebuffer units; the framebuffer is 320 wide and

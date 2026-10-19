@@ -725,6 +725,51 @@ static const char* PcOpt_ValueLabel(const s_PcOpt* e, char* buf, int bufsz)
     }
 }
 
+#if defined(__ANDROID__) || defined(SH_IOS)
+/* The whole town only draws with PGXP on (Pc_WholeMapEnabled). On desktop the
+ * launcher offers to turn it on when its fog slider goes below 1.0; a phone has
+ * no launcher, so the in-game fog rows make the same offer. "No" holds for the
+ * session, as it does there. */
+static int s_pgxpFogAsk      = 0;
+static int s_pgxpFogDeclined = 0;
+
+static void PcOpt_PgxpFogCheck(const s_PcOpt* e)
+{
+    extern int g_PsxUsePgxp;
+
+    if (e->ffield == &g_PcConfig.fogStrength && g_PcConfig.fogStrength < 1.0f &&
+        !g_PsxUsePgxp && !s_pgxpFogDeclined && g_PcConfig.wholeMapExteriors == 2)
+        s_pgxpFogAsk = 1;
+}
+
+int PcOpt_PgxpFogAskTake(void)
+{
+    const int ask = s_pgxpFogAsk;
+
+    s_pgxpFogAsk = 0;
+    return ask;
+}
+
+void PcOpt_PgxpFogAnswer(int yes)
+{
+    extern int g_PsxUsePgxp;
+
+    if (!yes) {
+        s_pgxpFogDeclined = 1;
+        return;
+    }
+    g_PcConfig.usePgxp = 1;
+    g_PsxUsePgxp       = 1;
+    PcConfig_SaveKeyValue("use_pgxp", "1");
+    SH_DBG_ECHO("PGXP: on (whole town view below fog 1.0)");
+}
+
+const char* const PC_PGXP_FOG_TITLE = "PGXP";
+const char* const PC_PGXP_FOG_MSG   = "Seeing the whole town through thin fog needs PGXP. Turn PGXP on?";
+#else
+#define PcOpt_PgxpFogCheck(e) ((void)(e))
+#endif
+
 /* Click-and-drag on a slider row. PcOpt_Adjust writes config.cfg on every call,
  * so driving it once per drag step would rewrite the file dozens of times a
  * second; instead move the value live here and let the caller save once when the
@@ -762,6 +807,7 @@ static void PcOpt_SliderDragCommit(const s_PcOpt* e)
     snprintf(fb, sizeof(fb), "%.3f", *e->ffield);
     PcConfig_SaveKeyValue(e->key, fb);
     SH_DBG_ECHO("%s: %.2f", e->name, *e->ffield);
+    PcOpt_PgxpFogCheck(e);
 }
 
 static void PcOpt_Adjust(const s_PcOpt* e, int dir)
@@ -790,6 +836,7 @@ static void PcOpt_Adjust(const s_PcOpt* e, int dir)
         if (e->flive)  *e->flive  = v;
         if (e->key) { char fb[16]; snprintf(fb, sizeof(fb), "%.3f", v); PcConfig_SaveKeyValue(e->key, fb); }
         SH_DBG_ECHO("%s: %.2f", e->name, v);
+        PcOpt_PgxpFogCheck(e);
         return;
     }
     if (e->kind == PCK_MAP) {
@@ -923,7 +970,8 @@ enum { QO_X_SHADOW = 0, QO_X_SPEAKERS, QO_X_BGM, QO_X_SFX,
        QO_X_SPU,
        /* Quick menu only: the PC Options graphics page is at its row limit. */
        QO_X_DREAMSTR, QO_X_DREAMBLUR, QO_X_DPADMOVE,
-       QO_X_CAMSTYLE, QO_X_OTSSIDE, QO_X_CROSSHAIRSTYLE };
+       QO_X_CAMSTYLE, QO_X_OTSSIDE, QO_X_CROSSHAIRSTYLE,
+       QO_X_LINEGAP };
 
 /* display_aspect = crt puts the picture on (4:3 x trim), so one framebuffer
  * pixel lands on screen this many times wider than tall at trim 1.0. It is the
@@ -994,6 +1042,19 @@ static const int         QO_SPU_RATE[] = { 44100, 176400, 176400 };
  * and the Backspace cycle in control_style.c reports. */
 static const char* const QO_CROSSHAIR_LBL[] = { "Cross (+)", "Dot", "Circle", "Dashes" };
 static const char* const QO_SPEAKER_IDS[]  = { "auto", "stereo", "quad", "51", "71" };
+/* Dialog Pause presets, the launcher's former dropdown: cutscene_line_gap_ms. */
+static const char* const QO_LINEGAP_LBL[] = { "Off", "Short", "Normal", "Long" };
+static const int         QO_LINEGAP_MS[]  = { 0, 150, 300, 600 };
+
+static int PcOpt_LineGapIndex(void)
+{
+    int ms = g_PcConfig.cutsceneLineGapMs;
+
+    if (ms <= 0)   return 0;
+    if (ms <= 220) return 1;
+    if (ms <= 450) return 2;
+    return 3;
+}
 
 const char* PcOpt_QuickExtraLabel(int which, char* buf, int bufsz)
 {
@@ -1020,6 +1081,10 @@ const char* PcOpt_QuickExtraLabel(int which, char* buf, int bufsz)
     }
     case QO_X_OTSSIDE:
         return Pc_LangQuickMenu((g_OtsSide > 0) ? "Right" : "Left");
+    case QO_X_LINEGAP: {
+        int i = PcOpt_LineGapIndex();
+        return (i == 0) ? Pc_LangQuickMenu("Off") : Pc_LangQuick(QO_LINEGAP_LBL[i]);
+    }
     /* Marked "(off)" while the crosshair itself is off, the way Dream Blur
      * Strength does, since the shape has nothing to draw then. */
     case QO_X_CROSSHAIRSTYLE: {
@@ -1414,6 +1479,14 @@ void PcOpt_QuickExtraAdjust(int which, int dir)
         Sd_PlaySfx(Sfx_MenuMove, 0, 64);
         break;
     }
+    case QO_X_LINEGAP: {
+        int i = (PcOpt_LineGapIndex() + dir + 4) % 4;
+        g_PcConfig.cutsceneLineGapMs = QO_LINEGAP_MS[i];
+        snprintf(buf, sizeof(buf), "%d", QO_LINEGAP_MS[i]);
+        PcConfig_SaveKeyValue("cutscene_line_gap_ms", buf);
+        Sd_PlaySfx(Sfx_MenuMove, 0, 64);
+        break;
+    }
     case QO_X_BGM:
     case QO_X_SFX: {
         /* 16 notches of 8 over 0..128, exactly the main Options sliders. */
@@ -1612,7 +1685,7 @@ static int PcOpt_KeyEdge(int sc)
  * dialog owns input, so the caller blocks the normal menu handling. */
 /* Which action the open dialog is asking about. The box itself is generic; only
  * the text and the Yes branch differ. */
-enum { PCOPT_CONFIRM_RESET = 0, PCOPT_CONFIRM_STORAGE };
+enum { PCOPT_CONFIRM_RESET = 0, PCOPT_CONFIRM_STORAGE, PCOPT_CONFIRM_PGXP };
 static int s_confirmAction = PCOPT_CONFIRM_RESET;
 
 #if defined(__ANDROID__)
@@ -1648,6 +1721,14 @@ static int PcOpt_ResetConfirm_Run(void)
             Sd_PlaySfx(Sfx_MenuMove, 0, 64);
             return 1;
         }
+#if defined(__ANDROID__) || defined(SH_IOS)
+        if (PcOpt_PgxpFogAskTake()) {
+            s_confirmAction = PCOPT_CONFIRM_PGXP;
+            Pc_ConfirmDialog_Open(PC_PGXP_FOG_TITLE, PC_PGXP_FOG_MSG);
+            g_PcOptResetConfirmActive = 1;
+            return 1;
+        }
+#endif
         /* keep edge state fresh even when closed */
         PcOpt_KeyEdge(SDL_SCANCODE_LEFT);
         PcOpt_KeyEdge(SDL_SCANCODE_RIGHT);
@@ -1673,6 +1754,11 @@ static int PcOpt_ResetConfirm_Run(void)
     res = Pc_ConfirmDialog_Update(left, right, confirm, cancel);
     if (res == PC_CONFIRM_YES) {
         Sd_PlaySfx(Sfx_MenuConfirm, 0, 64);
+#if defined(__ANDROID__) || defined(SH_IOS)
+        if (s_confirmAction == PCOPT_CONFIRM_PGXP)
+            PcOpt_PgxpFogAnswer(1);
+        else
+#endif
 #if defined(__ANDROID__)
         if (s_confirmAction == PCOPT_CONFIRM_STORAGE)
             PcOpt_AskStorageNextLaunch();
@@ -1681,6 +1767,10 @@ static int PcOpt_ResetConfirm_Run(void)
             Pc_Options_ResetToDefaults();
     } else if (res == PC_CONFIRM_NO) {
         Sd_PlaySfx(Sfx_MenuCancel, 0, 64);
+#if defined(__ANDROID__) || defined(SH_IOS)
+        if (s_confirmAction == PCOPT_CONFIRM_PGXP)
+            PcOpt_PgxpFogAnswer(0);
+#endif
     }
 
     /* Swallow this frame's pad presses so the menu underneath never sees the

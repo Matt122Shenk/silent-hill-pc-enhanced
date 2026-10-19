@@ -431,13 +431,6 @@ void Ipd_CloseRangeChunksInit(void) // 0x8003C3AC
         pos1.vz = CLAMP(pos1.vz, temp_a2 + 1, temp_a2 + (Q12(2.5f) - 1));
     }
 
-#ifdef SH_PC_PORT
-    {
-        static s32 closeRangeLogCD = 0;
-        if ((closeRangeLogCD++ % 300) == 0) {
-        }
-    }
-#endif
     Ipd_ChunkInit(pos0.vx, pos0.vz, pos1.vx, pos1.vz);
 }
 
@@ -535,6 +528,34 @@ void WorldObject_ModelNameSet(s_WorldObjectModel* model, char* newStr) // 0x8003
 
     model->metadata.field_8 = 0;
 }
+
+#ifdef SH_PC_PORT
+bool Pc_CommonPickupInRange(const VECTOR3* pos)
+{
+    extern s_MapTerrain g_Map;
+    const VECTOR3*      pp = &g_SysWork.playerWork.player.position;
+    q19_12              dy = pos->vy - pp->vy;
+    s32                 dx;
+    s32                 dz;
+
+    /* Interiors only: rooms are short and first person sees across a cell
+     * edge within a few steps. Outdoors keeps the original per-cell items. */
+    if (g_Map.isExterior)
+    {
+        return false;
+    }
+
+    /* The floor test keeps an item on a storey above or below from showing
+     * through a stairwell or an unloaded room. */
+    if (dy > Q12(3.0f) || dy < Q12(-3.0f))
+    {
+        return false;
+    }
+    dx = FLOOR_TO_STEP(pos->vx, CHUNK_CELL_SIZE) - FLOOR_TO_STEP(pp->vx, CHUNK_CELL_SIZE);
+    dz = FLOOR_TO_STEP(pos->vz, CHUNK_CELL_SIZE) - FLOOR_TO_STEP(pp->vz, CHUNK_CELL_SIZE);
+    return dx >= -1 && dx <= 1 && dz >= -1 && dz <= 1;
+}
+#endif
 
 void WorldGfx_ObjectAdd(s_WorldObjectModel* model, const VECTOR3* pos, const SVECTOR3* rot) // 0x8003C92C
 {

@@ -38,6 +38,9 @@ void Pc_Touch_NoteOtherInput(int padAttached, int keyWord);
  *  PsyX_Pad_InternalPadUpdates, so it cannot land out of order with the read. */
 void Pc_Touch_Update(void);
 
+/* From the SDL event watch: finger fingerId went down at ms (any thread). */
+void Pc_Touch_NoteFingerDown(long long fingerId, unsigned ms);
+
 /** 1 when touch is present and driving the virtual pad -- settled gameplay, or
  *  one of the screens that keeps a single button so it can be left. Menus stay
  *  on the mouse path. */

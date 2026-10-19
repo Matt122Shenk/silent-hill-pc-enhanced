@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
@@ -94,6 +94,11 @@ public partial class Form1 : Form
         LoadConfig();
         SetupTooltips();
         SetupLanguageButton();
+        trackFog.ValueChanged += (s, e) => UpdateFogValueLabel();
+        // On release, not while dragging, and never from LoadConfig setting
+        // the slider.
+        trackFog.MouseUp += (s, e) => AskPgxpForDistantWorld();
+        trackFog.KeyUp   += (s, e) => AskPgxpForDistantWorld();
         this.Shown += (s, e) =>
         {
             CleanupOldFiles();
@@ -125,16 +130,12 @@ public partial class Form1 : Form
 
         btnLang = new Button
         {
-            /* The right column is full from y 469 down: comboMap 469..490,
-             * progUpdate 503..526, lblUpdateStatus 533..548 -- so 416,472 landed
-             * ON TOP of the Level dropdown and the randomizer checkbox once the
-             * new options moved in. Back on the right edge, one row lower: the
-             * only things it shares that band with are progUpdate and
-             * chkRandomizer, both Visible=false in normal use (the progress bar
-             * appears during a download). Created in code rather than the designer (the flag
-             * is custom-painted), so it cannot be nudged from the design surface;
-             * re-check this against Form1.Designer.cs after any layout change. */
-            Location = new System.Drawing.Point(416, 558),
+            /* Bottom-right corner, on the Help/Reset/Report Bug row;
+             * lblUpdateStatus was narrowed to end before it. Created in code
+             * rather than the designer (the flag is custom-painted), so it
+             * cannot be nudged from the design surface; re-check this against
+             * Form1.Designer.cs after any layout change. */
+            Location = new System.Drawing.Point(420, 616),
             Size = new System.Drawing.Size(30, 22),
             Text = "",
             FlatStyle = FlatStyle.Standard,
@@ -275,6 +276,7 @@ public partial class Form1 : Form
         Loc.LocalizeItems(comboPost);
         Loc.LocalizeItems(comboTone);
         Loc.LocalizeItems(comboFlash);
+        Loc.LocalizeItems(comboLineGap);
         Loc.LocalizeItems(comboAudioOut);
         Loc.LocalizeItems(comboRender);
         Loc.LocalizeItems(comboMinimap);
@@ -855,6 +857,23 @@ public partial class Form1 : Form
         Set(flashLabel, flashTip);
         Set(comboFlash, flashTip);
 
+        const string fogTip =
+            "How far you can see through the fog. The default (1.10) is the classic game.\n" +
+            "Anything below 1.00 lets you see the world beyond the fog: the whole town is\n" +
+            "drawn out to the horizon. Below about 0.70 the fog has only a minimal effect.\n" +
+            "Also in game: F10 > Graphics.";
+        Set(lblFog, fogTip);
+        Set(trackFog, fogTip);
+        Set(lblFogValue, fogTip);
+
+        const string lineGapTip =
+            "Emulates the PlayStation's CD seek before each spoken line in cutscenes.\n" +
+            "On the console a voice line started a beat after its subtitle while the disc\n" +
+            "sought the clip; the PC loads instantly. Scene and subtitle timing are unchanged,\n" +
+            "only the voice starts later. Normal is the default.";
+        Set(lblLineGap, lineGapTip);
+        Set(comboLineGap, lineGapTip);
+
         Set(btnManager, "Manage texture packs, load-folder and FMV mods: enable, disable and set load order.");
 
         Set(btnPlay, "Save settings and start the game.");
@@ -1275,6 +1294,27 @@ public partial class Form1 : Form
             comboFlash.SelectedIndex = fmIdx;
         }
 
+        // cutscene_line_gap_ms: minimum pause after a voiced cutscene line.
+        // Presets only; a hand-set value that matches none shows the nearest
+        // preset and stays in the file unless the dropdown is changed.
+        {
+            int ms;
+            if (!int.TryParse(config.Get("cutscene_line_gap_ms", "300"), out ms)) ms = 300;
+            _lineGapLoadedIdx = LineGapIndexFor(ms);
+            comboLineGap.SelectedIndex = _lineGapLoadedIdx;
+        }
+
+        // fog_strength, snapped to the slider's 0.05 steps. A value the slider
+        // cannot show (set in game above 1.20) stays in the file unless moved.
+        {
+            float fs;
+            if (!float.TryParse(config.Get("fog_strength", "1.10"), System.Globalization.NumberStyles.Float,
+                                System.Globalization.CultureInfo.InvariantCulture, out fs)) fs = 1.10f;
+            _fogLoadedStep = Math.Max(trackFog.Minimum, Math.Min(trackFog.Maximum, (int)Math.Round(fs / FogStep)));
+            trackFog.Value = _fogLoadedStep;
+            UpdateFogValueLabel();
+        }
+
         // Audio output (speaker layout): auto = OpenAL detects the system
         // layout. With rears active the game pans SFX on the full circle and
         // sends wide-stereo BGM layers to the surrounds.
@@ -1490,6 +1530,13 @@ public partial class Form1 : Form
             config.Set("flashlight_shadows", (fmIdx == 1 || fmIdx == 3) ? "1" : "0");
         }
 
+        if (comboLineGap.SelectedIndex >= 0 &&
+            (comboLineGap.SelectedIndex != _lineGapLoadedIdx || config.Get("cutscene_line_gap_ms", "") == ""))
+            config.Set("cutscene_line_gap_ms", LineGapValues[comboLineGap.SelectedIndex].ToString());
+
+        if (trackFog.Value != _fogLoadedStep)
+            config.Set("fog_strength", (trackFog.Value * FogStep).ToString("0.00", System.Globalization.CultureInfo.InvariantCulture));
+
         // Audio output dropdown -> audio_output string id.
         if (comboAudioOut.SelectedIndex >= 0)
             config.Set("audio_output", AudioOutputIds[comboAudioOut.SelectedIndex]);
@@ -1535,6 +1582,58 @@ public partial class Form1 : Form
 
     // Dropdown index -> audio_output config id (matches the game's parser).
     private static readonly string[] AudioOutputIds = { "auto", "stereo", "quad", "51", "71", "hrtf" };
+
+    // Fog/World Visibility slider -> fog_strength. Capped at 1.20 rather than
+    // the game's 2.0: past that the town is already fully fogged out.
+    private const float FogStep = 0.05f;
+    private int _fogLoadedStep = 22;
+
+    // A "No" holds until the launcher is closed; "Do Not Ask Again" is saved.
+    private static bool s_pgxpFogDeclined;
+
+    private void AskPgxpForDistantWorld()
+    {
+        if (trackFog.Value * FogStep >= 0.999f || pgxpYes.Checked || s_pgxpFogDeclined)
+            return;
+        if (config.Get("launcher_warn_pgxp_fog", "1").Trim() == "0")
+            return;
+
+        using (var dlg = new SilentHillPC_Launcher.PgxpFogDialog())
+        {
+            dlg.ShowDialog(this);
+            switch (dlg.Result)
+            {
+                case SilentHillPC_Launcher.PgxpFogDialog.Choice.Yes:
+                    pgxpYes.Checked = true;
+                    break;
+                case SilentHillPC_Launcher.PgxpFogDialog.Choice.NeverAsk:
+                    config.EnsureLauncherSection();
+                    config.Set("launcher_warn_pgxp_fog", "0");
+                    config.Save();
+                    break;
+                default:
+                    s_pgxpFogDeclined = true;
+                    break;
+            }
+        }
+    }
+
+    private void UpdateFogValueLabel()
+    {
+        lblFogValue.Text = (trackFog.Value * FogStep).ToString("0.00", System.Globalization.CultureInfo.InvariantCulture);
+    }
+
+    // Dialog Pause dropdown -> cutscene_line_gap_ms (CD seek before each voice
+    // line). 300 is the engine default.
+    private static readonly int[] LineGapValues = { 0, 150, 300, 600 };
+    private int _lineGapLoadedIdx = 2;
+    private static int LineGapIndexFor(int ms)
+    {
+        if (ms <= 0)   return 0;
+        if (ms <= 220) return 1;
+        if (ms <= 450) return 2;
+        return 3;
+    }
 
     private const string RandomizerMapEntry = "Randomizer Enabled";
 
@@ -1642,7 +1741,14 @@ public partial class Form1 : Form
 
         try
         {
-            var p = Process.Start(exePath);
+            // The game opens config.cfg relative to its working directory; a
+            // shortcut with another "Start in" folder made it read (and write
+            // binds to) a different file than the one this launcher edits.
+            var p = Process.Start(new ProcessStartInfo(exePath)
+            {
+                WorkingDirectory = AppDomain.CurrentDomain.BaseDirectory,
+                UseShellExecute  = false,
+            });
             if (p != null)
             {
                 /* THE stale-settings bug. The launcher loads config.cfg once at

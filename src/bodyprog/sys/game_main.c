@@ -240,12 +240,6 @@ static VECTOR3 g_DebugCamPos;
 static VECTOR3 g_DebugCamLookAt;
 static q3_12 g_DebugCamAngleY = 0;
 static q3_12 g_DebugCamAngleX = 0; /* pitch/tilt: positive = look down, negative = look up */
-static VECTOR3 g_DebugCamSavedHarryPos; /* Harry's position when debug cam was enabled */
-static s32 g_DebugCamSavedHarryPosY;    /* Separate Y for collision restore */
-/* Which room the snapshot above belongs to. A snapshot is only valid for the
- * room it was taken in -- see Pc_FreeCam_Apply. */
-static s8  g_DebugCamSavedMapIdx  = -1;
-static s8  g_DebugCamSavedRoomIdx = -1;
 
 
 /* FPS eye position actually applied this frame; read by the L-key re-log so its
@@ -1301,14 +1295,18 @@ static int Kf_HoldRepeat(int cur, int prev, Uint32* pressMs, Uint32* lastMs)
 }
 
 /* ---- Free camera (Numpad * / quick options "Free camera") -------------
- * Mouse look + W/A/S/D, Space up, C down, Shift fast, Ctrl slow. Harry stays
- * frozen where he was (his pad input is swallowed while it is on, see the
- * pad-suppression block in MainLoop) so the keys fly the camera only. Shared
- * by the key and the quick options row, and applied on every early-return
- * path of DebugCamera_Update so it also works with debug keys off and holds
- * its view while the quick options / console are open. */
-#define FC_MOVE_SPEED  192  /* Q12 units per 60 fps frame */
-#define FC_VERT_SPEED  128
+ * Photo-mode style: mouse look, W/A/S/D move, E/Q up/down, wheel speed,
+ * Shift fast, Ctrl slow, Space steady, comma cruise, H hides the controls
+ * panel (pc_freecam_hud.c). Harry stays where he is (his pad input is
+ * swallowed while it is on, see the pad-suppression block in MainLoop). Moving
+ * him is not offered: chunk streaming, texture claims and the whole-map
+ * outdoor gate all key off his cell, so relocating him mid-flight dropped
+ * large parts of the town. Shared by the key and the quick options
+ * row, and applied on every early-return path of DebugCamera_Update so it also
+ * works with debug keys off and holds its view while the quick options /
+ * console are open. */
+#define FC_MOVE_SPEED  640  /* Q12 units per 60 fps frame at x1 (~9u/s) */
+#define FC_VERT_SPEED  384
 #define FC_MOUSE_YAW   6    /* Q12 angle units per mouse pixel */
 #define FC_MOUSE_PITCH 4
 /* Controller look tuning for the free camera; mirrors the TPS cam's
@@ -1317,15 +1315,27 @@ static int Kf_HoldRepeat(int cur, int prev, Uint32* pressMs, Uint32* lastMs)
 #define FC_STICK_YAW      40
 #define FC_STICK_PITCH    28
 #define FC_PITCH_MAX   900  /* ~79 degrees either way */
+/* Ease times (seconds) toward the wanted velocity / look rate. Free flight
+ * stays responsive; steady is long enough to hide hand jitter on a pan. */
+#define FC_EASE_MOVE   0.12f
+#define FC_EASE_STEADY 0.60f
+#define FC_EASE_LOOK   0.25f
+#define FC_STEADY_MUL  0.25f
+#define FC_SPEED_MIN   (1.0f / 32.0f)
+#define FC_SPEED_MAX   32.0f
 
-/* The saved position is only meaningful in the room it was taken in. */
-static int Pc_FreeCam_SnapshotValid(void)
-{
-    if (g_GameWork.gameState != GameState_InGame || !g_SavegamePtr)
-        return 0;
-    return g_SavegamePtr->mapIdx     == g_DebugCamSavedMapIdx &&
-           g_SavegamePtr->mapRoomIdx == g_DebugCamSavedRoomIdx;
-}
+/* Read by the controls panel (pc_freecam_hud.c). */
+int   g_PcFreeCamHudHidden = 0;
+int   g_PcFreeCamSteady    = 0;
+int   g_PcFreeCamCruise    = 0;
+float g_PcFreeCamSpeedMul  = 1.0f;
+
+static float         s_fcVel[3];      /* Q12 units per second */
+static float         s_fcCruiseVel[3];
+static float         s_fcYaw, s_fcPitch; /* fractional shadows of g_DebugCamAngleY/X */
+static float         s_fcLookVel[2];
+static float         s_fcTrackYaw, s_fcTrackPitch;
+static unsigned char s_fcKeyPrev[2];
 
 void Pc_FreeCam_Set(int on)
 {
@@ -1334,15 +1344,23 @@ void Pc_FreeCam_Set(int on)
         return;
     g_DebugCamEnabled = on;
     if (on) {
+        extern int  g_PsyX_WheelNotches;
+        extern void Pc_FreeCamHud_Preload(void);
         /* Start from the current camera so switching on is seamless. */
         vcGetNowCamPos(&g_DebugCamPos);
         g_DebugCamAngleY = g_SysWork.cameraAngleY;
         g_DebugCamAngleX = 0;
         g_DebugCamInited = 1;
-        g_DebugCamSavedHarryPos  = g_SysWork.playerWork.player.position;
-        g_DebugCamSavedHarryPosY = g_SysWork.playerWork.player.properties.player.groundHeight;
-        g_DebugCamSavedMapIdx    = g_SavegamePtr ? g_SavegamePtr->mapIdx     : -1;
-        g_DebugCamSavedRoomIdx   = g_SavegamePtr ? g_SavegamePtr->mapRoomIdx : -1;
+        s_fcYaw   = (float)(g_DebugCamAngleY & 0xFFF);
+        s_fcPitch = 0.0f;
+        memset(s_fcVel, 0, sizeof(s_fcVel));
+        memset(s_fcLookVel, 0, sizeof(s_fcLookVel));
+        /* Held keys must be released before they toggle anything. */
+        memset(s_fcKeyPrev, 1, sizeof(s_fcKeyPrev));
+        g_PcFreeCamCruise   = 0;
+        g_PcFreeCamSteady   = 0;
+        g_PsyX_WheelNotches = 0;
+        Pc_FreeCamHud_Preload();
         SDL_GetRelativeMouseState(NULL, NULL); /* drop travel accumulated before capture */
         /* Fog off by default. Outdoors the fog wall sits a few units past
          * Harry, so a camera that flies anywhere useful is already behind it
@@ -1350,41 +1368,66 @@ void Pc_FreeCam_Set(int on)
          * Numpad . turns it back on when the fog itself is what you want to
          * look at. */
         g_DebugFogDisabled = 1;
-        SH_DBG_ECHO("[FREECAM] on -- mouse look, W/A/S/D move, Space/C up/down, Shift fast, Ctrl slow");
+        SH_DBG_ECHO("[FREECAM] on -- controls panel bottom-left, H hides it");
     } else {
-        /* Only hand back a snapshot that still belongs to the room Harry is in
-         * (same test as Pc_FreeCam_Apply). Restoring another room's coordinates
-         * is what dropped him into a void. */
-        if (Pc_FreeCam_SnapshotValid())
-        {
-            g_SysWork.playerWork.player.position = g_DebugCamSavedHarryPos;
-            g_SysWork.playerWork.player.properties.player.groundHeight = g_DebugCamSavedHarryPosY;
-        }
         g_SysWork.playerWork.player.model.anim.flags |= AnimFlag_Visible;
         g_SysWork.playerWork.extra.model.anim.flags |= AnimFlag_Visible;
         SH_DBG_ECHO("[FREECAM] off");
     }
 }
 
+static int Pc_FreeCam_KeyEdge(const unsigned char* ks, int sc, int slot)
+{
+    int cur = ks[sc] != 0;
+    int hit = cur && !s_fcKeyPrev[slot];
+    s_fcKeyPrev[slot] = (unsigned char)cur;
+    return hit;
+}
+
 static void Pc_FreeCam_Input(void)
 {
+    extern int           g_PsyX_WheelNotches;
     const unsigned char* ks = g_sdlKeyboardState;
-    int   mdx = 0, mdy = 0;
+    int   mdx = 0, mdy = 0, moving = 0, i, notches;
     float ms  = g_PcConfig.mouseSensitivity;
-    s32   spd, vspd, sinY, cosY, fwd, dy;
+    float dt, dYaw, dPitch, speed, vspeed, k;
+    float yawR, pitchR, fwd[3], right[3], wish[3] = { 0.0f, 0.0f, 0.0f }, vert = 0.0f, target[3];
 
     if (!ks)
         return;
 
-    SDL_GetRelativeMouseState(&mdx, &mdy);
-    g_DebugCamAngleY = (g_DebugCamAngleY + (s32)(mdx * FC_MOUSE_YAW * ms)) & 0xFFF;
-    {
-        /* AngleX positive = looking down; mouse up (mdy < 0) looks up. */
-        s32 dp = (s32)(mdy * FC_MOUSE_PITCH * ms);
-        g_DebugCamAngleX += g_PcConfig.invertMouseY ? -dp : dp;
-        if (g_DebugCamAngleX >  FC_PITCH_MAX) g_DebugCamAngleX =  FC_PITCH_MAX;
-        if (g_DebugCamAngleX < -FC_PITCH_MAX) g_DebugCamAngleX = -FC_PITCH_MAX;
+    dt = (float)g_DeltaTime / 4096.0f;
+    if (dt < 0.0f) dt = 0.0f;
+    if (dt > 0.1f) dt = 0.1f;
+
+    if (Pc_FreeCam_KeyEdge(ks, SDL_SCANCODE_H, 0))
+        g_PcFreeCamHudHidden ^= 1;
+    if (Pc_FreeCam_KeyEdge(ks, SDL_SCANCODE_COMMA, 1)) {
+        g_PcFreeCamCruise ^= 1;
+        memcpy(s_fcCruiseVel, s_fcVel, sizeof(s_fcVel));
     }
+
+    /* Steady locks the travel direction where it was when Space went down, so
+     * a dolly stays on its line while the look pans. */
+    if (ks[SDL_SCANCODE_SPACE] && !g_PcFreeCamSteady) {
+        s_fcTrackYaw   = s_fcYaw;
+        s_fcTrackPitch = s_fcPitch;
+    }
+    g_PcFreeCamSteady = ks[SDL_SCANCODE_SPACE] != 0;
+
+    notches = g_PsyX_WheelNotches;
+    g_PsyX_WheelNotches = 0;
+    for (; notches > 0; notches--) g_PcFreeCamSpeedMul *= 1.25f;
+    for (; notches < 0; notches++) g_PcFreeCamSpeedMul /= 1.25f;
+    if (g_PcFreeCamSpeedMul < FC_SPEED_MIN) g_PcFreeCamSpeedMul = FC_SPEED_MIN;
+    if (g_PcFreeCamSpeedMul > FC_SPEED_MAX) g_PcFreeCamSpeedMul = FC_SPEED_MAX;
+    /* Snap near 1 so the panel can read x1.00 again after scrolling back. */
+    if (g_PcFreeCamSpeedMul > 0.99f && g_PcFreeCamSpeedMul < 1.01f) g_PcFreeCamSpeedMul = 1.0f;
+
+    SDL_GetRelativeMouseState(&mdx, &mdy);
+    dYaw   = (float)mdx * FC_MOUSE_YAW * ms;
+    /* AngleX positive = looking down; mouse up (mdy < 0) looks up. */
+    dPitch = (float)mdy * FC_MOUSE_PITCH * ms * (g_PcConfig.invertMouseY ? -1.0f : 1.0f);
 
     /* Controller look (right stick), parity with the alt-camera scheme in
      * Pc_TpsCamera_Apply: same deadzone, controller sensitivity, invert flag
@@ -1399,76 +1442,89 @@ static void Pc_FreeCam_Input(void)
         if (rx != 0 || ry != 0)
         {
             float cs = g_PcConfig.controllerSensitivity;
-            s32 dYaw   = TIMESTEP_SCALE_30_FPS(g_DeltaTime, (s32)(((rx * FC_STICK_YAW)   >> 7) * cs));
-            s32 dPitch = TIMESTEP_SCALE_30_FPS(g_DeltaTime, (s32)(((ry * FC_STICK_PITCH) >> 7) * cs));
-            g_DebugCamAngleY = (g_DebugCamAngleY + dYaw) & 0xFFF;
-            /* ry>0 = stick down = look down (AngleX positive), matching the
-             * mouse convention above; invert flag flips it. */
-            g_DebugCamAngleX += g_PcConfig.invertControllerY ? -dPitch : dPitch;
-            if (g_DebugCamAngleX >  FC_PITCH_MAX) g_DebugCamAngleX =  FC_PITCH_MAX;
-            if (g_DebugCamAngleX < -FC_PITCH_MAX) g_DebugCamAngleX = -FC_PITCH_MAX;
+            dYaw   += (float)TIMESTEP_SCALE_30_FPS(g_DeltaTime, (s32)(((rx * FC_STICK_YAW)   >> 7) * cs));
+            dPitch += (float)TIMESTEP_SCALE_30_FPS(g_DeltaTime, (s32)(((ry * FC_STICK_PITCH) >> 7) * cs)) *
+                      (g_PcConfig.invertControllerY ? -1.0f : 1.0f);
         }
     }
 
-    spd  = TIMESTEP_SCALE_60_FPS(g_DeltaTime, FC_MOVE_SPEED);
-    vspd = TIMESTEP_SCALE_60_FPS(g_DeltaTime, FC_VERT_SPEED);
-    if (ks[SDL_SCANCODE_LSHIFT] || ks[SDL_SCANCODE_RSHIFT]) { spd *= 3; vspd *= 3; }
-    if (ks[SDL_SCANCODE_LCTRL]) { spd >>= 2; vspd >>= 2; }
+    if (g_PcFreeCamSteady && dt > 0.0f) {
+        k = 1.0f - expf(-dt / FC_EASE_LOOK);
+        s_fcLookVel[0] += (dYaw   * FC_STEADY_MUL / dt - s_fcLookVel[0]) * k;
+        s_fcLookVel[1] += (dPitch * FC_STEADY_MUL / dt - s_fcLookVel[1]) * k;
+        dYaw   = s_fcLookVel[0] * dt;
+        dPitch = s_fcLookVel[1] * dt;
+    } else {
+        s_fcLookVel[0] = (dt > 0.0f) ? dYaw / dt : 0.0f;
+        s_fcLookVel[1] = (dt > 0.0f) ? dPitch / dt : 0.0f;
+    }
+    s_fcYaw += dYaw;
+    while (s_fcYaw >= 4096.0f) s_fcYaw -= 4096.0f;
+    while (s_fcYaw < 0.0f)     s_fcYaw += 4096.0f;
+    s_fcPitch += dPitch;
+    if (s_fcPitch >  FC_PITCH_MAX) s_fcPitch =  FC_PITCH_MAX;
+    if (s_fcPitch < -FC_PITCH_MAX) s_fcPitch = -FC_PITCH_MAX;
+    g_DebugCamAngleY = (s32)s_fcYaw & 0xFFF;
+    g_DebugCamAngleX = (s32)s_fcPitch;
+
+    speed = (float)FC_MOVE_SPEED * 60.0f * g_PcFreeCamSpeedMul;
+    if (ks[SDL_SCANCODE_LSHIFT] || ks[SDL_SCANCODE_RSHIFT]) speed *= 4.0f;
+    if (ks[SDL_SCANCODE_LCTRL]) speed *= 0.25f;
     /* R1 = fast (Shift), L1 = slow (Ctrl). */
-    if (g_Controller0 && (g_Controller0->heldBtnFlags & ControllerFlag_R1)) { spd *= 3; vspd *= 3; }
-    if (g_Controller0 && (g_Controller0->heldBtnFlags & ControllerFlag_L1)) { spd >>= 2; vspd >>= 2; }
+    if (g_Controller0 && (g_Controller0->heldBtnFlags & ControllerFlag_R1)) speed *= 4.0f;
+    if (g_Controller0 && (g_Controller0->heldBtnFlags & ControllerFlag_L1)) speed *= 0.25f;
+    if (g_PcFreeCamSteady) speed *= FC_STEADY_MUL;
+    vspeed = speed * ((float)FC_VERT_SPEED / (float)FC_MOVE_SPEED);
 
-    sinY = Math_Sin(g_DebugCamAngleY);
-    cosY = Math_Cos(g_DebugCamAngleY);
-    /* Fly along the view direction: forward carries the pitch too. */
-    fwd  = (s32)((s64)spd * Math_Cos(g_DebugCamAngleX) >> 12);
-    dy   = (s32)((s64)spd * Math_Sin(g_DebugCamAngleX) >> 12);
+    /* Fly along the view direction: forward carries the pitch too (+Y is down). */
+    yawR   = (g_PcFreeCamSteady ? s_fcTrackYaw   : s_fcYaw)   * (6.2831853f / 4096.0f);
+    pitchR = (g_PcFreeCamSteady ? s_fcTrackPitch : s_fcPitch) * (6.2831853f / 4096.0f);
+    fwd[0]   = sinf(yawR) * cosf(pitchR);
+    fwd[1]   = sinf(pitchR);
+    fwd[2]   = cosf(yawR) * cosf(pitchR);
+    right[0] = cosf(yawR);
+    right[1] = 0.0f;
+    right[2] = -sinf(yawR);
 
-    if (ks[SDL_SCANCODE_W]) {
-        g_DebugCamPos.vx += (s32)((s64)fwd * sinY >> 12);
-        g_DebugCamPos.vz += (s32)((s64)fwd * cosY >> 12);
-        g_DebugCamPos.vy += dy;
-    }
-    if (ks[SDL_SCANCODE_S]) {
-        g_DebugCamPos.vx -= (s32)((s64)fwd * sinY >> 12);
-        g_DebugCamPos.vz -= (s32)((s64)fwd * cosY >> 12);
-        g_DebugCamPos.vy -= dy;
-    }
-    if (ks[SDL_SCANCODE_A]) {
-        g_DebugCamPos.vx -= (s32)((s64)spd * cosY >> 12);
-        g_DebugCamPos.vz += (s32)((s64)spd * sinY >> 12);
-    }
-    if (ks[SDL_SCANCODE_D]) {
-        g_DebugCamPos.vx += (s32)((s64)spd * cosY >> 12);
-        g_DebugCamPos.vz -= (s32)((s64)spd * sinY >> 12);
-    }
-    if (ks[SDL_SCANCODE_SPACE]) g_DebugCamPos.vy -= vspd; /* PSX +Y is down */
-    if (ks[SDL_SCANCODE_C])     g_DebugCamPos.vy += vspd;
-
-    /* Controller move (left stick) + R2/L2 vertical. Left stick maps to the
-     * WASD plane: up = forward along the view (pitch carried, like W), right =
-     * strafe (like D); scaled by deflection so a light push creeps. */
-    if (g_Controller0)
     {
-        s32 lx = (s32)g_Controller0->analogController.leftX - 128;
-        s32 ly = (s32)g_Controller0->analogController.leftY - 128;
-        if (lx > -FC_STICK_DEADZONE && lx < FC_STICK_DEADZONE) lx = 0;
-        if (ly > -FC_STICK_DEADZONE && ly < FC_STICK_DEADZONE) ly = 0;
-        if (lx != 0 || ly != 0)
+        float f = (float)((ks[SDL_SCANCODE_W] != 0) - (ks[SDL_SCANCODE_S] != 0));
+        float r = (float)((ks[SDL_SCANCODE_D] != 0) - (ks[SDL_SCANCODE_A] != 0));
+        vert = (float)(((ks[SDL_SCANCODE_Q] || ks[SDL_SCANCODE_C]) != 0) - (ks[SDL_SCANCODE_E] != 0));
+
+        /* Controller move (left stick) + R2/L2 vertical, scaled by deflection
+         * so a light push creeps. Stick up (ly<0) = forward. */
+        if (g_Controller0)
         {
-            /* fwd/dy carry the pitch (set above from spd); scale by stick
-             * deflection over 128. Stick up (ly<0) = forward. */
-            s32 fwdAmt = (s32)((s64)fwd  * -ly / 128);
-            s32 vyAmt  = (s32)((s64)dy   * -ly / 128);
-            s32 strAmt = (s32)((s64)spd  *  lx / 128);
-            g_DebugCamPos.vx += (s32)((s64)fwdAmt * sinY >> 12) + (s32)((s64)strAmt * cosY >> 12);
-            g_DebugCamPos.vz += (s32)((s64)fwdAmt * cosY >> 12) - (s32)((s64)strAmt * sinY >> 12);
-            g_DebugCamPos.vy += vyAmt;
+            s32 lx = (s32)g_Controller0->analogController.leftX - 128;
+            s32 ly = (s32)g_Controller0->analogController.leftY - 128;
+            if (lx > -FC_STICK_DEADZONE && lx < FC_STICK_DEADZONE) lx = 0;
+            if (ly > -FC_STICK_DEADZONE && ly < FC_STICK_DEADZONE) ly = 0;
+            f += (float)-ly / 128.0f;
+            r += (float)lx / 128.0f;
+            if (g_Controller0->heldBtnFlags & ControllerFlag_R2) vert -= 1.0f;
+            if (g_Controller0->heldBtnFlags & ControllerFlag_L2) vert += 1.0f;
         }
-        /* R2 = up (Space), L2 = down (C). */
-        if (g_Controller0->heldBtnFlags & ControllerFlag_R2) g_DebugCamPos.vy -= vspd;
-        if (g_Controller0->heldBtnFlags & ControllerFlag_L2) g_DebugCamPos.vy += vspd;
+        for (i = 0; i < 3; i++)
+            wish[i] = fwd[i] * f + right[i] * r;
+        moving = (f != 0.0f || r != 0.0f || vert != 0.0f);
     }
+    for (i = 0; i < 3; i++)
+        target[i] = wish[i] * speed;
+    target[1] += vert * vspeed;
+
+    /* Cruise holds the last velocity; any move input re-aims it. */
+    if (g_PcFreeCamCruise) {
+        if (moving)
+            memcpy(s_fcCruiseVel, target, sizeof(target));
+        memcpy(target, s_fcCruiseVel, sizeof(target));
+    }
+
+    k = (dt > 0.0f) ? 1.0f - expf(-dt / (g_PcFreeCamSteady ? FC_EASE_STEADY : FC_EASE_MOVE)) : 0.0f;
+    for (i = 0; i < 3; i++)
+        s_fcVel[i] += (target[i] - s_fcVel[i]) * k;
+    g_DebugCamPos.vx += (s32)(s_fcVel[0] * dt);
+    g_DebugCamPos.vy += (s32)(s_fcVel[1] * dt);
+    g_DebugCamPos.vz += (s32)(s_fcVel[2] * dt);
 }
 
 static void Pc_FreeCam_Apply(void)
@@ -1476,29 +1532,6 @@ static void Pc_FreeCam_Apply(void)
     s32 sinY    = Math_Sin(g_DebugCamAngleY);
     s32 cosY    = Math_Cos(g_DebugCamAngleY);
     s32 forward = (s32)((s64)20480 * Math_Cos(g_DebugCamAngleX) >> 12);
-
-    /* Harry stays where he was when the camera came on: the world streams
-     * around his position and camera spots are marked relative to him.
-     *
-     * Only inside the room the snapshot came from, though. A room transition
-     * (or any scripted teleport) puts him somewhere new, and stamping the old
-     * room's coordinates back over that leaves him outside the new geometry --
-     * the "free cam teleports Harry to a void". Re-snapshot instead, so the pin
-     * follows the world rather than fighting it. */
-    if (g_GameWork.gameState == GameState_InGame)
-    {
-        if (Pc_FreeCam_SnapshotValid())
-        {
-            g_SysWork.playerWork.player.position = g_DebugCamSavedHarryPos;
-        }
-        else if (g_SavegamePtr)
-        {
-            g_DebugCamSavedHarryPos  = g_SysWork.playerWork.player.position;
-            g_DebugCamSavedHarryPosY = g_SysWork.playerWork.player.properties.player.groundHeight;
-            g_DebugCamSavedMapIdx    = g_SavegamePtr->mapIdx;
-            g_DebugCamSavedRoomIdx   = g_SavegamePtr->mapRoomIdx;
-        }
-    }
 
     g_DebugCamLookAt.vx = g_DebugCamPos.vx + (s32)((s64)forward * sinY >> 12);
     g_DebugCamLookAt.vy = g_DebugCamPos.vy + (s32)((s64)20480 * Math_Sin(g_DebugCamAngleX) >> 12);
@@ -2442,6 +2475,14 @@ void MainLoop(void) // 0x80032EE0
         /* Free camera: Harry is frozen in place and W/A/S/D fly the camera
          * (the alt-cam scheme walks with the same keys), so none of his pad
          * input may reach the game. */
+        /* A save load or map load ends the free camera. DebugCamera_Update only
+         * runs in the world update, so its own off-path never sees these
+         * states, and the camera (with Harry riding it) survived the reload. */
+        if (g_DebugCamEnabled &&
+            (g_GameWork.gameState == GameState_MainMenu || g_GameWork.gameState == GameState_LoadSavegameScreen ||
+             g_GameWork.gameState == GameState_MainLoadScreen || g_GameWork.gameState == GameState_AutoLoadSavegame ||
+             g_GameWork.gameState == GameState_LoadMapScreen))
+            Pc_FreeCam_Set(0);
         {
             extern int g_PcQuickOptionsActive;
             if (g_DebugCamEnabled && !g_PcQuickOptionsActive) {
@@ -2684,26 +2725,18 @@ void MainLoop(void) // 0x80032EE0
 #endif
 
 #ifdef SH_PC_PORT
-        /* Flashlight shadow master gate: the light-POV depth pre-pass is a
-         * live-gameplay-only effect. Running it on menu / room-load-fade /
-         * transition frames corrupts unrelated rendering (white flash between
-         * rooms, on inventory/map open-close, and on first load; Harry's face
-         * dropping out on the options screen). Arm it only in settled gameplay:
-         * the in-game state, the plain gameplay sub-state (not paused/menu/map),
-         * and no screen fade in progress. Recomputed every frame here, before the
-         * OT is drawn; reset paths (menus, fades) simply leave it 0. */
+        /* Flashlight shadow master gate: the light-POV depth pre-pass runs on
+         * every frame the world was submitted this tick, and only those. The
+         * old sysState/fade test dropped shadows on live-rendered frames that
+         * are not plain gameplay (examine, the item-pickup tick, door fades,
+         * menu transition ticks), and the whole scene popped brighter there.
+         * The white flash that test was written against was the pass leaving
+         * blending off for the subtractive fade tile; PsyCross re-arms blend
+         * state after the pass now, and a batch without casters no longer runs
+         * the pass at all, so the positive "world drawn" signal is enough. */
         {
             extern int g_PsyX_ShadowsAllowed;
-            /* GamePaused counts as settled too: the pause screen keeps
-             * rendering the live world behind its menu, so dropping the depth
-             * pre-pass there just made every flashlight shadow pop out of the
-             * scene the moment the player paused. It is a stable state with no
-             * fade -- none of the transition/menu hazards this gate exists for
-             * (room loads, map/inventory opens, the options screen) apply. */
-            g_PsyX_ShadowsAllowed = (g_GameWork.gameState == GameState_InGame &&
-                                     (g_SysWork.sysState == SysState_Gameplay ||
-                                      g_SysWork.sysState == SysState_GamePaused) &&
-                                     ScreenFade_IsNone()) ? 1 : 0;
+            g_PsyX_ShadowsAllowed = g_PcWorldDrawnThisFrame;
         }
 
         /* Release the freeze-frame the instant the world item-pickup ends
@@ -2843,6 +2876,14 @@ void MainLoop(void) // 0x80032EE0
         XaPlayer_Update();
         Pc_MsgVoice_Update();
         Pc_DarkHarry_Update(); /* easter egg, pc_dark_harry.c */
+        Pc_FogFloorFrameEnd();
+        if (g_PcConfig.fpsDisplay)
+        {
+            /* The counter's font is read here, never from the draw hook
+             * (pc_ra_toast.c explains why); a no-op after the first call. */
+            extern void Pc_FreeCamHud_Preload(void);
+            Pc_FreeCamHud_Preload();
+        }
 #endif
 
 #ifdef SH_PC_PORT
@@ -3831,30 +3872,6 @@ void MainLoop(void) // 0x80032EE0
                 g_GameWork.background2dColor.r = PC_WorldEnvWork.fog.color.r;
                 g_GameWork.background2dColor.g = PC_WorldEnvWork.fog.color.g;
                 g_GameWork.background2dColor.b = PC_WorldEnvWork.fog.color.b;
-                /* [GREYFLASH] v2. v1 logged EVERY fog-clear frame and burned its
-                 * cap on normal frames in seconds. The flash = a fog-coloured
-                 * clear presented while the world draws (almost) nothing, so
-                 * gate on the renderer's per-frame vertex tally instead: a real
-                 * world frame parses thousands of vertices, a flash frame
-                 * nearly none (one frame of lag -- the tally describes the
-                 * previous frame -- fine for detection). Re-arms over time so a
-                 * long session keeps capturing. */
-                {
-                    extern int g_freezeFrameValid, g_PsxLastFrameVerts;
-                    static s32 s_gfLogs = 0;
-                    static u32 s_gfWindowMs = 0;
-                    u32 nowMs = SDL_GetTicks();
-                    if (nowMs - s_gfWindowMs > 10000) { s_gfWindowMs = nowMs; s_gfLogs = 0; }
-                    if (g_PsxLastFrameVerts < 900 && s_gfLogs < 8) {
-                        s_gfLogs++;
-                        SH_DBG("[GREYFLASH] emptyframe verts=%d sys=%d worldDrawn=%d present=%d freezeValid=%d bg2dHeld=%d fog=(%d,%d,%d)",
-                               g_PsxLastFrameVerts,
-                               (int)g_SysWork.sysState, (int)g_PcWorldDrawnThisFrame,
-                               (int)g_PsxPresentLastFrame, (int)g_freezeFrameValid, (int)bg2dHeld,
-                               (int)PC_WorldEnvWork.fog.color.r, (int)PC_WorldEnvWork.fog.color.g,
-                               (int)PC_WorldEnvWork.fog.color.b);
-                    }
-                }
             } else {
                 g_GameWork.background2dColor.r = 0;
                 g_GameWork.background2dColor.g = 0;
@@ -3863,70 +3880,6 @@ void MainLoop(void) // 0x80032EE0
             g_PsyX_FogColor[0] = PC_WorldEnvWork.fog.color.r / 255.0f;
             g_PsyX_FogColor[1] = PC_WorldEnvWork.fog.color.g / 255.0f;
             g_PsyX_FogColor[2] = PC_WorldEnvWork.fog.color.b / 255.0f;
-        }
-        /* [ENVDIAG] -- the whole-scene "lighter and greyer for a frame" flicker.
-         *
-         * Two instruments aimed at GATES (the flashlight dim, the shadow pass)
-         * both came back with no transitions at all while the flicker was
-         * happening, which rules those out and says the cause is not a gate. So
-         * this one is aimed at the OUTPUT instead: every value that can change
-         * how bright the scene renders, reported whenever ANY of them moves.
-         * Whatever makes the frame greyer has to move one of these -- or none
-         * of them, which is itself the answer (it would mean the env is stable
-         * and the cause is geometry//texture side, not lighting).
-         *
-         * fogRamp is sampled rather than hashed in full: it is derived from
-         * near/far, so a handful of points across it moves whenever it does. */
-        {
-            static u32 s_envKey  = 0xFFFFFFFFu;
-            static s32 s_envLogs = 0;
-
-            u32 key = (u32)PC_WorldEnvWork.fog.nearDistance * 2654435761u
-                    ^ (u32)PC_WorldEnvWork.fog.farDistance * 2246822519u
-                    ^ (u32)PC_WorldEnvWork.field_20 * 3266489917u
-                    ^ (u32)PC_WorldEnvWork.screenBrightness * 668265263u
-                    ^ (u32)PC_WorldEnvWork.field_2C.m[0][0] * 374761393u
-                    ^ (u32)(PC_WorldEnvWork.fog.color.r
-                            | (PC_WorldEnvWork.fog.color.g << 8)
-                            | (PC_WorldEnvWork.fog.color.b << 16))
-                    ^ (u32)(PC_WorldEnvWork.field_0
-                            | (PC_WorldEnvWork.isFogEnabled << 1)
-                            | (PC_WorldEnvWork.field_2 << 2)
-                            | (PC_WorldEnvWork.field_3 << 8))
-                    ^ (u32)(PC_WorldEnvWork.worldTintColor.r
-                            | (PC_WorldEnvWork.worldTintColor.g << 8)
-                            | (PC_WorldEnvWork.worldTintColor.b << 16)) * 2135587861u
-                    ^ (u32)(PC_WorldEnvWork.fogRamp[0]
-                            | (PC_WorldEnvWork.fogRamp[32] << 8)
-                            | (PC_WorldEnvWork.fogRamp[64] << 16)
-                            | (PC_WorldEnvWork.fogRamp[127] << 24));
-
-            if (key != s_envKey && s_envLogs < 100 && g_GameWork.gameState == 11)
-            {
-                s_envKey = key;
-                s_envLogs++;
-                SH_DBG("[ENVDIAG] fog=%d near=%d far=%d col=(%d,%d,%d) lgt=%d bri=%d "
-                       "f0=%d f2=%d f3=%d mat00=%d tint=(%d,%d,%d) ramp=%d/%d/%d/%d",
-                       (int)PC_WorldEnvWork.isFogEnabled,
-                       (int)PC_WorldEnvWork.fog.nearDistance,
-                       (int)PC_WorldEnvWork.fog.farDistance,
-                       (int)PC_WorldEnvWork.fog.color.r,
-                       (int)PC_WorldEnvWork.fog.color.g,
-                       (int)PC_WorldEnvWork.fog.color.b,
-                       (int)PC_WorldEnvWork.field_20,
-                       (int)PC_WorldEnvWork.screenBrightness,
-                       (int)PC_WorldEnvWork.field_0,
-                       (int)PC_WorldEnvWork.field_2,
-                       (int)PC_WorldEnvWork.field_3,
-                       (int)PC_WorldEnvWork.field_2C.m[0][0],
-                       (int)PC_WorldEnvWork.worldTintColor.r,
-                       (int)PC_WorldEnvWork.worldTintColor.g,
-                       (int)PC_WorldEnvWork.worldTintColor.b,
-                       (int)PC_WorldEnvWork.fogRamp[0],
-                       (int)PC_WorldEnvWork.fogRamp[32],
-                       (int)PC_WorldEnvWork.fogRamp[64],
-                       (int)PC_WorldEnvWork.fogRamp[127]);
-            }
         }
 #endif
         ML_TRACE("GsSortClear");
@@ -3984,7 +3937,11 @@ void MainLoop(void) // 0x80032EE0
                  * valid chain pointers, otherwise the truncate-on-bad-
                  * cur path here erases the picked-up item. */
                 uintptr_t subLo = 0, subHi = 0;
+                uintptr_t farLo = 0, farHi = 0;
+                extern void Pc_FarOt_GetBounds(uintptr_t* lo, uintptr_t* hi);
                 GsSortOt_GetSubrootBounds(&subLo, &subHi);
+                /* Whole-map far list nodes, spliced into the last bucket. */
+                Pc_FarOt_GetBounds(&farLo, &farHi);
                 /* CRITICAL: validate `cur` BEFORE any field access — including
                  * the loop condition's isendprim(cur), which reads cur->addr
                  * (a 64-bit pointer load). If ot0->tag itself was corrupted
@@ -4022,7 +3979,8 @@ void MainLoop(void) // 0x80032EE0
                     uintptr_t curAddr = (uintptr_t)cur;
                     int curOk = ((curAddr >= pktLo && curAddr < pktHi) ||
                                  (curAddr >= otLo  && curAddr < otHi)  ||
-                                 (subLo && curAddr >= subLo && curAddr < subHi));
+                                 (subLo && curAddr >= subLo && curAddr < subHi) ||
+                                 (curAddr >= farLo && curAddr < farHi));
                     if (pmapTrace && w2 < 200) {
                         u8 dbgCode = curOk ? ((P_TAG*)cur)->code : 0xFF;
                         int dbgLen = curOk ? getlen(cur) : -1;
@@ -4353,16 +4311,6 @@ void MainLoop(void) // 0x80032EE0
          * frozen pause / "no map" image (which used to ghost the live console against the
          * frozen copy when the console was already open before pausing). Not drawn here. */
         ML_TRACE("PsyX_EndScene");
-        /* [GREYFRAME] game-side context for the renderer's flash detector. */
-        {
-            extern int g_PsxGreyTag[6];
-            g_PsxGreyTag[0] = g_GameWork.gameState;
-            g_PsxGreyTag[1] = g_SysWork.sysState;
-            g_PsxGreyTag[2] = g_VBlanks;
-            g_PsxGreyTag[3] = g_PcWorldDrawnThisFrame;
-            g_PsxGreyTag[4] = g_DeltaTime;
-            g_PsxGreyTag[5] = g_PsxPresentLastFrame;
-        }
         PsyX_EndScene();
         /* Demand-driven texture-pack composes (pc_port/src/texpack_lazy.c). Runs
          * HERE, after the OT submit and after the swap inside PsyX_EndScene,

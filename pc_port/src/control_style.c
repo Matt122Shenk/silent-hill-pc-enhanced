@@ -201,6 +201,7 @@ void Pc_ControlStyleUpdate(void)
     static int          prevPad  = 0;
 
     extern int g_PcConsoleInputActive;
+    extern int Pc_ConsoleIsOpen(void);
     extern int g_PcQuickOptionsActive;
     extern int g_DebugCamEnabled;
 
@@ -229,7 +230,7 @@ void Pc_ControlStyleUpdate(void)
 
     inGameplay = (g_GameWork.gameState == GameState_InGame &&
                   g_SysWork.sysState   == SysState_Gameplay &&
-                  !g_PcConsoleInputActive && !g_PcQuickOptionsActive);
+                  !Pc_ConsoleIsOpen() && !g_PcQuickOptionsActive);
 
     keys   = SDL_GetKeyboardState(NULL);
     {

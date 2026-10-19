@@ -537,6 +537,18 @@ int Pc_MouseCursor_MenuRowHover(int baseY, int stepY, int count, unsigned int vi
 static int Mc_HiddenForPad(void)
 {
     extern int g_PsyX_PadInputLast;
+    extern int Pc_Touch_UsedRecently(void);
+
+    /* On the glass this cursor IS the pointer -- a finger drags it (see the
+     * touch pointer block above). PsyCross clears PadInputLast on mouse use
+     * but deliberately skips SDL's touch-synthesized mouse events, so one
+     * press on a Bluetooth pad would hide the finger cursor for the rest of
+     * the run, with no mouse on a phone able to bring it back. Touch within
+     * the last three seconds therefore owns the picture; stop touching and a
+     * pad hides it again, exactly as a pad does beside a desktop mouse. */
+    if (Pc_Touch_UsedRecently() || Pc_MouseCursor_TouchDriving())
+        return 0;
+
     return g_PsyX_PadInputLast;
 }
 

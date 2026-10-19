@@ -165,14 +165,38 @@ static s_TouchFinger s_Fingers[TC_MAX_FINGERS];
  * went down (it runs on the thread that posts events, hence atomics). */
 #define TC_DOWN_IDS 32
 static SDL_atomic_t s_DownMs[TC_DOWN_IDS];
+static SDL_atomic_t s_DownTag[TC_DOWN_IDS];
 /* A contact seen in an earlier poll is at least one frame old. Anything less
  * than this between its start and the id's latest down is the same touch,
  * timestamped either side of the poll that created it. */
 #define TC_REUSE_MS 4
 
+/* A slot and a tag from the WHOLE id, not its low bits. Android numbers its
+ * pointers 0, 1, 2..., but iOS sets fingerId to the UITouch pointer
+ * (SDL_uikitview.m), and an allocator pointer is 16-byte aligned: under
+ * "id % TC_DOWN_IDS" every finger on the glass landed in slot 0 or slot 16,
+ * so the second thumb's down stamped the first thumb's slot and retired a
+ * contact still being dragged. The tag is kept alongside so a slot holding a
+ * different finger's time reads as no record at all. */
+static unsigned Tc_DownTag(long long fingerId)
+{
+    unsigned long long k = (unsigned long long)fingerId;
+
+    k ^= k >> 33;
+    k *= 0xff51afd7ed558ccdULL;
+    k ^= k >> 29;
+    return (unsigned)(k ^ (k >> 32));
+}
+
 void Pc_Touch_NoteFingerDown(long long fingerId, unsigned ms)
 {
-    SDL_AtomicSet(&s_DownMs[(unsigned)fingerId % TC_DOWN_IDS], (int)ms);
+    const unsigned tag = Tc_DownTag(fingerId);
+
+    /* Time before tag: a reader that catches the pair half-written sees the
+     * slot's previous time, which is older than its own start and so reads as
+     * the same touch -- never as a fresh down that would retire it. */
+    SDL_AtomicSet(&s_DownMs[tag % TC_DOWN_IDS], (int)ms);
+    SDL_AtomicSet(&s_DownTag[tag % TC_DOWN_IDS], (int)tag);
 }
 
 /* Built state, read by Pc_Touch_GetPad and the draw. */
@@ -1221,12 +1245,16 @@ static int Tc_StillDown(const s_TouchFinger* t, int winW, int winH)
         SDL_Finger* f = SDL_GetTouchFinger(t->dev, i);
         float       fx, fy;
         Uint32      downMs;
+        unsigned    tag;
 
         if (f == NULL || f->id != t->id)
             continue;
         if (!PsyX_MapWindowToViewport((int)(f->x * (float)winW), (int)(f->y * (float)winH), &fx, &fy))
             return 0;
-        downMs = (Uint32)SDL_AtomicGet(&s_DownMs[(unsigned)t->id % TC_DOWN_IDS]);
+        tag = Tc_DownTag(t->id);
+        if ((unsigned)SDL_AtomicGet(&s_DownTag[tag % TC_DOWN_IDS]) != tag)
+            return 1; /* no down recorded for this id: still the same touch */
+        downMs = (Uint32)SDL_AtomicGet(&s_DownMs[tag % TC_DOWN_IDS]);
         return (Sint32)(downMs - t->startMs) <= TC_REUSE_MS;
     }
     return 0;

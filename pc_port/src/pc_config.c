@@ -31,7 +31,11 @@ s_PcConfig g_PcConfig = {
     .fpsCap         = 30,
     .weatherSimHz      = 60,   /* per-frame weather sim; 30 = the console's cadence */
     .cutsceneLineGapMs = 300,
+#ifdef SH_XBOX_PORT
+    .darkHarry         = 0,   /* off on Xbox, and not on its Options pages; dark_harry = 1 in the cfg still enables it */
+#else
     .darkHarry         = 1,   /* on by default for now */
+#endif
     .darkHarryAfkSec   = 300, /* five minutes */
     .darkHarryDistance = 14,
     .darkHarryX        = 0,   /* unset: see dark_harry_x */

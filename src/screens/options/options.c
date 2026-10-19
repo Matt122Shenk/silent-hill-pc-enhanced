@@ -396,7 +396,6 @@ static const s_PcOpt PCOPT_X4[] = {
     { "Weather_Rate",    &g_PcConfig.weatherSimHz,      "weather_sim_hz",      VAL_WHZ,     2, LBL_WHZ,     NULL,            1, PCK_INT      },
     { "Attract_Demos",   &g_PcConfig.attractDemos,      "attract_demos",       VAL_ONOFF,   2, LBL_ONOFF,   NULL,            1, PCK_INT      },
     { "Low_HP_Glow",     &g_PcConfig.lowHealthGlow,     "low_health_glow",     VAL_ONOFF,   2, LBL_ONOFF,   NULL,            1, PCK_INT      },
-    { "Dark_Harry",      &g_PcConfig.darkHarry,         "dark_harry",          VAL_ONOFF,   2, LBL_ONOFF,   NULL,            1, PCK_INT      },
     { "FPS_Display",     &g_PcConfig.fpsDisplay,        "fps_display",         VAL_FPSDISP_X, 5, LBL_FPSDISP_X, NULL,        1, PCK_INT      },
     { "Prev_Page",       NULL,                          NULL,                  NULL,        0, NULL,        NULL,            0, PCK_PREV     },
     { "Next_Page",       NULL,                          NULL,                  NULL,        0, NULL,        NULL,            0, PCK_NEXT     },

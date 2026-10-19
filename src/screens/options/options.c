@@ -368,13 +368,22 @@ static const s_PcOpt PCOPT_X2[] = {
     { "Back",            NULL,                          NULL,                  NULL,        0, NULL,        NULL,            0, PCK_BACK     },
 };
 
-/* Page 3: asset replacement. Every row here is inert unless the player has
- * actually put files on the drive, so the defaults cost nothing. */
+/* Page 3: asset replacement (every row inert unless the player has put files
+ * on the drive) and the PC's extra actions, each bindable to a spare button
+ * and unbound by default (xbox_extra_actions.c). The values are XB_PHYS_*;
+ * picking a button another action holds frees it there. */
+static const int         VAL_XBBIND[] = { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9 };
+static const char* const LBL_XBBIND[] = { "None", "L3", "R3", "White", "Black", "Back",
+                                          "D-Up", "D-Right", "D-Down", "D-Left" };
 static const s_PcOpt PCOPT_X3[] = {
     { "Character",       NULL,                          NULL,                  NULL,        0, NULL,        NULL,            0, PCK_PLAYAS   },
     { "Character_Switch_On_L3", &g_PcConfig.playAsL3,   "character_switch_l3", VAL_ONOFF,   2, LBL_ONOFF,   NULL,            1, PCK_INT      },
     { "Asset_Overrides", &g_PcConfig.allowLooseFiles,   "allow_loose_files",   VAL_ONOFF,   2, LBL_ONOFF,   NULL,            1, PCK_INT      },
     { "Hi_Res_Textures", &g_PcConfig.hiResTextures,     "hires_textures",      VAL_ONOFF,   2, LBL_ONOFF,   NULL,            1, PCK_INT      },
+    { "Quick_Heal",      &g_PcConfig.xbBindQuickHeal,   "xb_bind_quick_heal",  VAL_XBBIND, 10, LBL_XBBIND,  NULL,            1, PCK_INT      },
+    { "Cycle_Weapon",    &g_PcConfig.xbBindCycleWeapon, "xb_bind_cycle_weapon",VAL_XBBIND, 10, LBL_XBBIND,  NULL,            1, PCK_INT      },
+    { "Reload",          &g_PcConfig.xbBindReload,      "xb_bind_reload",      VAL_XBBIND, 10, LBL_XBBIND,  NULL,            1, PCK_INT      },
+    { "Quick_Turn",      &g_PcConfig.xbBindQuickTurn,   "xb_bind_quick_turn",  VAL_XBBIND, 10, LBL_XBBIND,  NULL,            1, PCK_INT      },
     { "Prev_Page",       NULL,                          NULL,                  NULL,        0, NULL,        NULL,            0, PCK_PREV     },
     { "Next_Page",       NULL,                          NULL,                  NULL,        0, NULL,        NULL,            0, PCK_NEXT     },
     { "Back",            NULL,                          NULL,                  NULL,        0, NULL,        NULL,            0, PCK_BACK     },
@@ -4599,7 +4608,7 @@ void Options_ControllerMenu_Control(void) // 0x801E69BC
     e_InputAction                           actionIdx;
     static s_ControllerMenu_SelectedEntries selectedEntries;
 
-#ifdef SH_PC_PORT
+#if defined(SH_PC_PORT) && !defined(SH_XBOX_PORT)
     /* PC: this screen is the in-game controls panel (pc_bind_panel.c), a GL
      * overlay over the PSX layout. It opens once per visit, and the screen
      * leaves the way EXIT does when the panel closes. The PSX actions pane
@@ -4767,7 +4776,7 @@ void Options_ControllerMenu_Control(void) // 0x801E69BC
             // Set binding preset.
             if (g_Controller0->clickedBtnFlags & g_GameWorkPtr->config.controllerConfig.enter)
             {
-#ifndef SH_PC_PORT
+#if !defined(SH_PC_PORT) || defined(SH_XBOX_PORT)
                 SD_Call(Sfx_MenuConfirm);
                 Settings_RestoreControlDefaults(g_GameWork.gameStateSteps[1] - 1);
 #endif
@@ -5087,7 +5096,7 @@ void Options_ControllerMenu_EntriesDraw(bool isOnRightPane, s32 presetsEntryIdx,
     /** @brief Controller menu entry strings for the presets pane on the left. */
     static const char* CONTROLLER_MENU_PRESETS_PANE_ENTRY_STRINGS[] = {
         "EXIT",
-#ifdef SH_PC_PORT
+#if defined(SH_PC_PORT) && !defined(SH_XBOX_PORT)
         "USER",
 #else
         "TYPE_1",
@@ -5158,7 +5167,7 @@ void Options_ControllerMenu_EntriesDraw(bool isOnRightPane, s32 presetsEntryIdx,
             highlightY0 = strYPos - 113;
         }
 
-#ifdef SH_PC_PORT
+#if defined(SH_PC_PORT) && !defined(SH_XBOX_PORT)
         /* Status column: what the launcher actually bound this action to. The
          * screen is read-only now, so it reports rather than edits. Only the
          * lowest set bit is shown -- an action mapped to several PSX buttons

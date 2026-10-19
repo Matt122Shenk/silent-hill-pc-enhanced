@@ -23,6 +23,7 @@
 #include <hal/xbox.h>   /* XLaunchXBE / XReboot for the soft reset */
 #include "sh_log.h"
 #include "pc_config.h"   /* bw_quick_save: black/white become quick save/load */
+#include "xbox_extra_actions.h"
 
 static unsigned char* s_padBuf  = 0;
 static xid_dev_t*     s_xid      = 0;
@@ -203,15 +204,19 @@ void Pad_Poll(void)
     if (s_xid && s_haveReport) {
         unsigned short xb  = s_report.dButtons;
         unsigned short psx = 0xFFFF;
+        /* Buttons bound to an extra action (xbox_extra_actions.c) send only
+         * that action during gameplay, not their PSX button as well. */
+        unsigned       mute = g_XbExtraMute;
         #define PRESS(bit) (psx &= (unsigned short)~(1u << (bit)))
-        if (xb & (1u << 0)) PRESS(4);   /* DPad Up    -> Up    */
-        if (xb & (1u << 1)) PRESS(6);   /* DPad Down  -> Down  */
-        if (xb & (1u << 2)) PRESS(7);   /* DPad Left  -> Left  */
-        if (xb & (1u << 3)) PRESS(5);   /* DPad Right -> Right */
+        #define LIVE(b)    (!(mute & (1u << (b))))
+        if ((xb & (1u << 0)) && LIVE(XB_PHYS_UP))    PRESS(4);   /* DPad Up    -> Up    */
+        if ((xb & (1u << 1)) && LIVE(XB_PHYS_DOWN))  PRESS(6);   /* DPad Down  -> Down  */
+        if ((xb & (1u << 2)) && LIVE(XB_PHYS_LEFT))  PRESS(7);   /* DPad Left  -> Left  */
+        if ((xb & (1u << 3)) && LIVE(XB_PHYS_RIGHT)) PRESS(5);   /* DPad Right -> Right */
         if (xb & (1u << 4)) PRESS(3);   /* Start      -> Start */
-        if (xb & (1u << 5)) PRESS(0);   /* Back       -> Select*/
-        if (xb & (1u << 6)) PRESS(1);   /* L3         -> L3    */
-        if (xb & (1u << 7)) PRESS(2);   /* R3         -> R3    */
+        if ((xb & (1u << 5)) && LIVE(XB_PHYS_BACK))  PRESS(0);   /* Back       -> Select*/
+        if ((xb & (1u << 6)) && LIVE(XB_PHYS_L3))    PRESS(1);   /* L3         -> L3    */
+        if ((xb & (1u << 7)) && LIVE(XB_PHYS_R3))    PRESS(2);   /* R3         -> R3    */
         if (s_report.a     > 0x20) PRESS(14);  /* A     -> Cross    */
         if (s_report.b     > 0x20) PRESS(13);  /* B     -> Circle   */
         if (s_report.x     > 0x20) PRESS(15);  /* X     -> Square   */
@@ -221,9 +226,10 @@ void Pad_Poll(void)
          * (quicksave_xbox.c) and must STOP emitting L1/R1, or every quick save
          * would sidestep at the same time. */
         if (!g_PcConfig.bwQuickSave) {
-            if (s_report.white > 0x20) PRESS(10);  /* White -> L1       */
-            if (s_report.black > 0x20) PRESS(11);  /* Black -> R1       */
+            if (s_report.white > 0x20 && LIVE(XB_PHYS_WHITE)) PRESS(10);  /* White -> L1 */
+            if (s_report.black > 0x20 && LIVE(XB_PHYS_BLACK)) PRESS(11);  /* Black -> R1 */
         }
+        #undef LIVE
         /* STANDARD (modern shooter) binds while a NON-CLASSIC camera is active:
          * hold LT to aim, press RT to fire. A stays Cross, so RT and A both fire
          * when aiming and both "use" when not — the game only ever tests Cross.
@@ -329,6 +335,29 @@ void Pad_Poll(void)
     } else {
         Pad_FillIdle(s_padBuf);
     }
+}
+
+/* The physical buttons an extra action can be bound to, as a mask of
+ * 1 << XB_PHYS_*, read straight from the report (before the PSX mapping, so a
+ * muted button still reads). */
+unsigned Pad_XboxPhysButtons(void)
+{
+    unsigned short xb;
+    unsigned       m = 0;
+
+    if (!s_xid || !s_haveReport)
+        return 0;
+    xb = s_report.dButtons;
+    if (xb & (1u << 0)) m |= 1u << XB_PHYS_UP;
+    if (xb & (1u << 3)) m |= 1u << XB_PHYS_RIGHT;
+    if (xb & (1u << 1)) m |= 1u << XB_PHYS_DOWN;
+    if (xb & (1u << 2)) m |= 1u << XB_PHYS_LEFT;
+    if (xb & (1u << 5)) m |= 1u << XB_PHYS_BACK;
+    if (xb & (1u << 6)) m |= 1u << XB_PHYS_L3;
+    if (xb & (1u << 7)) m |= 1u << XB_PHYS_R3;
+    if (s_report.white > 0x20) m |= 1u << XB_PHYS_WHITE;
+    if (s_report.black > 0x20) m |= 1u << XB_PHYS_BLACK;
+    return m;
 }
 
 /* Raw BLACK/WHITE analog-button state, for quicksave_xbox.c. Reported straight

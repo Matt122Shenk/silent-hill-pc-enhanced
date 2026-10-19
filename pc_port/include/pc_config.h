@@ -297,6 +297,12 @@ typedef struct {
     int bwQuickSave;        /* Xbox: 1 = the BLACK/WHITE buttons run quick save / quick load
                              * instead of their normal step-left/step-right (L1/R1) mapping;
                              * 0 = keep stepping (config key: bw_quick_save); default 0 */
+    /* Xbox: physical button (XB_PHYS_*, 0 = none) for the PC port's extra
+     * actions; xbox_extra_actions.c. */
+    int xbBindQuickHeal;
+    int xbBindCycleWeapon;
+    int xbBindReload;
+    int xbBindQuickTurn;
     int disableDpadMovement; /* 1 = the controller D-pad no longer drives movement, freeing those D-pad inputs to be bound to other actions (config key: disable_dpad_movement); default 0 */
     int menuFilter;          /* 1 = bilinear-filter menus / 2D screens, independent of the in-game texture Filtering mode; default 0 (config key: menu_filter) */
     int minimap;             /* minimap overlay: 0 = off, 1 = square, 2 = circle (config key: minimap); default 0 */

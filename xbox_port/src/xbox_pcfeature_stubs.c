@@ -234,21 +234,14 @@ int g_TpsCamNeedsReset  = 0; /* control_style.c default (no pending TPS reseed) 
  *   g_PcBulletRadMul  = Q12(1.0f) = 4096: "horizontal radius added = 1x
  *     collision radius" - same reasoning, identity is 4096, not 0.
  *
- * g_PcQuickTurnRequest / g_PcRearLookActive ARE genuinely PC-only QoL binds
- * (Quick Turn / Rear Look), so Pc_ExtraActionsUpdate/Pc_RearLookUpdate are
- * correct no-ops here (Xbox has no bind for them yet); the flags stay 0
- * ("no request pending" / "not held"), matching pc_combat.c's own defaults
- * and leaving normal PSX-style camera/turn behavior untouched.
+ * g_PcRearLookActive is the PC's TPS Rear Look bind, a no-op here (the flag
+ * stays 0, "not held"). Quick Turn and the other extra actions are real:
+ * xbox_extra_actions.c.
  * ========================================================================= */
 int g_PcBulletHitActive = 0;
 int g_PcBulletVertMul   = 8192; /* Q12(2.0f) */
 int g_PcBulletRadMul    = 4096; /* Q12(1.0f) */
-int g_PcQuickTurnRequest = 0;
 int g_PcRearLookActive   = 0;
-
-void Pc_ExtraActionsUpdate(void)
-{
-}
 
 void Pc_RearLookUpdate(void)
 {

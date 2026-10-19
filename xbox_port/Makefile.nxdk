@@ -297,6 +297,7 @@ XBOX_SRCS = \
 	$(XBOX_PORT)/src/ra_xbox.c \
 	$(XBOX_PORT)/src/ra_badge_xbox.c \
 	$(XBOX_PORT)/src/ra_browser_xbox.c \
+	$(XBOX_PORT)/src/xbox_extra_actions.c \
 	$(XBOX_PORT)/src/stb_image_impl.c \
 	$(XBOX_PORT)/src/dbg_overlay_xbox.c
 

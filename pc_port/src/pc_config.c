@@ -1244,6 +1244,22 @@ void PcConfig_Load(const char* path)
         {
             g_PcConfig.hiResTextures = (atoi(value) != 0);
         }
+        else if (strcmp(key, "xb_bind_quick_heal") == 0)
+        {
+            g_PcConfig.xbBindQuickHeal = atoi(value);
+        }
+        else if (strcmp(key, "xb_bind_cycle_weapon") == 0)
+        {
+            g_PcConfig.xbBindCycleWeapon = atoi(value);
+        }
+        else if (strcmp(key, "xb_bind_reload") == 0)
+        {
+            g_PcConfig.xbBindReload = atoi(value);
+        }
+        else if (strcmp(key, "xb_bind_quick_turn") == 0)
+        {
+            g_PcConfig.xbBindQuickTurn = atoi(value);
+        }
         else if (strcmp(key, "bw_quick_save") == 0)
         {
             g_PcConfig.bwQuickSave = (atoi(value) != 0);

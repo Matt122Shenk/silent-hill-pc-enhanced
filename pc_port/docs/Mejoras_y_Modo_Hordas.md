@@ -167,6 +167,7 @@ Se ve en inglés por defecto y en español si el idioma del juego es el español
   propios para el aviso de objeto (`toast_cue`) y para la curación rápida
   (`heal_cue`), guardados en `gamedata/sound/custom/`. Sin fichero, o con la
   opción apagada, se usan los sonidos de siempre.
+- Guía paso a paso de las dos herramientas: [Sonidos_Personalizados.md](Sonidos_Personalizados.md).
 - Ajustes en la ventana principal del launcher, el Mod Manager y los
   conversores para dar cabida a estas herramientas.
 - **Actualizaciones desactivadas**: al ser un fork no oficial, el launcher no

@@ -5,6 +5,10 @@
   &nbsp;·&nbsp;
   <a href="pc_port/docs/Mejoras_y_Modo_Hordas.md"><b>📖 Guía de mejoras y Modo Hordas (Español)</b></a>
   <br/>
+  <a href="pc_port/docs/Custom_Sounds_EN.md"><b>🔊 Custom gunshot &amp; notification sounds (English)</b></a>
+  &nbsp;·&nbsp;
+  <a href="pc_port/docs/Sonidos_Personalizados.md"><b>🔊 Sonidos personalizados (Español)</b></a>
+  <br/>
   <a href="https://github.com/Matt122Shenk/silent-hill-pc-enhanced/releases/latest"><b>⬇️ Download the latest release / Descargar la última versión</b></a>
 </p>
 

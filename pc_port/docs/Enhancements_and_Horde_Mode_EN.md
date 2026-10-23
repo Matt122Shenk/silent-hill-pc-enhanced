@@ -165,6 +165,7 @@ It is in English by default and in Spanish when the game language is Spanish.
   for the item notification (`toast_cue`) and for quick heal (`heal_cue`),
   stored in `gamedata/sound/custom/`. With no file, or with the switch off,
   the usual sounds play.
+- Step-by-step guide for both tools: [Custom_Sounds_EN.md](Custom_Sounds_EN.md).
 - Tweaks to the launcher's main window, Mod Manager and converters to make
   room for these tools.
 - **Updates disabled**: as an unofficial fork, the launcher never checks for

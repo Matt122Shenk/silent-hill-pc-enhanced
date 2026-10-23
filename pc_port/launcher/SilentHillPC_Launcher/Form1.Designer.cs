@@ -154,6 +154,8 @@ partial class Form1
             this.checkBox1 = new System.Windows.Forms.CheckBox();
             this.chkUncensored = new System.Windows.Forms.CheckBox();
             this.lblUncensored = new System.Windows.Forms.Label();
+            this.chkSilentTake = new System.Windows.Forms.CheckBox();
+            this.lblSilentTake = new System.Windows.Forms.Label();
             this.lblMenu = new System.Windows.Forms.Label();
             this.btnRA = new System.Windows.Forms.Button();
             this.comboRender = new System.Windows.Forms.ComboBox();
@@ -364,7 +366,7 @@ partial class Form1
             // 
             // lblUpdateStatus
             // 
-            this.lblUpdateStatus.Location = new System.Drawing.Point(209, 535);
+            this.lblUpdateStatus.Location = new System.Drawing.Point(209, 561);
             this.lblUpdateStatus.Name = "lblUpdateStatus";
             this.lblUpdateStatus.Size = new System.Drawing.Size(237, 15);
             this.lblUpdateStatus.TabIndex = 14;
@@ -795,7 +797,7 @@ partial class Form1
             // 
             // btnHelp
             // 
-            this.btnHelp.Location = new System.Drawing.Point(4, 533);
+            this.btnHelp.Location = new System.Drawing.Point(4, 559);
             this.btnHelp.Name = "btnHelp";
             this.btnHelp.Size = new System.Drawing.Size(39, 23);
             this.btnHelp.TabIndex = 53;
@@ -805,7 +807,7 @@ partial class Form1
             // 
             // btnBug
             // 
-            this.btnBug.Location = new System.Drawing.Point(98, 533);
+            this.btnBug.Location = new System.Drawing.Point(98, 559);
             this.btnBug.Name = "btnBug";
             this.btnBug.Size = new System.Drawing.Size(70, 23);
             this.btnBug.TabIndex = 54;
@@ -815,7 +817,7 @@ partial class Form1
             // 
             // btnReset
             // 
-            this.btnReset.Location = new System.Drawing.Point(44, 533);
+            this.btnReset.Location = new System.Drawing.Point(44, 559);
             this.btnReset.Name = "btnReset";
             this.btnReset.Size = new System.Drawing.Size(53, 23);
             this.btnReset.TabIndex = 55;
@@ -868,6 +870,23 @@ partial class Form1
             this.chkUncensored.TabIndex = 91;
             this.chkUncensored.UseVisualStyleBackColor = true;
             this.chkUncensored.CheckedChanged += new System.EventHandler(this.chkUncensored_CheckedChanged);
+            //
+            // lblSilentTake
+            //
+            this.lblSilentTake.AutoSize = true;
+            this.lblSilentTake.Location = new System.Drawing.Point(7, 533);
+            this.lblSilentTake.Name = "lblSilentTake";
+            this.lblSilentTake.Size = new System.Drawing.Size(61, 13);
+            this.lblSilentTake.TabIndex = 100;
+            this.lblSilentTake.Text = "Silent take:";
+            //
+            // chkSilentTake
+            //
+            this.chkSilentTake.Location = new System.Drawing.Point(80, 532);
+            this.chkSilentTake.Name = "chkSilentTake";
+            this.chkSilentTake.Size = new System.Drawing.Size(16, 17);
+            this.chkSilentTake.TabIndex = 101;
+            this.chkSilentTake.UseVisualStyleBackColor = true;
             // 
             // lblUncensored
             // 
@@ -890,7 +909,7 @@ partial class Form1
             // 
             // btnRA
             // 
-            this.btnRA.Location = new System.Drawing.Point(170, 533);
+            this.btnRA.Location = new System.Drawing.Point(170, 559);
             this.btnRA.Name = "btnRA";
             this.btnRA.Size = new System.Drawing.Size(30, 23);
             this.btnRA.TabIndex = 92;
@@ -961,7 +980,7 @@ partial class Form1
             // 
             // Form1
             // 
-            this.ClientSize = new System.Drawing.Size(454, 558);
+            this.ClientSize = new System.Drawing.Size(454, 584);
             this.Controls.Add(this.lblMinimap);
             this.Controls.Add(this.comboMinimap);
             this.Controls.Add(this.lblShadow);
@@ -972,6 +991,8 @@ partial class Form1
             this.Controls.Add(this.lblMenu);
             this.Controls.Add(this.lblUncensored);
             this.Controls.Add(this.chkUncensored);
+            this.Controls.Add(this.lblSilentTake);
+            this.Controls.Add(this.chkSilentTake);
             this.Controls.Add(this.checkBox1);
             this.Controls.Add(this.label1);
             this.Controls.Add(this.regionLabel);
@@ -1060,6 +1081,8 @@ partial class Form1
     private CheckBox checkBox1;
     private CheckBox chkUncensored;
     private Label lblUncensored;
+    private CheckBox chkSilentTake;
+    private Label lblSilentTake;
     private Label lblMenu;
     private Button btnRA;
     private ComboBox comboRender;

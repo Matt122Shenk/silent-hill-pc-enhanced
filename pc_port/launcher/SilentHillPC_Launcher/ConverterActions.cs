@@ -628,7 +628,12 @@ namespace SilentHillPC_Launcher
         /// the first thing every user would otherwise have to do.</summary>
         public static void OpenAudioTool(IWin32Window owner, string gameRoot)
         {
-            AudioToolForm.ShowTool(owner, GuessSoundDir(gameRoot));
+            AudioToolForm.ShowTool(owner, GuessSoundDir(gameRoot), gameRoot, null);
+        }
+
+        public static void OpenAudioTool(IWin32Window owner, string gameRoot, ConfigManager config)
+        {
+            AudioToolForm.ShowTool(owner, GuessSoundDir(gameRoot), gameRoot, config);
         }
 
         private static string GuessSoundDir(string gameRoot)

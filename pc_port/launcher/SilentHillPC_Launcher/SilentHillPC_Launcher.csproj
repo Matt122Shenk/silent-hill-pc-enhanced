@@ -12,6 +12,9 @@
     <FileAlignment>512</FileAlignment>
     <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
     <Deterministic>true</Deterministic>
+    <!-- Lets modern GenerateResource compile the legacy .resx image/icon blobs
+         when building with the free .NET SDK (error MSB3823 otherwise). -->
+    <GenerateResourceUsePreserializedResources>true</GenerateResourceUsePreserializedResources>
   </PropertyGroup>
   <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
     <PlatformTarget>AnyCPU</PlatformTarget>
@@ -98,6 +101,12 @@
     <Compile Include="SfxTable.cs" />
     <Compile Include="VagEncoder.cs" />
     <Compile Include="AudioToolForm.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="SfxSwapForm.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="UiSoundForm.cs">
       <SubType>Form</SubType>
     </Compile>
     <Compile Include="ControlsForm.cs">
@@ -202,6 +211,42 @@
     <Content Include="LICENSE-7zip.txt">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
+  </ItemGroup>
+  <ItemGroup>
+    <!-- Lets the free .NET SDK build this classic Framework project without
+         VS/Build Tools: provides the .NET 4.7.2 reference assemblies via NuGet
+         on restore. PrivateAssets so it never flows anywhere. -->
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="All" />
+    <!-- Runtime reader for the preserialized .resx image/icon blobs (MSB3822);
+         flows to the output folder next to the exe. -->
+    <PackageReference Include="System.Resources.Extensions" Version="8.0.0" />
+    <!-- Closure needed by the net4x build of the above (ReflectionOnly-verified);
+         explicit References below because there is no VS target consuming the
+         restore graph on this machine. -->
+    <PackageReference Include="System.Memory" Version="4.5.5" PrivateAssets="All" />
+    <PackageReference Include="System.Buffers" Version="4.5.1" PrivateAssets="All" />
+    <PackageReference Include="System.Numerics.Vectors" Version="4.5.0" PrivateAssets="All" />
+    <PackageReference Include="System.Runtime.CompilerServices.Unsafe" Version="4.5.3" PrivateAssets="All" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- Without VS there is no ResolveNuGetPackageAssets target consuming
+         project.assets.json, so resolve the package dll by path. Requires a
+         one-time `dotnet restore` to populate the user-profile package cache. -->
+    <Reference Include="System.Resources.Extensions">
+      <HintPath>$(USERPROFILE)\.nuget\packages\system.resources.extensions\8.0.0\lib\net462\System.Resources.Extensions.dll</HintPath>
+    </Reference>
+    <Reference Include="System.Memory">
+      <HintPath>$(USERPROFILE)\.nuget\packages\system.memory\4.5.5\lib\net461\System.Memory.dll</HintPath>
+    </Reference>
+    <Reference Include="System.Buffers">
+      <HintPath>$(USERPROFILE)\.nuget\packages\system.buffers\4.5.1\lib\net461\System.Buffers.dll</HintPath>
+    </Reference>
+    <Reference Include="System.Numerics.Vectors">
+      <HintPath>$(USERPROFILE)\.nuget\packages\system.numerics.vectors\4.5.0\lib\net46\System.Numerics.Vectors.dll</HintPath>
+    </Reference>
+    <Reference Include="System.Runtime.CompilerServices.Unsafe">
+      <HintPath>$(USERPROFILE)\.nuget\packages\system.runtime.compilerservices.unsafe\4.5.3\lib\net461\System.Runtime.CompilerServices.Unsafe.dll</HintPath>
+    </Reference>
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
 </Project>

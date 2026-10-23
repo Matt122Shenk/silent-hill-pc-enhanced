@@ -1366,7 +1366,7 @@ namespace SilentHillPC_Launcher
         /// open from its File menu or by drag &amp; drop, same as the Model Viewer.</summary>
         private void OnAudioTool()
         {
-            ConverterActions.OpenAudioTool(this, _gameRoot);
+            ConverterActions.OpenAudioTool(this, _gameRoot, _config);
         }
 
         /// <summary>Best-effort guess of the texture or model a reference PNG came from

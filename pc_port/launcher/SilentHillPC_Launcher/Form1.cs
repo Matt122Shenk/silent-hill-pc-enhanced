@@ -728,6 +728,13 @@ public partial class Form1 : Form
         Set(lblUncensored,  uncensoredTip);
         Set(chkUncensored,  uncensoredTip);
 
+        const string silentTakeTip =
+            "Common loot (ammo, heals) skips the take screen and shows a\n" +
+            "quick toast instead. Weapons, keys and story items keep the\n" +
+            "classic take screen. Off by default (config key: silent_take).";
+        Set(lblSilentTake,  silentTakeTip);
+        Set(chkSilentTake,  silentTakeTip);
+
         const string loggingTip =
             "Write SH_DBG output to SilentHill.log next to the executable.\n" +
             "Required for diagnosing crashes/regressions; small disk-write\n" +
@@ -1011,6 +1018,7 @@ public partial class Form1 : Form
         // still `uncensored`, so the mapping is inverted here. Default 0
         // (censored) → checked, so the box defaults on.
         chkUncensored.Checked = config.Get("uncensored", "0") == "0";
+        chkSilentTake.Checked = config.Get("silent_take", "0") == "1";
 
         // fullscreen
         // fullscreen: 0 = windowed, 1 = exclusive fullscreen, 2 = borderless.
@@ -1287,6 +1295,7 @@ public partial class Form1 : Form
 
         config.Set("randomizer", chkRandomizer.Checked ? "1" : "0");
         config.Set("uncensored", chkUncensored.Checked ? "0" : "1"); // checked = censored
+        config.Set("silent_take", chkSilentTake.Checked ? "1" : "0");
 
         // Level: persist only the map id, not the " - description" suffix. Skipped
         // while the randomizer owns the row — the selection is the synthetic

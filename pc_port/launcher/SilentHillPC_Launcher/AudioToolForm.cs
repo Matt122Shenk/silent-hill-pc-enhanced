@@ -36,9 +36,16 @@ namespace SilentHillPC_Launcher
         private VabFile _vab;
         private SoundPlayer _player;
         private string _lastDir;
+        private string _gameRoot;
+        private ConfigManager _config;
         private readonly Dictionary<int, List<SfxMatch>> _matches = new Dictionary<int, List<SfxMatch>>();
 
         public static void ShowTool(IWin32Window owner, string startDir)
+        {
+            ShowTool(owner, startDir, null, null);
+        }
+
+        public static void ShowTool(IWin32Window owner, string startDir, string gameRoot, ConfigManager config)
         {
             AudioToolForm f = s_open;
             if (f == null || f.IsDisposed)
@@ -47,6 +54,8 @@ namespace SilentHillPC_Launcher
                 s_open = f;
                 f.FormClosed += (s, e) => { if (s_open == f) s_open = null; };
                 f._lastDir = startDir;
+                f._gameRoot = gameRoot;
+                f._config = config;
                 f.Show(owner);
             }
             else
@@ -55,6 +64,28 @@ namespace SilentHillPC_Launcher
                 f.BringToFront();
                 f.Activate();
             }
+        }
+
+        private void OpenSwapForm()
+        {
+            if (string.IsNullOrEmpty(_gameRoot) || _config == null)
+            {
+                MessageBox.Show(this, "Gunshot swaps need the game folder.", "Gunshot Sounds",
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+            SfxSwapForm.ShowTool(this, _gameRoot, _config);
+        }
+
+        private void OpenCueForm()
+        {
+            if (string.IsNullOrEmpty(_gameRoot) || _config == null)
+            {
+                MessageBox.Show(this, "Interface sounds need the game folder.", "Interface Sounds",
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+            UiSoundForm.ShowTool(this, _gameRoot, _config);
         }
 
         private AudioToolForm()
@@ -68,6 +99,8 @@ namespace SilentHillPC_Launcher
             var menu = new MenuStrip();
             var file = new ToolStripMenuItem("&File");
             file.DropDownItems.Add("&Open sound bank…", null, (s, e) => PickAndOpen());
+            file.DropDownItems.Add("&Gunshot sounds…", null, (s, e) => OpenSwapForm());
+            file.DropDownItems.Add("&Interface sounds…", null, (s, e) => OpenCueForm());
             file.DropDownItems.Add(new ToolStripSeparator());
             file.DropDownItems.Add("E&xit", null, (s, e) => Close());
             var help = new ToolStripMenuItem("&Help");

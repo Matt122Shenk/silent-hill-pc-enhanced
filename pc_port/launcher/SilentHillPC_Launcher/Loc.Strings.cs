@@ -170,6 +170,8 @@ namespace SilentHillPC_Launcher
             { "Square + Bottom Left",              new[]{ "Cuadrado + inf. izq.", "Quadrado + inf. esq.", "Carré + b. gauche", "Quadrat + unten links", "Quadrato + basso sx", "四角 + 左下", "方形 + 左下", "Квадрат + снизу-слева", "Kwadrat + lewy dolny" } },
             { "Square + Bottom Right",             new[]{ "Cuadrado + inf. der.", "Quadrado + inf. dir.", "Carré + b. droite", "Quadrat + unten rechts", "Quadrato + basso dx", "四角 + 右下", "方形 + 右下", "Квадрат + снизу-справа", "Kwadrat + prawy dolny" } },
             { "Bullet Decals:", new[]{ "Marcas de bala:", "Marcas de bala:", "Impacts :", "Kugellöcher:", "Fori proiettili:", "弾痕:", "弹孔:", "Следы от пуль:", "Ślady po kulach:" } },
+            { "Silent take:", new[]{ "Toma rápida:", "", "", "", "", "", "", "", "" } },
+            { "Common loot (ammo, heals) skips the take screen and shows a\nquick toast instead. Weapons, keys and story items keep the\nclassic take screen. Off by default (config key: silent_take).", new[]{ "El botín común (munición, curas) omite la pantalla de objeto y muestra un aviso rápido.\nArmas, llaves y objetos de historia conservan la pantalla clásica.\nDesactivado por defecto (clave: silent_take).", "", "", "", "", "", "", "", "" } },
             // ---- controls window ----
             { "Keyboard Controls",                    new[]{ "Teclado", "Teclado", "Clavier", "Tastatur", "Tastiera", "キーボード", "键盘控制", "Клавиатура", "Klawiatura" } },
             { "Controller Controls",                  new[]{ "Mando", "Controle", "Manette", "Controller", "Controller", "コントローラー", "手柄控制", "Геймпад", "Kontroler" } },

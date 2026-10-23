@@ -15,8 +15,13 @@
 >   shop), weapon/fear/flashlight immersion, ammo and health HUDs, enemy HP
 >   bars, camera kicks and kill/hurt/heal flashes, independent difficulty
 >   presets, D-pad weapon select, a navigable pause menu, translated item
->   toasts, per-weapon SFX and UI sound swaps, and more. Full list (Spanish):
->   [pc_port/docs/Mejoras_y_Modo_Hordas.md](pc_port/docs/Mejoras_y_Modo_Hordas.md).
+>   toasts, per-weapon SFX and UI sound swaps, and more. Full list:
+>   [English](pc_port/docs/Enhancements_and_Horde_Mode_EN.md) ·
+>   [Español](pc_port/docs/Mejoras_y_Modo_Hordas.md).
+> - **Default config** is tuned for the best experience, especially with a
+>   controller (1080p fullscreen, 120 FPS, modern flashlight, the fork's HUD
+>   and immersion options on). Everything can be changed in the launcher or
+>   the in-game F10 menu.
 > - **Launcher updates are disabled** in this fork, so it can never pull the
 >   official nightly builds over these changes. Get releases from
 >   [this repository](https://github.com/Matt122Shenk/silent-hill-pc-enhanced/releases)

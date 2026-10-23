@@ -5,9 +5,13 @@ Este documento recoge las mejoras añadidas sobre el port original
 minimapa, mirilla, decals de bala, randomizer, texturas HD, etc.) no se
 describe aquí; para eso está el `CHANGELOG.md`.
 
-Casi todo es opcional y viene **desactivado por defecto**. Se ajusta desde el
-menú rápido **F10** y se guarda solo en `config.cfg`. Entre paréntesis va la
-clave de configuración de cada opción.
+Todo es opcional. El `config.cfg` que trae esta versión viene ajustado para la
+mejor experiencia (sobre todo con mando), con muchas de estas opciones ya
+activadas; si borras una clave, vuelve a su valor original, casi siempre
+desactivado. Se ajusta desde el menú rápido **F10** y se guarda solo en
+`config.cfg`. Entre paréntesis va la clave de configuración de cada opción.
+
+*English version: [Enhancements_and_Horde_Mode_EN.md](Enhancements_and_Horde_Mode_EN.md).*
 
 ---
 

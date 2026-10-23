@@ -3,7 +3,9 @@
 ## Silent Hill PC Enhanced 2026.10.22 -- 2026-10-22 (unofficial fork)
 Modified by Matt122Shenk on top of beta-2026.09.04.1 (tag `crossplatform-beta`,
 `5c9a639`), between 2026-10-12 and 2026-10-22. Not an official release. Full
-description (Spanish): `pc_port/docs/Mejoras_y_Modo_Hordas.md`.
+description: `pc_port/docs/Enhancements_and_Horde_Mode_EN.md` (English),
+`pc_port/docs/Mejoras_y_Modo_Hordas.md` (Spanish).
+- Default config tuned for the best experience, especially with a controller
 - Horde Mode: wave survival in the Old Silent Hill streets, picked from the title menu, with per-kill loot, wave threat scaling and an inter-wave reward shop (ammo for your lowest gun, heals, new weapons, damage and max-health upgrades). Fully isolated from campaign saves
 - Immersion: weapon hides when idle, fear panting while the radio is on, flashlight flicker near enemies, blood on walls behind wounded enemies
 - New HUDs: ammo counter, Harry health bar / heartbeat line, red HP bars over enemies

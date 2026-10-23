@@ -22,6 +22,13 @@ namespace SilentHillPC_Launcher
     {
         public const string DefaultRepoUrl = "https://github.com/SlickAmogus/silent-hill-pc-nightly";
 
+        /// Silent Hill PC Enhanced is an unofficial fork: the update and
+        /// download-build paths would pull the OFFICIAL nightly builds over it
+        /// and wipe its changes, so they are switched off here. The links to the
+        /// original project stay. static readonly (not const) so the gated code
+        /// does not trip the compiler's unreachable-code warning.
+        public static readonly bool UpdatesEnabled = false;
+
         public string RepoUrl = DefaultRepoUrl;
         public string Branch  = "";        // "" = alpha (repo default / non-prerelease stream)
         public string Build   = "latest";  // "latest" or a specific release tag

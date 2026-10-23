@@ -1,5 +1,21 @@
 # Silent Hill PC Port — Changelog
 
+## Silent Hill PC Enhanced 2026.10.22 -- 2026-10-22 (unofficial fork)
+Modified by Matt122Shenk on top of beta-2026.09.04.1 (tag `crossplatform-beta`,
+`5c9a639`), between 2026-10-12 and 2026-10-22. Not an official release. Full
+description (Spanish): `pc_port/docs/Mejoras_y_Modo_Hordas.md`.
+- Horde Mode: wave survival in the Old Silent Hill streets, picked from the title menu, with per-kill loot, wave threat scaling and an inter-wave reward shop (ammo for your lowest gun, heals, new weapons, damage and max-health upgrades). Fully isolated from campaign saves
+- Immersion: weapon hides when idle, fear panting while the radio is on, flashlight flicker near enemies, blood on walls behind wounded enemies
+- New HUDs: ammo counter, Harry health bar / heartbeat line, red HP bars over enemies
+- Visual feedback: camera kicks (hurt / fire / dealt), hitmarker, kill flash, heal flash intensity, low-health glow, hurt flash (all through the post-process shader)
+- Independent difficulty presets for loot ammo, heal power and enemy damage (Normal = vanilla)
+- Combat and controls: Aim Camera, Melee Aim Walk, D-pad weapon select (assignable from the inventory), auto reload, manual reload switch, improved quick heal
+- Item toasts: pickup/use notifications with corner/scale/opacity/background options, English/Spanish item names, PAL accent fix
+- Navigable pause menu (Resume / Load / Quick Options / Main Menu / Quit)
+- F10 quick options: new HUD 2, Trainer, Immersion, Difficulty, Health and Visual Feedback pages
+- Launcher: per-weapon gunshot swaps and UI sound swaps (toast / quick-heal cues); updates disabled in this fork so it never pulls official builds over it; Report Bug points to the fork
+- Discord Rich Presence off by default (the built-in app id belongs to the official project)
+
 ## beta-2026.09.04.1 -- 2026-09-04
 - Fixed screen flicking upwards upon confirmation of item pickup
 - Weather now simulated at 30hz (fixes snow speed)

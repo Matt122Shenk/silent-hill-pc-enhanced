@@ -165,6 +165,12 @@ Se ve en inglés por defecto y en español si el idioma del juego es el español
   opción apagada, se usan los sonidos de siempre.
 - Ajustes en la ventana principal del launcher, el Mod Manager y los
   conversores para dar cabida a estas herramientas.
+- **Actualizaciones desactivadas**: al ser un fork no oficial, el launcher no
+  busca ni descarga builds del proyecto original (que borrarían estos
+  cambios). Los enlaces al proyecto original, su web y su Discord se
+  mantienen; "Report Bug" lleva a las incidencias de este fork.
+- **Discord Rich Presence desactivado por defecto**, porque la app de Discord
+  integrada pertenece al proyecto oficial. Se puede activar en `config.cfg`.
 
 ## 10. Integraciones
 

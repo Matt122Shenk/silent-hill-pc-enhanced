@@ -13,6 +13,11 @@ license. No Konami game data is included, and none is distributed.**
 
 Copyright (C) 2025-2026 Chris Hardin and the Silent Hill PC Port contributors.
 
+Silent Hill PC Enhanced modifications Copyright (C) 2026 Matt122Shenk,
+released under the same GPL-3.0-or-later terms. This is an unofficial fork;
+see the notice at the top of [`README.md`](README.md) and
+[`pc_port/CHANGELOG.md`](pc_port/CHANGELOG.md) for what was changed and when.
+
 Covered:
 
 | Path | What it is |

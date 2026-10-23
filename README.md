@@ -1,3 +1,35 @@
+# Silent Hill PC Enhanced
+
+> **Unofficial fork.** Silent Hill PC Enhanced is a modified version of the
+> [Silent Hill Native PC Port](https://github.com/SlickAmogus/silent-hill-decomp)
+> by Chris Hardin (KushAstronaut). It is **not affiliated with or endorsed by
+> the official project**, and official news, builds and decisions about the
+> port come only from its own channels: <https://sh1pc.com/>, the
+> [official GitHub](https://github.com/SlickAmogus/silent-hill-decomp) and the
+> [official Discord](https://discord.gg/JWuNzVsQbr).
+>
+> - **Based on:** tag `crossplatform-beta` (`5c9a639`, beta-2026.09.04.1) of the
+>   original repository, with PsyCross at `a2d80e6`
+>   ([fork](https://github.com/Matt122Shenk/PsyCross/tree/pc-enhanced)).
+> - **What it adds:** a Horde Mode (wave survival with an inter-wave reward
+>   shop), weapon/fear/flashlight immersion, ammo and health HUDs, enemy HP
+>   bars, camera kicks and kill/hurt/heal flashes, independent difficulty
+>   presets, D-pad weapon select, a navigable pause menu, translated item
+>   toasts, per-weapon SFX and UI sound swaps, and more. Full list (Spanish):
+>   [pc_port/docs/Mejoras_y_Modo_Hordas.md](pc_port/docs/Mejoras_y_Modo_Hordas.md).
+> - **Launcher updates are disabled** in this fork, so it can never pull the
+>   official nightly builds over these changes. Get releases from
+>   [this repository](https://github.com/Matt122Shenk/silent-hill-pc-enhanced/releases)
+>   and report bugs [here](https://github.com/Matt122Shenk/silent-hill-pc-enhanced/issues),
+>   not to the original project.
+> - Same licensing as the original (below): the port is GPL-3.0, the
+>   decompilation is not licensed by this project, and **no game data is
+>   included**.
+>
+> The rest of this README is the original project's, kept as-is.
+
+---
+
 # Silent Hill - Native PC Port
 
   **A native PC port built on the Silent Hill PSX decompilation.** What started as an experiment has become a fully playable port with a large feature set, built-in mod support, an active community, and fan translation/multilingual support. It uses PsyCross (a PsyQ SDK compatibility layer originally written for REDRIVER2) as its hardware abstraction layer, which we [now maintain our own fork of](https://github.com/SlickAmogus/PsyCross).  Care has been taken to leave the original game code intact wherever possible and to work around it where needed, so game logic and feel still match the PSX original. Most if not all enhancements are optional, and always will be.

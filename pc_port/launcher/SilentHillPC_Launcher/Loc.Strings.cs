@@ -71,6 +71,7 @@ namespace SilentHillPC_Launcher
             { "Refresh",new[]{ "Actualizar", "Atualizar", "Actualiser", "Aktualisieren", "Aggiorna", "更新", "刷新", "Обновить", "Odśwież" } },
 
             // ---- main window: status ----
+            { "Updates disabled in this unofficial build.", new[]{ "Actualizaciones desactivadas en esta versión no oficial.", "Atualizações desativadas nesta versão não oficial.", "Mises à jour désactivées dans cette version non officielle.", "Updates sind in dieser inoffiziellen Version deaktiviert.", "Aggiornamenti disattivati in questa versione non ufficiale.", "この非公式版ではアップデートは無効です。", "此非官方版本已禁用更新。", "Обновления отключены в этой неофициальной версии.", "Aktualizacje są wyłączone w tej nieoficjalnej wersji." } },
             { "Checking for updates...",       new[]{ "Buscando actualizaciones...", "Procurando atualizações...", "Recherche de mises à jour...", "Suche nach Updates...", "Ricerca aggiornamenti...", "更新を確認中...", "正在检查更新...", "Проверка обновлений...", "Sprawdzanie aktualizacji..." } },
             // Goes on the 104px update button, not the status line — hence the
             // short forms.

@@ -480,8 +480,24 @@ public partial class Form1 : Form
     private static LauncherSettings ForceLatest(LauncherSettings s)
         => new LauncherSettings { RepoUrl = s.RepoUrl, Branch = s.Branch, Build = "latest", OldBuildWarned = s.OldBuildWarned };
 
+    // Updates off (LauncherSettings.UpdatesEnabled): grey out every control
+    // that reaches the official nightly repo and say why. True if disabled.
+    private bool UpdatesDisabledUi()
+    {
+        if (LauncherSettings.UpdatesEnabled)
+            return false;
+        btnUpdate.Enabled        = false;
+        downloadBuild.Enabled    = false;
+        btnBuildSettings.Enabled = false;
+        lblUpdateStatus.ForeColor = Color.LightGray;
+        SetText(lblUpdateStatus, "Updates disabled in this unofficial build.");
+        return true;
+    }
+
     private async void SilentAutoCheckForUpdates()
     {
+        if (UpdatesDisabledUi())
+            return;
         var settings = LauncherSettings.Load(config);
         string installDir = AppDomain.CurrentDomain.BaseDirectory;
         SetText(btnUpdate, "Check for Updates");
@@ -1473,6 +1489,8 @@ public partial class Form1 : Form
     // Download Build button's job.)
     private async void btnUpdate_Click(object sender, EventArgs e)
     {
+        if (UpdatesDisabledUi())
+            return;
         string installDir = AppDomain.CurrentDomain.BaseDirectory;
         var settings = LauncherSettings.Load(config);
 
@@ -1555,6 +1573,8 @@ public partial class Form1 : Form
     // exe is never downgraded (CheckAsync's gate handles that).
     private async void downloadBuild_Click(object sender, EventArgs e)
     {
+        if (UpdatesDisabledUi())
+            return;
         string installDir = AppDomain.CurrentDomain.BaseDirectory;
         var settings = LauncherSettings.Load(config);
 
@@ -1816,6 +1836,9 @@ public partial class Form1 : Form
     "Psycross, Claude Code, and the wonderful decompilation community.\n\n" +
     "The source code is available here:\n\n" +
     "https://github.com/SlickAmogus/silent-hill-decomp\n\n" +
+    "Silent Hill PC Enhanced is an unofficial fork of this port by Matt122Shenk, " +
+    "not affiliated with the official project:\n\n" +
+    "https://github.com/Matt122Shenk/silent-hill-pc-enhanced\n\n" +
     "You should never pay for this software, and you should always provide " +
     "your own legally obtained game data.\n\n" +
     "Silent Hill is copyright © KONAMI";
@@ -2178,6 +2201,8 @@ public partial class Form1 : Form
         // Build Settings: choose the repo/branch/build the launcher tracks for
         // updates (saved into config.cfg's ## Launcher section). Re-probe the
         // silent status afterward so the label reflects the new selection.
+        if (UpdatesDisabledUi())
+            return;
         using (var dlg = new BuildSettingsForm(config))
         {
             dlg.ShowDialog(this);
@@ -2274,11 +2299,13 @@ public partial class Form1 : Form
     }
 
     // Report Bug button (btnBug): open the GitHub issues page in the browser.
+    // Silent Hill PC Enhanced: the fork's own tracker, so the original project
+    // never receives reports about code it did not write.
     private void button2_Click(object sender, EventArgs e)
     {
         try
         {
-            Process.Start("https://github.com/SlickAmogus/silent-hill-decomp/issues");
+            Process.Start("https://github.com/Matt122Shenk/silent-hill-pc-enhanced/issues");
         }
         catch (Exception ex)
         {

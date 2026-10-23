@@ -142,9 +142,9 @@ Cada página termina en "Prev page" (anterior), "Next page" (siguiente) y
   la radio suena.
 - **Blood Walls** (Apagado/Encendido): Salpicaduras de sangre en la pared tras
   enemigos heridos por bala.
-- **Flicker** (Apagado/Encendido): La linterna parpadea en ráfagas cortas
-  cerca de enemigos vivos (15 % cerca, 35 % mirándolo; solo modos por píxel,
-  no Classic).
+- **Flicker** (Apagado/Encendido): Cerca de enemigos vivos la linterna falla,
+  se apaga medio segundo y no se puede volver a encender hasta que se
+  recupera (15 % cerca, 45 % mirándolo; solo modos por píxel, no Classic).
 
 ## DIFFICULTY (independiente de la dificultad nativa; Normal = vanilla)
 

@@ -264,7 +264,7 @@ typedef struct {
     int   killFlashMode;     /* kill flash look: 0 = black & white, 1 = black vignette (config key: kill_flash_mode); default 0 */
     int   immersionWeapons;  /* 1 = equipped weapon stays hidden unless recently equipped, aimed, fired, reloaded or radio-danger is up (config key: immersion_weapons); default 0 */
     int   immersionFear;     /* 1 = Harry pants with fear, sparsely and at random, while the radio static is up (config key: immersion_fear); default 0 */
-    int   immersionFlicker;  /* 1 = flashlight browns out in short bursts near enemies (35% per roll while facing one, 15% when merely close; per-pixel modes only) (config key: immersion_flicker); default 0 */
+    int   immersionFlicker;  /* 1 = flashlight stutters then blacks out for 500 ms near enemies, light button locked meanwhile (45% per roll while facing one, 15% when merely close; per-pixel modes only) (config key: immersion_flicker); default 0 */
     int   aimCameraMode;     /* camera style borrowed while aiming: 0 = auto (no change), 1 = classic, 2 = tps, 3 = ots, 4 = fps (config key: aim_camera_mode); default 0 */
     int   quickHeal;         /* master switch for quick heal (config key: quick_heal); default 1 */
     int   itemToastBg;       /* toast background opacity 0..100 (config key: item_toast_bg); default 100 (legacy 0/1 values scale x100 on load) */

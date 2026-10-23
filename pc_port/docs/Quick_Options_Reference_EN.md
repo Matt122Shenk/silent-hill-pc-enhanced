@@ -133,9 +133,9 @@
   sounds.
 - **Blood Walls** (Off/On): Blood splats on the wall behind bullet-hit
   enemies.
-- **Flicker** (Off/On): The flashlight flickers in short bursts near live
-  enemies (15% when close, 35% while facing; per-pixel modes only, not
-  Classic).
+- **Flicker** (Off/On): Near live enemies the flashlight stutters, then dies
+  for half a second and cannot be switched back on until it recovers (15%
+  when close, 45% while facing; per-pixel modes only, not Classic).
 
 ## DIFFICULTY (independent from the native difficulty; Normal = vanilla)
 

@@ -1419,8 +1419,8 @@ static const QoDesc s_descs[] = {
         "Harry jadea de miedo al azar mientras la radio suena."),
     QO_DX(QO_X_IMMBLOOD, "Blood splats on the wall behind bullet-hit enemies.",
         "Salpicaduras de sangre en la pared tras enemigos heridos por bala."),
-    QO_DX(QO_X_IMMFLICKER, "The flashlight flickers in short bursts near live enemies: 15% when close, 35% while facing. Per-pixel modes only, not Classic.",
-        "La linterna parpadea en ráfagas cortas cerca de enemigos vivos: 15 % cerca, 35 % mirándolo. Solo modos por píxel, no Classic."),
+    QO_DX(QO_X_IMMFLICKER, "Near live enemies the flashlight stutters, then dies for half a second and cannot be switched back on until it recovers: 15% when close, 45% while facing. Per-pixel modes only, not Classic.",
+        "Cerca de enemigos vivos la linterna falla, se apaga medio segundo y no se puede volver a encender hasta que se recupere: 15 % cerca, 45 % mirándolo. Solo modos por píxel, no Classic."),
     /* DIFFICULTY (independent from the native difficulty; Normal = vanilla) */
     QO_DX(QO_X_DIFFAMMO, "Loot ammo at 15 / 50 / 100 / 170 percent. E.g. 15 bullets become 2 / 8 / 15 / 26.",
         "Munición del loot al 15 / 50 / 100 / 170 %. P. ej. 15 balas pasan a 2 / 8 / 15 / 26."),

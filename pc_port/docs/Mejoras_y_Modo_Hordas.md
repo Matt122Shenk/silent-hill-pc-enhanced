@@ -117,9 +117,11 @@ CRT, scanlines y los demás filtros sin pisarse.
   a mostrar.
 - **Fear Panting** (`immersion_fear`): Harry jadea de miedo de vez en cuando
   mientras suena la radio.
-- **Flicker** (`immersion_flicker`): la linterna parpadea en ráfagas cortas
-  cerca de enemigos vivos (15 % si están cerca, 35 % si los miras). Solo en los
-  modos de linterna por píxel, no en Classic.
+- **Flicker** (`immersion_flicker`): cerca de enemigos vivos la linterna
+  empieza a fallar, parpadea durante un segundo aproximadamente y se apaga
+  medio segundo; mientras está apagada el botón de luz no responde, así que no
+  se puede volver a encender hasta que se recupera sola (15 % si están cerca,
+  45 % si los miras). Solo en los modos de linterna por píxel, no en Classic.
 - **Blood Walls**: salpicaduras de sangre en la pared detrás de los enemigos
   heridos por bala.
 

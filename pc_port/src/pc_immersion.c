@@ -151,9 +151,17 @@ static void Immersion_Fear(int inGame, Uint32 now)
     s_fearRadioWas = radio;
 }
 
-/* Flashlight flicker: short brownout bursts near live enemies. Proximity
- * arms the roll (15%), facing the enemy pays the full 35%. The burst is a
- * ~7 Hz square wave to 0.25 for 650 ms — a failing contact, never a blackout.
+/* Flashlight flicker: a failing contact near live enemies that ends in a
+ * short blackout. Proximity arms the roll (15%), facing the enemy pays the
+ * full 45%. The burst is an irregular stutter for ~900 ms: random 25-90 ms
+ * segments alternating between a near-dead dip (0..8%) and a weak-to-full
+ * beam (45..100%). Then the beam dies for 500 ms, and while it is dead the
+ * light button is locked (Pc_Immersion_FlashlightLocked), so the player
+ * cannot just switch it back on.
+ *
+ * Display only: the game still treats the flashlight as on (same AI, same
+ * room lighting). That is also why the blackout reads as real darkness: the
+ * per-pixel dark-room dim stays applied with no cone left to cut through it.
  * Per-pixel modes only: Classic bakes light per-vertex for PSX parity and has
  * no live intensity to scale (g_PsyX_FlashlightFlicker rides the shader
  * uniform in PsyX_render.cpp). */
@@ -161,13 +169,18 @@ static void Immersion_Fear(int inGame, Uint32 now)
 #define FLICK_FACE_COS    Q12(0.9f)
 #define FLICK_ROLL_MS     8000u
 #define FLICK_ROLL_JITTER 3000u
-#define FLICK_BURST_MS    650u
-#define FLICK_DIP_MS      70u
-#define FLICK_DIM         0.25f
+#define FLICK_BURST_MS    900u
+#define FLICK_SEG_MIN_MS  25u
+#define FLICK_SEG_JITTER  66u     /* segments last 25..90 ms */
+#define FLICK_DIP_MAX     0.08f   /* dark segments: 0..8% */
+#define FLICK_LIT_MIN     0.45f   /* lit segments: 45..100% */
+#define FLICK_BLACKOUT_MS 500u
 #define FLICK_COOL_MS     18000u
 #define FLICK_COOL_JITTER 8000u
 #define FLICK_P_NEAR      15
-#define FLICK_P_FACE      35
+#define FLICK_P_FACE      45
+
+enum { FLICK_IDLE = 0, FLICK_BURST, FLICK_BLACKOUT };
 
 extern float g_PsyX_FlashlightFlicker;
 extern int   g_PsyX_UsePerPixelFlashlight;
@@ -175,8 +188,10 @@ extern int   g_PsyX_UsePerPixelFlashlight;
 static unsigned int s_flickRand = 0x51ED270Bu;
 static Uint32 s_flickNextRoll = 0;
 static Uint32 s_flickCooldownUntil = 0;
-static int    s_flickBursting = 0;
-static Uint32 s_flickBurstStart = 0;
+static int    s_flickPhase = FLICK_IDLE;
+static Uint32 s_flickPhaseStart = 0;
+static Uint32 s_flickSegEnd = 0;
+static int    s_flickSegDark = 0;
 
 static unsigned int FlickRand(void)
 {
@@ -186,6 +201,17 @@ static unsigned int FlickRand(void)
     return s_flickRand;
 }
 
+/* Uniform 0..1. */
+static float FlickFrac(void)
+{
+    return (float)(FlickRand() % 1000u) / 999.0f;
+}
+
+int Pc_Immersion_FlashlightLocked(void)
+{
+    return s_flickPhase == FLICK_BLACKOUT;
+}
+
 static void Immersion_Flicker(int inGame, Uint32 now)
 {
     if (!inGame || !g_PcConfig.immersionFlicker || !g_PsyX_UsePerPixelFlashlight ||
@@ -193,23 +219,42 @@ static void Immersion_Flicker(int inGame, Uint32 now)
     {
         if (g_PsyX_FlashlightFlicker != 1.0f)
             g_PsyX_FlashlightFlicker = 1.0f;
-        s_flickBursting = 0;
+        s_flickPhase = FLICK_IDLE;
         s_flickNextRoll = 0;
         return;
     }
 
-    if (s_flickBursting)
+    if (s_flickPhase == FLICK_BURST)
     {
-        Uint32 t = now - s_flickBurstStart;
-        if (t >= FLICK_BURST_MS)
+        if (now - s_flickPhaseStart >= FLICK_BURST_MS)
         {
-            s_flickBursting = 0;
+            s_flickPhase = FLICK_BLACKOUT;
+            s_flickPhaseStart = now;
+            g_PsyX_FlashlightFlicker = 0.0f;
+            return;
+        }
+        if ((Sint32)(now - s_flickSegEnd) >= 0)
+        {
+            s_flickSegDark = !s_flickSegDark;
+            s_flickSegEnd = now + FLICK_SEG_MIN_MS + (FlickRand() % FLICK_SEG_JITTER);
+            g_PsyX_FlashlightFlicker = s_flickSegDark
+                ? FLICK_DIP_MAX * FlickFrac()
+                : FLICK_LIT_MIN + (1.0f - FLICK_LIT_MIN) * FlickFrac();
+        }
+        return;
+    }
+
+    if (s_flickPhase == FLICK_BLACKOUT)
+    {
+        if (now - s_flickPhaseStart >= FLICK_BLACKOUT_MS)
+        {
+            s_flickPhase = FLICK_IDLE;
             g_PsyX_FlashlightFlicker = 1.0f;
             s_flickNextRoll = now + FLICK_ROLL_MS + (FlickRand() % FLICK_ROLL_JITTER);
         }
         else
         {
-            g_PsyX_FlashlightFlicker = ((t / FLICK_DIP_MS) & 1u) ? 1.0f : FLICK_DIM;
+            g_PsyX_FlashlightFlicker = 0.0f;
         }
         return;
     }
@@ -258,8 +303,10 @@ static void Immersion_Flicker(int inGame, Uint32 now)
 
         if (near && (FlickRand() % 100) < (unsigned)(faced ? FLICK_P_FACE : FLICK_P_NEAR))
         {
-            s_flickBursting = 1;
-            s_flickBurstStart = now;
+            s_flickPhase = FLICK_BURST;
+            s_flickPhaseStart = now;
+            s_flickSegDark = 0;
+            s_flickSegEnd = now; /* first tick opens on a dark segment */
             s_flickCooldownUntil = now + FLICK_COOL_MS + (FlickRand() % FLICK_COOL_JITTER);
         }
     }

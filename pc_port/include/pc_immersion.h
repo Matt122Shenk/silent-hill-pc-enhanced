@@ -9,4 +9,8 @@
 
 void Pc_Immersion_Update(void);
 
+/* 1 while the flicker's blackout holds the beam dead: the light button must
+ * not toggle the flashlight (game_sys_states.c). */
+int  Pc_Immersion_FlashlightLocked(void);
+
 #endif /* PC_IMMERSION_H */

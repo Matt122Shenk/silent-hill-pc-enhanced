@@ -475,6 +475,12 @@ void SysState_Gameplay_Update(void) // 0x80038BD4
     if (g_Controller0->clickedBtnFlags & g_GameWorkPtr->config.controllerConfig.light &&
         g_SysWork.field_2388.field_154.effectsInfo_0.field_0.s_field_0.field_0 & (1 << 1))
     {
+#ifdef SH_PC_PORT
+        /* Immersion flicker blackout: the dead beam cannot be switched back
+         * on (or off) until it recovers on its own. */
+        extern int Pc_Immersion_FlashlightLocked(void);
+        if (!Pc_Immersion_FlashlightLocked())
+#endif
         Game_FlashlightToggle();
     }
 

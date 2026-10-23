@@ -116,9 +116,11 @@ with CRT, scanlines and the other filters without fighting them.
   brings it back.
 - **Fear Panting** (`immersion_fear`): Harry pants with fear now and then
   while the radio is crackling.
-- **Flicker** (`immersion_flicker`): the flashlight flickers in short bursts
-  near live enemies (15 % when close, 35 % when facing one). Per-pixel
-  flashlight modes only, not Classic.
+- **Flicker** (`immersion_flicker`): near live enemies the flashlight starts
+  failing, stutters for about a second and then dies for half a second; while
+  it is dead the light button does nothing, so you cannot switch it back on
+  until it recovers by itself (15 % when close, 45 % when facing one).
+  Per-pixel flashlight modes only, not Classic.
 - **Blood Walls**: blood splatters on the wall behind enemies hit by
   gunfire.
 

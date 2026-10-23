@@ -212,7 +212,9 @@ list(FILTER PC_PORT_SOURCES EXCLUDE REGEX "combat_target\\.c$")
 # iOS has neither of pc_ra_http.c's backends. ios_port/src/ios_ra_http.m
 # implements the same two entry points over NSURLSession; compiling both would
 # be a duplicate-symbol link error.
-if(IOS)
+# The browser build has no dlsym and no blocking HTTP: web_ra.c does the
+# transport with fetch() and a generated table answers the symbol lookups.
+if(IOS OR EMSCRIPTEN)
     list(FILTER PC_PORT_SOURCES EXCLUDE REGEX "pc_ra_http\\.c$")
 endif()
 
@@ -257,7 +259,7 @@ set(SH_RCHEEVOS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/rcheevos")
 # through JNI on Android (a branch inside pc_ra_http.c, so the shared
 # dlsym-based Pc_RaSymbolLookup is kept rather than duplicated). rcheevos itself
 # is libc-only and always could have built.
-if(IOS OR ANDROID)
+if(IOS OR ANDROID OR EMSCRIPTEN)
     set(SH_RA_DEFAULT ON)
 else()
     set(SH_RA_DEFAULT ${SH_DESKTOP_FEATURE_DEFAULT})
@@ -519,7 +521,18 @@ endif()
 if(SH_HAVE_RETROACHIEVEMENTS)
     target_link_libraries(SilentHillPC PRIVATE rcheevos_static)
     target_compile_definitions(SilentHillPC PRIVATE SH_RETROACHIEVEMENTS=1)
-    if(IOS)
+    if(EMSCRIPTEN)
+        find_package(Python3 REQUIRED COMPONENTS Interpreter)
+        set(SH_RA_SYMTAB "${CMAKE_CURRENT_BINARY_DIR}/ra_symtab_web.c")
+        file(GLOB SH_RA_SYMFILES "${CMAKE_CURRENT_SOURCE_DIR}/assets/gamedata/ra/sym.*.txt")
+        add_custom_command(OUTPUT "${SH_RA_SYMTAB}"
+            COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tools/gen_ra_symtab.py"
+                    -o "${SH_RA_SYMTAB}" ${SH_RA_SYMFILES}
+            DEPENDS ${SH_RA_SYMFILES} "${CMAKE_CURRENT_SOURCE_DIR}/tools/gen_ra_symtab.py"
+            COMMENT "Generating the RetroAchievements symbol table"
+            VERBATIM)
+        target_sources(SilentHillPC PRIVATE "${SH_RA_SYMTAB}")
+    elseif(IOS)
         # NSURLSession lives in Foundation, already linked for the rest of the
         # iOS platform sources. Nothing else to pull in.
         #
@@ -772,7 +785,7 @@ elseif(EMSCRIPTEN)
         "-sALLOW_MEMORY_GROWTH=1" "-sINITIAL_MEMORY=268435456" "-sMAXIMUM_MEMORY=4294967296"
         "-sSTACK_SIZE=8388608"
         "-sFORCE_FILESYSTEM=1" "-lidbfs.js"
-        "-sEXPORTED_RUNTIME_METHODS=FS,IDBFS,callMain,ENV"
+        "-sEXPORTED_RUNTIME_METHODS=FS,IDBFS,callMain,ENV,ccall"
         "-sEXPORTED_FUNCTIONS=_main,_malloc,_free"
         "-sINVOKE_RUN=0" "-sEXIT_RUNTIME=0"
         "-sMODULARIZE=1" "-sEXPORT_NAME=createSilentHill"

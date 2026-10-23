@@ -1,3 +1,6 @@
+#ifdef __EMSCRIPTEN__
+#include "web_platform.h"
+#endif
 #include "game.h"
 
 #include <memory.h>
@@ -332,6 +335,11 @@ static const s_PcOpt PCOPT_G[] = {
      * writer to rebuild one from the defaults in memory, and a phone has no text
      * editor pointed at Documents. */
     { "Reset_Settings", NULL,                           NULL,                   NULL,      0, NULL,      NULL,                          0, PCK_RESET  },
+#endif
+#if defined(__EMSCRIPTEN__)
+    /* The browser has no launcher either, so the account lives here, last
+     * before the page nav. Opens the page's own sign-in dialog (web_ra.c). */
+    { "Achievements",   NULL,                           NULL,                   NULL,      0, NULL,      NULL,                          0, PCK_RALOGIN },
 #endif
     /* Always second to last, after every platform's own rows. It used to sit
      * above the mobile-only rows, so on a phone Bullet_Decals, Load_Mods and
@@ -694,6 +702,8 @@ static const char* PcOpt_ValueLabel(const s_PcOpt* e, char* buf, int bufsz)
         return PcOpt_PadLabel(buf, bufsz, 12);
     if (e->kind == PCK_TOTITLE)
         return PcOpt_ToTitleArmed(g_PcOptionsMenu_SelectedEntry) ? "Press_again" : "";
+#endif
+#if defined(SH_IOS) || defined(__ANDROID__) || defined(__EMSCRIPTEN__)
     if (e->kind == PCK_RALOGIN) {
         if (Pc_Ra_LoginPending())
             return "Signing_in";
@@ -2019,6 +2029,15 @@ void Options_PcOptionsMenu_Control(void)
                         Sd_PlaySfx(Sfx_MenuCancel, 0, 64);
 #endif
                 }
+                g_Options_SelectionHighlightTimer = 0;
+#endif
+#if defined(__EMSCRIPTEN__)
+            } else if (sel->kind == PCK_RALOGIN) {
+                /* One dialog for both directions: sign-in when signed out, a
+                 * sign-out confirmation when signed in (web_ra.c). The game
+                 * keeps running behind it; the row label tracks the result. */
+                Web_ShowRaDialog();
+                Sd_PlaySfx(Sfx_MenuConfirm, 0, 64);
                 g_Options_SelectionHighlightTimer = 0;
 #endif
 #if defined(__ANDROID__)

@@ -262,6 +262,7 @@
 			return l ? new TextDecoder().decode(l.data) : "";
 		},
 		downloadLog: downloadLog,
+		raDialog: raOpen,
 		fs: function () { return Module && Module.FS; },
 		audioContexts: function () { return audioContexts; },
 		/* Every file the game wrote, with the text of small logs/configs. */
@@ -327,6 +328,57 @@
 	window.addEventListener("pageshow", resumeAudio);
 	["pointerdown", "touchend", "keydown"].forEach(function (ev) {
 		document.addEventListener(ev, resumeAudio, { capture: true, passive: true });
+	});
+
+	/* ---------------- RetroAchievements dialog ---------------- */
+
+	/* Opened by the Achievements row in Web Options (pc_port/src/web_ra.c).
+	 * The game keeps running behind it; the row's label follows the result. */
+	var ra = {
+		root: $("ra"), login: $("raLogin"), logout: $("raLogout"), user: $("raUser"),
+		pass: $("raPass"), msg: $("raLogoutMsg"), signOut: $("raSignOut")
+	};
+
+	function raClose() {
+		ra.root.style.display = "none";
+		ra.pass.value = "";
+		ui.canvas.focus();
+	}
+
+	function raOpen(signedIn, user) {
+		ra.login.style.display = signedIn ? "none" : "";
+		ra.logout.style.display = signedIn ? "" : "none";
+		if (signedIn) {
+			ra.msg.textContent = "Signed in as " + user + ". Sign out?";
+		} else {
+			ra.user.value = user || ra.user.value;
+		}
+		ra.root.style.display = "flex";
+		(signedIn ? ra.signOut : (ra.user.value ? ra.pass : ra.user)).focus();
+	}
+
+	/* SDL listens for keys on window and swallows them, so typing here would
+	 * both fail and drive the game. Keep every key inside the dialog. */
+	["keydown", "keyup", "keypress"].forEach(function (ev) {
+		ra.root.addEventListener(ev, function (e) {
+			e.stopPropagation();
+			if (ev === "keydown" && e.key === "Escape") raClose();
+		});
+	});
+
+	ra.login.addEventListener("submit", function (e) {
+		e.preventDefault();
+		var u = ra.user.value.trim(), p = ra.pass.value;
+		if (!u || !p || !Module) return;
+		Module.ccall("Web_RaLogin", null, ["string", "string"], [u, p]);
+		raClose();
+	});
+	ra.signOut.addEventListener("click", function () {
+		if (Module) Module.ccall("Web_RaLogout", null, [], []);
+		raClose();
+	});
+	Array.prototype.forEach.call(document.querySelectorAll(".raCancel"), function (b) {
+		b.addEventListener("click", raClose);
 	});
 
 	/* ---------------- Fullscreen ---------------- */

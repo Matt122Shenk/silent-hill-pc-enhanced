@@ -643,6 +643,7 @@ static s_RaJob* Pc_RaQueuePop(s_RaJob** list)
     return job;
 }
 
+#if !defined(__EMSCRIPTEN__)
 /* One blocking request on the worker thread; the platform stack lives in
  * pc_ra_http.c because <windows.h> cannot be included alongside the PSX
  * headers. */
@@ -676,6 +677,39 @@ static int SDLCALL Pc_RaHttpThread(void* unused)
     }
     return 0;
 }
+#endif
+
+#if defined(__EMSCRIPTEN__)
+#include "web_platform.h"
+
+/* web_ra.c's fetch() completion. Single-threaded, so the lock is only kept
+ * for symmetry with the worker path that shares the queue. */
+void Pc_RaWebJobDone(void* opaque, int status, char* body, size_t len)
+{
+    s_RaJob* job = (s_RaJob*)opaque;
+
+    job->status   = status;
+    job->body     = body;
+    job->body_len = len;
+    SDL_LockMutex(s_queueLock);
+    Pc_RaQueuePush(&s_completed, job);
+    SDL_UnlockMutex(s_queueLock);
+}
+#endif
+
+/* Hand a job to whatever performs HTTP here: the worker thread, or on the web
+ * (no threads) a fetch() that lands in s_completed on its own. */
+static void Pc_RaDispatch(s_RaJob* job)
+{
+#if defined(__EMSCRIPTEN__)
+    Web_RaFetch(job, job->url, job->post, job->content_type);
+#else
+    SDL_LockMutex(s_queueLock);
+    Pc_RaQueuePush(&s_pending, job);
+    SDL_UnlockMutex(s_queueLock);
+    SDL_SemPost(s_queueSem);
+#endif
+}
 
 /* rc_client asks us to talk to the server. Hand it to the worker and return
  * immediately -- the response is dispatched from Pc_Ra_Update. */
@@ -696,10 +730,7 @@ static void Pc_RaServerCall(const rc_api_request_t* request,
     job->callback      = callback;
     job->callback_data = callback_data;
 
-    SDL_LockMutex(s_queueLock);
-    Pc_RaQueuePush(&s_pending, job);
-    SDL_UnlockMutex(s_queueLock);
-    SDL_SemPost(s_queueSem);
+    Pc_RaDispatch(job);
 }
 
 /* ------------------------------------------------------------------------- */
@@ -863,7 +894,7 @@ static void Pc_RaFetchBadge(const char* badgeName)
     s_RaJob* job;
     char     url[160];
 
-    if (!badgeName || !badgeName[0] || !s_queueLock || !s_queueSem)
+    if (!badgeName || !badgeName[0] || !s_queueLock)
         return;
 
     job = (s_RaJob*)calloc(1, sizeof(*job));
@@ -874,10 +905,7 @@ static void Pc_RaFetchBadge(const char* badgeName)
     job->url = Pc_RaStrdup(url);
     strncpy(job->badge, badgeName, sizeof(job->badge) - 1);
 
-    SDL_LockMutex(s_queueLock);
-    Pc_RaQueuePush(&s_pending, job);
-    SDL_UnlockMutex(s_queueLock);
-    SDL_SemPost(s_queueSem);
+    Pc_RaDispatch(job);
 }
 
 /* Public wrapper for the browser, which requests badge art per visible row.
@@ -1231,6 +1259,15 @@ static int Pc_RaBringUpClient(void)
     Pc_RaBuildMap();
 
     if (!s_queueLock) s_queueLock = SDL_CreateMutex();
+#if defined(__EMSCRIPTEN__)
+    /* No worker: each job is a fetch() (Pc_RaDispatch). SDL hands out a
+     * no-op mutex without thread support but refuses a semaphore. */
+    if (!s_queueLock)
+    {
+        SH_DBG("[RA] could not create the job queue lock - disabled");
+        return 0;
+    }
+#else
     if (!s_queueSem)  s_queueSem  = SDL_CreateSemaphore(0);
     if (!s_queueLock || !s_queueSem)
     {
@@ -1245,6 +1282,7 @@ static int Pc_RaBringUpClient(void)
         SH_DBG("[RA] could not start HTTP worker - disabled");
         return 0;
     }
+#endif
 
     s_client = rc_client_create(Pc_RaReadMemory, Pc_RaServerCall);
     if (!s_client)

@@ -20,8 +20,7 @@ if command -v ninja >/dev/null 2>&1; then
 fi
 
 emcmake cmake -S "$ROOT/pc_port" -B "$BUILD" "${GEN[@]}" \
-    -DCMAKE_BUILD_TYPE="$CONFIG" \
-    -DSH_ENABLE_RETROACHIEVEMENTS=OFF
+    -DCMAKE_BUILD_TYPE="$CONFIG" -DSH_ENABLE_RETROACHIEVEMENTS=ON
 cmake --build "$BUILD" --target SilentHillPC -j "$(nproc 2>/dev/null || echo 8)"
 
 rm -rf "$DIST"

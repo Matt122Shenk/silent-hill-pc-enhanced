@@ -48,6 +48,26 @@ The site is staged in `web_port/dist/`. Serve that folder over HTTP. A
   game whether the browser has a coarse pointer (`SH_WEB_TOUCH`). A desktop
   browser shows no touch controls unless a finger actually touches the screen.
 
+## RetroAchievements
+
+Signed in from Web Options > Achievements (the page's own dialog; the game's
+screens have no text entry). The pieces that differ from desktop:
+
+- **Transport.** No threads, so each rcheevos job is a `fetch()` (`web_ra.c`)
+  that completes into the same queue `Pc_Ra_Update` drains.
+- **Relay.** retroachievements.org sends no CORS headers, so API calls go to
+  `/ra/dorequest.php` on the site itself. `web_port/firebase/functions` is a
+  Cloud Function that forwards them; the site's `firebase.json` needs:
+
+  ```json
+  "hosting":   { "rewrites": [ { "source": "/ra/**", "function": { "functionId": "raRelay", "region": "us-central1" } } ] },
+  "functions": [ { "source": "functions", "codebase": "default" } ]
+  ```
+
+  Badge art comes straight from media.retroachievements.org, which allows it.
+- **Symbols.** No `dlsym`, so `tools/gen_ra_symtab.py` compiles the address
+  map's name lookup into the build from `assets/gamedata/ra/sym.*.txt`.
+
 ## Wasm-only bug classes
 
 Native ABIs tolerate these and wasm does not, so they show up here first:

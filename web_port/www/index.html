@@ -98,6 +98,18 @@ body.desktop .controls { display: block; }
 	z-index: 5; display: none; padding: .35rem .7rem; font-size: .8rem;
 	background: rgba(0,0,0,.55); border-color: rgba(255,255,255,.15);
 }
+#ra {
+	position: fixed; inset: 0; z-index: 15; display: none; align-items: center; justify-content: center;
+	background: rgba(0,0,0,.7); padding: 16px;
+}
+#ra .card { max-width: 24rem; }
+#ra h1 { font-size: 1.2rem; }
+#ra input[type=text], #ra input[type=password] {
+	width: 100%; font: inherit; color: var(--ash); background: rgba(0,0,0,.4);
+	border: 1px solid var(--line); padding: .6rem .7rem; margin: 0 0 .7rem;
+}
+#ra input:focus { outline: none; border-color: var(--rust-lit); }
+#ra .primary { background: var(--blood); border-color: #a0281e; color: #f0e8e0; }
 #crash {
 	position: fixed; inset: 0; z-index: 20; display: none; align-items: center; justify-content: center;
 	background: rgba(0,0,0,.85); padding: 16px;
@@ -146,6 +158,30 @@ body.desktop .controls { display: block; }
 		<p class="note" id="platformNote"></p>
 		<p class="note">Nothing is uploaded. The disc is read on this device only, and saves stay in this browser. Game files are not included. You need your own copy.
 			<a href="/">sh1pc.com</a></p>
+	</div>
+</div>
+
+<div id="ra">
+	<div class="card">
+		<form id="raLogin">
+			<h1>RetroAchievements</h1>
+			<p class="sub">Sign in to earn achievements. Your password is sent to RetroAchievements once and never stored; only a sign-in token is kept in this browser.</p>
+			<input type="text" id="raUser" placeholder="Username" autocomplete="username" autocapitalize="off" spellcheck="false" required>
+			<input type="password" id="raPass" placeholder="Password" autocomplete="current-password" required>
+			<div class="actions">
+				<button type="submit" class="primary">Sign in</button>
+				<button type="button" class="raCancel">Cancel</button>
+			</div>
+			<p class="note">No account? <a href="https://retroachievements.org/createaccount.php" target="_blank" rel="noopener">Create one at retroachievements.org</a>.</p>
+		</form>
+		<div id="raLogout">
+			<h1>RetroAchievements</h1>
+			<p class="sub" id="raLogoutMsg"></p>
+			<div class="actions">
+				<button type="button" class="primary" id="raSignOut">Sign out</button>
+				<button type="button" class="raCancel">Cancel</button>
+			</div>
+		</div>
 	</div>
 </div>
 

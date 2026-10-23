@@ -16,6 +16,12 @@ void Web_CanvasSize(int* w, int* h);
  * per-poly cull bounds and the 2D overlays divide by those, so a stale value
  * draws effects over only part of the screen. */
 void Web_TrackWindowSize(void);
+
+/* RetroAchievements (web_ra.c). Web_RaFetch performs one rc_client/badge job
+ * with fetch() and completes it into Pc_RaWebJobDone; Web_ShowRaDialog opens
+ * the page's sign-in or sign-out dialog for the options row. */
+void Web_RaFetch(void* job, const char* url, const char* post, const char* contentType);
+void Web_ShowRaDialog(void);
 #endif
 
 #endif

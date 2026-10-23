@@ -92,6 +92,10 @@ void func_800CE180();
 // Same as `func_800E6758` in MAP2_S02.
 void func_800E828C(s_SubCharacter* chara);
 
+#ifdef SH_PC_PORT
+void func_800EB6B0(bool arg0);
+#else
 void func_800EB6B0(void);
+#endif
 
 #endif

@@ -24,6 +24,7 @@
  * player's map-collision cylinder -- see Pc_Pick_MoveScale.
  */
 #include "game.h"
+#include "bodyprog/bodyprog.h" /* Vw_WorldScreenMatrixAtPositionGet */
 
 #include "bodyprog/chara/chara.h"
 #include "bodyprog/collision/chara.h"

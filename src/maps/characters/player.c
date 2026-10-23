@@ -915,9 +915,20 @@ void Player_FallBackward(void)
 #endif
 }
 
+#ifdef SH_PC_PORT
+/* Installed as func_68, which is called as (poly, idx) and returns s32; wasm
+ * traps a call whose signature differs from the target's. */
+s32 sharedFunc_800D2E7C_0_s00(POLY_FT4** poly, s32 idx)
+{
+    (void)poly;
+    (void)idx;
+    return 0;
+}
+#else
 void sharedFunc_800D2E7C_0_s00(void)
 {
 }
+#endif
 
 void Player_DamageFeetFront(void)
 {

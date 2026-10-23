@@ -20,7 +20,12 @@
 
 #include "maps/shared/Map_RoomIdxGet.h" // 0x800EB470
 
+#ifdef SH_PC_PORT
+/* Installed as bgmEvent, which is called with a bool; see map.h. */
+void func_800EB6B0(bool arg0) // 0x800EB6B0
+#else
 void func_800EB6B0(void) // 0x800EB6B0
+#endif
 {
     s32    temp_v0;
     q19_12 posX;

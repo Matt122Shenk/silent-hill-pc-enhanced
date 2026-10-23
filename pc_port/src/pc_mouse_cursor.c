@@ -562,7 +562,7 @@ void Pc_MouseCursor_Draw(void)
         if (Pc_Touch_UsedRecently() || Pc_MouseCursor_TouchDriving())
             return;
     }
-#if defined(__ANDROID__) || defined(SH_IOS)
+#if defined(__ANDROID__) || defined(SH_IOS) || defined(__EMSCRIPTEN__)
     /* Before the first touch there is nothing to be "recent" yet, and on a
      * phone the pointer starts parked at 0,0. Nothing here has a mouse unless
      * one is plugged in, so stay hidden until a real one moves the pointer. */

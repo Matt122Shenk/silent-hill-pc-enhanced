@@ -1143,7 +1143,7 @@ static int upload_rgba(GLuint* tex, const unsigned char* rgba, int w, int h, int
  * capability test cannot be the only guard and the branch has to be dead at
  * compile time. Nothing is lost: g_grCaps.texLevelParam is false on every GLES
  * context anyway, so the else path below is what would have run regardless. */
-#if defined(__ANDROID__) || defined(SH_IOS)
+#if defined(__ANDROID__) || defined(SH_IOS) || defined(__EMSCRIPTEN__)
     {
 #else
     if (g_grCaps.texLevelParam)

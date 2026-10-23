@@ -43,7 +43,7 @@ option(SH_ASAN "Enable AddressSanitizer for memory corruption detection" OFF)
 # shared objects on a search path, a writable CWD next to the binary). None of
 # those hold inside an APK, so they default off for Android and stay on
 # everywhere else. Explicit -D on the command line still wins.
-if(ANDROID OR IOS)
+if(ANDROID OR IOS OR EMSCRIPTEN)
     set(SH_DESKTOP_FEATURE_DEFAULT OFF)
 else()
     set(SH_DESKTOP_FEATURE_DEFAULT ON)
@@ -108,6 +108,17 @@ endif()
 
 if(NOT EXISTS "${PSYCROSS_DIR}/CMakeLists.txt")
     set(PSYCROSS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../PsyCross")
+endif()
+
+# Emscripten ships SDL2 as a compiler port rather than a package, so give it
+# the same target name the mobile builds use; PsyCross links it PUBLIC and
+# the game inherits it from there.
+if(EMSCRIPTEN AND NOT TARGET SDL2)
+    add_library(SDL2 INTERFACE)
+    target_compile_options(SDL2 INTERFACE "-sUSE_SDL=2")
+    target_link_options(SDL2 INTERFACE "-sUSE_SDL=2")
+    target_include_directories(SDL2 INTERFACE
+        "${EMSCRIPTEN_SYSROOT}/include/SDL2" "${EMSCRIPTEN_SYSROOT}/include")
 endif()
 
 if(EXISTS "${PSYCROSS_DIR}/CMakeLists.txt")
@@ -210,7 +221,7 @@ endif()
 # entirely and the software stack (xa_player_software.c + PsyX_SPUSoftware,
 # both SDL-sinked) becomes the only audio path. SH_NO_OPENAL collapses
 # xa_player_dispatch.c onto it — see the comment there.
-if(ANDROID OR IOS)
+if(ANDROID OR IOS OR EMSCRIPTEN)
     list(FILTER PC_PORT_SOURCES EXCLUDE REGEX "xa_player\\.c$")
 endif()
 
@@ -411,7 +422,7 @@ target_compile_definitions(SilentHillPC PRIVATE
     VER_${SH_VERSION}
     SH_PC_PORT
     SKIP_ASM
-    $<$<OR:$<BOOL:${ANDROID}>,$<BOOL:${IOS}>>:SH_NO_OPENAL>
+    $<$<OR:$<BOOL:${ANDROID}>,$<BOOL:${IOS}>,$<BOOL:${EMSCRIPTEN}>>:SH_NO_OPENAL>
     # Saves every iOS-conditional TU repeating the TargetConditionals dance.
     $<$<BOOL:${IOS}>:SH_IOS>
 )
@@ -587,7 +598,7 @@ endif()
 # SH_FMV_MJPEG drives the libjpeg-backed AVI override decoder in fmv_player.cpp.
 # The disc's own STR/MDEC FMVs never touch it, so a platform without libjpeg
 # (Android) just loses the override and still plays every cutscene.
-if(ANDROID OR IOS)
+if(ANDROID OR IOS OR EMSCRIPTEN)
     message(STATUS "libjpeg: skipped (mobile) — MJPG AVI overrides disabled, disc STR FMVs unaffected")
 elseif(JPEG_LIBRARY)
     target_link_libraries(SilentHillPC PRIVATE ${JPEG_LIBRARY})
@@ -747,6 +758,34 @@ elseif(IOS)
         "-framework Metal"
         m
     )
+elseif(EMSCRIPTEN)
+    # The browser shell (web_port/) owns the page, so no generated HTML: the
+    # build emits SilentHillPC.js + .wasm and web_port/index.html loads them.
+    # ASYNCIFY is what lets the PSX-style blocking main loop run on the page's
+    # thread: PsyCross yields to the browser with emscripten_sleep() inside its
+    # vsync wait, which is the only point a canvas frame can be presented.
+    # No pthreads, so no SharedArrayBuffer and no COOP/COEP headers to host.
+    target_link_options(SilentHillPC PRIVATE
+        "-sUSE_SDL=2"
+        "-sMIN_WEBGL_VERSION=2" "-sMAX_WEBGL_VERSION=2"
+        "-sASYNCIFY" "-sASYNCIFY_STACK_SIZE=262144"
+        "-sALLOW_MEMORY_GROWTH=1" "-sINITIAL_MEMORY=536870912" "-sMAXIMUM_MEMORY=4294967296"
+        "-sSTACK_SIZE=8388608"
+        "-sFORCE_FILESYSTEM=1" "-lidbfs.js"
+        "-sEXPORTED_RUNTIME_METHODS=FS,IDBFS,callMain,ENV"
+        "-sEXPORTED_FUNCTIONS=_main,_malloc,_free"
+        "-sINVOKE_RUN=0" "-sEXIT_RUNTIME=0"
+        "-sMODULARIZE=1" "-sEXPORT_NAME=createSilentHill"
+        "-sENVIRONMENT=web"
+        "-sGL_ENABLE_GET_PROC_ADDRESS=1"
+        # Function names survive into the shipped module (~0.5 MB) so a crash
+        # report from a player names the function instead of wasm-function[N].
+        "--profiling-funcs"
+        # The port's own shipped files, never game data. The page copies them
+        # into the persistent /game tree, see web_port/www/shell.js.
+        "--preload-file" "${CMAKE_CURRENT_SOURCE_DIR}/assets@/port"
+    )
+    set_target_properties(SilentHillPC PROPERTIES SUFFIX ".js")
 elseif(UNIX)
     find_package(OpenGL REQUIRED)
     target_link_libraries(SilentHillPC PRIVATE OpenGL::GL)
@@ -775,6 +814,15 @@ else()
         -Wno-discarded-qualifiers
         -Wno-builtin-declaration-mismatch
     )
+    if(EMSCRIPTEN)
+        # Every call through a pointer of the wrong function type is a runtime
+        # trap in wasm, where native ABIs let it slide. Clang folds this into
+        # the incompatible-pointer-types group silenced above; keep it audible.
+        target_compile_options(SilentHillPC PRIVATE
+            $<$<COMPILE_LANGUAGE:C>:-Wincompatible-function-pointer-types>
+            -Wcast-function-type-mismatch
+        )
+    endif()
     if(APPLE)
         # AppleClang is stricter than GCC on the WIP decomp's implicit decls and
         # qualifier/conversion mismatches; demote these to warnings on macOS.
@@ -875,6 +923,10 @@ endif()
 # the APK's own extracted lib dir, and the loader builds a relative maps/<name>.so
 # path that resolves nowhere inside an app sandbox. Without this the binary
 # contains map0_s00 and nothing else.
+# The browser has the same problem as Android and iOS: no loose modules.
+if(EMSCRIPTEN AND NOT SH_BUILD_MAP_DLLS)
+    set(SH_STATIC_MAPS ON CACHE BOOL "" FORCE)
+endif()
 if(ANDROID AND NOT SH_BUILD_MAP_DLLS AND NOT DEFINED SH_ANDROID_NO_STATIC_MAPS)
     set(SH_STATIC_MAPS ON CACHE BOOL "" FORCE)
 endif()
@@ -919,6 +971,12 @@ if(SH_STATIC_MAPS)
         if(SH_BREW_LLVM)
             list(APPEND SH_LLVM_HINTS "${SH_BREW_LLVM}/bin")
         endif()
+    endif()
+    # emsdk keeps its LLVM next to the compiler, off PATH.
+    if(EMSCRIPTEN)
+        get_filename_component(_em_root "${EMSCRIPTEN_ROOT_PATH}" DIRECTORY)
+        list(APPEND SH_LLVM_HINTS "${_em_root}/bin")
+        find_program(SH_LLVM_AR NAMES llvm-ar HINTS ${SH_LLVM_HINTS} REQUIRED)
     endif()
     find_program(SH_LLVM_NM      NAMES llvm-nm      llvm-nm-18 llvm-nm-17      HINTS ${SH_LLVM_HINTS})
     find_program(SH_LLVM_OBJCOPY NAMES llvm-objcopy llvm-objcopy-18 llvm-objcopy-17 HINTS ${SH_LLVM_HINTS})

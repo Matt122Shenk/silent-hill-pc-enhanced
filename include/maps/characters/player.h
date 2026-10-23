@@ -49,7 +49,13 @@ void sharedFunc_800D2E8C_0_s00(q19_12 posX, q19_12 posZ, VECTOR3* vec);
 bool sharedFunc_800D2E94_0_s00(void);
 
 void sharedFunc_800D2E9C_0_s00(q19_12* offsetX, q19_12* offsetZ, q3_12* angle);
-bool sharedFunc_800D23EC_0_s00(s32 playerExtraState, VECTOR3* vec, q3_12 angle, s32 vecCount);void sharedFunc_800D2C7C_0_s00(s32 playerExtraState);void sharedFunc_800D2D2C_0_s00(void);s32  Player_AnimPlaybackStateGet(void);void sharedFunc_800D2E7C_0_s00(void);
+bool sharedFunc_800D23EC_0_s00(s32 playerExtraState, VECTOR3* vec, q3_12 angle, s32 vecCount);void sharedFunc_800D2C7C_0_s00(s32 playerExtraState);void sharedFunc_800D2D2C_0_s00(void);s32  Player_AnimPlaybackStateGet(void);
+#ifdef SH_PC_PORT
+s32 sharedFunc_800D2E7C_0_s00(POLY_FT4** poly, s32 idx);
+#else
+void sharedFunc_800D2E7C_0_s00(void);
+#endif
+
 
 s32 sharedFunc_800D2EA4_0_s00(void);
 

@@ -115,6 +115,14 @@ void Sh_InstallCrashFilter(void)
     SetUnhandledExceptionFilter(Sh_CrashFilter);
 }
 
+#elif defined(__EMSCRIPTEN__)
+
+/* A wasm trap is a JS exception, not a signal: there is nothing to install,
+ * and the page reports it (web_port/www/shell.js) with the log attached. */
+void Sh_InstallCrashFilter(void)
+{
+}
+
 #else /* !_WIN32 */
 
 /* POSIX crash handler. This existed as a no-op, and on Android that made

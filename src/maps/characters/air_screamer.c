@@ -13486,7 +13486,22 @@ void sharedFunc_800D8804_0_s01(void)
  * Replaces the zeroed-out sharedData_800CAA98_0_s01.animInfo_0 stub.
  * Entries using variable-duration callbacks have hasVariableDuration = true. */
 
-#define VARFUNC(fn) { .variableFunc = (q19_12(*)(void))(fn) }
+/* Anim_DurationGet calls these as (model, animInfo). The callback is also
+ * called directly with the chara, so it keeps its own signature and the table
+ * gets a thunk of the called type; model sits at offset 0 of s_SubCharacter. */
+static q19_12 sharedFunc_800D77D0_0_s01_AnimVar(s_Model* model, s_AnimInfo* unused)
+{
+    (void)unused;
+    return sharedFunc_800D77D0_0_s01((s_SubCharacter*)model);
+}
+
+static q19_12 sharedFunc_800D7714_0_s01_AnimVar(s_Model* model, s_AnimInfo* unused)
+{
+    (void)unused;
+    return sharedFunc_800D7714_0_s01((s_SubCharacter*)model);
+}
+
+#define VARFUNC(fn) { .variableFunc = (q19_12(*)(void))(fn##_AnimVar) }
 
 s_AnimInfo AIR_SCREAMER_ANIM_INFOS[] = {
     /*  0 */ { Anim_BlendLinear,  ANIM_STATUS(0, false),  false, NO_VALUE,               { Q12(10)   }, NO_VALUE, NO_VALUE },

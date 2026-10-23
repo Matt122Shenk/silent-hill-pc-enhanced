@@ -131,8 +131,10 @@ s_PcConfig g_PcConfig = {
     .textSize            = 100.0f,
     .aimAssist           = 1, /* OTS/TPS free-aim aim assist (mouse body-coverage + controller auto-aim) */
     .mouseCursor         = 1, /* mouse controls cursor puzzles + clickable main menu */
-#if defined(__ANDROID__) || defined(SH_IOS)
-    /* Automatic by default only where the touchscreen IS the controller. A
+#if defined(__ANDROID__) || defined(SH_IOS) || defined(__EMSCRIPTEN__)
+    /* Automatic by default only where the touchscreen IS the controller.
+     * The web build cannot know that at compile time; pc_touch.c asks the
+     * page before letting Automatic show anything. A
      * desktop with a touch-capable monitor still has a mouse and a pad, and
      * drawing thumb controls over its picture uninvited would be wrong. */
     .touchControls       = TouchControls_Auto,

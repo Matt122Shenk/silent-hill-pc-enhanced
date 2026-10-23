@@ -129,7 +129,10 @@ void ShDiscordIpc_Close(void)
  * symbols, and the raw syscall bypasses symbol binding entirely. */
 static int ipc_close(int fd)
 {
-#if defined(__APPLE__)
+#if defined(__EMSCRIPTEN__)
+    /* No sockets reach a Discord client from a page; nothing here ever opens. */
+    return -1;
+#elif defined(__APPLE__)
     static int (*s_realClose)(int) = NULL;
     if (s_realClose == NULL)
         s_realClose = (int (*)(int))dlsym(RTLD_DEFAULT, "close");

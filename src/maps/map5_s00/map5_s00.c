@@ -390,7 +390,12 @@ void func_800D6490(VECTOR3* arg0) // 0x800D6490
 
 #include "maps/shared/Map_RoomIdxGet.h" // 0x800D6508
 
+#ifdef SH_PC_PORT
+/* Installed as bgmEvent, which is called with a bool; see map.h. */
+void func_800D6790(bool arg0) // 0x800D6790
+#else
 void func_800D6790(void) // 0x800D6790
+#endif
 {
     u32 bgmFlags = D_800DA578[g_SavegamePtr->mapRoomIdx];
 

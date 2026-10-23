@@ -343,7 +343,7 @@ void Pc_ControlStyleUpdate(void)
         extern int Pc_MouseCursor_PuzzleActive(void);
         wantCapture = ((g_DebugThirdPersonCam || g_DebugCamEnabled) && inGameplay && !Pc_MouseCursor_PuzzleActive());
     }
-#if defined(SH_IOS) || defined(__ANDROID__)
+#if defined(SH_IOS) || defined(__ANDROID__) || defined(__EMSCRIPTEN__)
     /* The glass is not a mouse. Touch look comes through pc_touch, and on
      * Android relative mode asks the view for pointer capture. */
     {

@@ -1510,14 +1510,29 @@ void MemCard_SwEventsInit(void) // 0x8003045C
     MemCard_SwEventsReset();
 }
 
+#if defined(__EMSCRIPTEN__)
+/* OpenEvent takes long (*)() and libapi calls through exactly that type; the
+ * handlers are void. Native ABIs ignore the mismatch, wasm traps on it at the
+ * first card access, so the browser build hands over thunks of the right type. */
+#define MC_EV_THUNK(fn) static long fn##_Ev(void) { fn(); return 0; }
+MC_EV_THUNK(MemCard_HwEventSpIOE)
+MC_EV_THUNK(MemCard_HwEventSpERROR)
+MC_EV_THUNK(MemCard_HwEventSpTIMOUT)
+MC_EV_THUNK(MemCard_HwEventSpNEW)
+MC_EV_THUNK(MemCard_HwEventSpUNKNOWN)
+#define MC_EV(fn) fn##_Ev
+#else
+#define MC_EV(fn) fn
+#endif
+
 void MemCard_HwEventsInit(void) // 0x80030530
 {
     EnterCriticalSection();
-    g_MemCard_Work.eventHwSpIOE     = OpenEvent(HwCARD, EvSpIOE, EvMdINTR, MemCard_HwEventSpIOE);
-    g_MemCard_Work.eventHwSpERROR   = OpenEvent(HwCARD, EvSpERROR, EvMdINTR, MemCard_HwEventSpERROR);
-    g_MemCard_Work.eventHwSpTIMOUT  = OpenEvent(HwCARD, EvSpTIMOUT, EvMdINTR, MemCard_HwEventSpTIMOUT);
-    g_MemCard_Work.eventHwSpNEW     = OpenEvent(HwCARD, EvSpNEW, EvMdINTR, MemCard_HwEventSpNEW);
-    g_MemCard_Work.eventHwSpUNKNOWN = OpenEvent(HwCARD, EvSpUNKNOWN, EvMdINTR, MemCard_HwEventSpUNKNOWN);
+    g_MemCard_Work.eventHwSpIOE     = OpenEvent(HwCARD, EvSpIOE, EvMdINTR, MC_EV(MemCard_HwEventSpIOE));
+    g_MemCard_Work.eventHwSpERROR   = OpenEvent(HwCARD, EvSpERROR, EvMdINTR, MC_EV(MemCard_HwEventSpERROR));
+    g_MemCard_Work.eventHwSpTIMOUT  = OpenEvent(HwCARD, EvSpTIMOUT, EvMdINTR, MC_EV(MemCard_HwEventSpTIMOUT));
+    g_MemCard_Work.eventHwSpNEW     = OpenEvent(HwCARD, EvSpNEW, EvMdINTR, MC_EV(MemCard_HwEventSpNEW));
+    g_MemCard_Work.eventHwSpUNKNOWN = OpenEvent(HwCARD, EvSpUNKNOWN, EvMdINTR, MC_EV(MemCard_HwEventSpUNKNOWN));
     ExitCriticalSection();
 
     EnableEvent(g_MemCard_Work.eventHwSpIOE);

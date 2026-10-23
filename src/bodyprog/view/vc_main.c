@@ -529,10 +529,9 @@ void Pc_CamSnapDump(void)
          * game_main's SetGeomOffset) and the draw-env centre. With camera and
          * geomH already proven identical to console, these are the remaining
          * numbers that decide where the picture sits vertically. */
-        extern void ReadGeomOffset(long* ofx, long* ofy);
-        long ofx = 0, ofy = 0;
+        s32 ofx = 0, ofy = 0;
         ReadGeomOffset(&ofx, &ofy);
-        SH_DBG_ECHO("[CAMSNAP] gteOfs=(%ld,%ld) drawOfs=(%d,%d)",
+        SH_DBG_ECHO("[CAMSNAP] gteOfs=(%d,%d) drawOfs=(%d,%d)",
                     ofx, ofy, (int)GsDRAWENV.ofs[0], (int)GsDRAWENV.ofs[1]);
     }
     /* The final comparable: camera pos/angles/geomH are proven bit-identical

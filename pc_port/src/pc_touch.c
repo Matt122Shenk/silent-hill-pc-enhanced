@@ -28,6 +28,8 @@
 #include "bodyprog/events/map_msg.h" /* g_MapMsg_Select */
 #include "pc_quick_options.h"     /* the button below opens it */
 #include "control_style.h"
+#include "web_platform.h"
+#include "pc_mouse_cursor.h"
 
 #define TC_MAX_FINGERS 8
 
@@ -928,6 +930,15 @@ static int Tc_Level(void)
 
     if (g_PcConfig.touchControls == TouchControls_Off)
         return soleInput ? TC_LEVEL_ESCAPE : TC_LEVEL_NONE;
+
+#if defined(__EMSCRIPTEN__)
+    /* One page serves desktops and phones. At boot a desktop browser has no
+     * pad and no key pressed yet, which reads as "touch is the only input"
+     * and would paint thumb controls over the picture. Only a finger that
+     * actually lands brings them up there. */
+    if (!Web_IsTouchDevice() && s_LastSource != TS_TOUCH)
+        return TC_LEVEL_NONE;
+#endif
 
     /* Automatic: last input wins. A pad left connected and idle only decides it
      * while nothing at all has been used yet. */

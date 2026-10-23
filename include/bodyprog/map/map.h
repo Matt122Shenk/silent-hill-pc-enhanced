@@ -444,11 +444,11 @@ typedef struct _MapOverlayHdr
     /* 0x64  */ s32                    (*func_64)(POLY_FT4** poly, s32);
     /* 0x68  */ s32                    (*func_68)(POLY_FT4** poly, s32);
     /* 0x6C  */ void                   (*func_6C)();
-    /* 0x70  */ s32                    (*func_70)(POLY_FT4** poly, s32);
+    /* 0x70  */ void                   (*func_70)(POLY_FT4** poly, s32);
     /* 0x74  */ void                   (*func_74)();
     /* 0x78  */ s32                    (*func_78)(POLY_FT4** poly, s32);
     /* 0x7C  */ s_MapOverlayHdr_7C* field_7C; // Only map1_s01, map6_s04.
-    /* 0x80  */ void                   (*func_80)();
+    /* 0x80  */ s32                    (*func_80)(s32);
     /* 0x84  */ s32                    (*func_84)(POLY_FT4** poly, s32);
     /* 0x88  */ s32*                   func_88;                          // Only map0_s01, map7_s01.
     /* 0x8C  */ s32                    (*func_8C)(POLY_FT4** poly, s32); // Only map0_s01, map7_s01.
@@ -469,11 +469,11 @@ typedef struct _MapOverlayHdr
     /* 0xC8  */ void                   (*playerControlFreeze)();
     /* 0xCC  */ void                   (*playerControlUnfreeze)(bool setIdle);
     /* 0xD0  */ bool                   (*playerPathWaypointExecute)(s32 playerExtraState, VECTOR3* vec, q3_12 angle, s32 vecCount); // 0x800C964C
-    /* 0xD4  */ s32                    (*playerAnimStateSet)(s32 playerExtraState); // This only changes the state of player extra data, but gets used by same function that calls `charaAnimStateSet` when player chara is passed.
+    /* 0xD4  */ void                   (*playerAnimStateSet)(s32 playerExtraState); // This only changes the state of player extra data, but gets used by same function that calls `charaAnimStateSet` when player chara is passed.
                                                                                     // @hack Points to `Player_AnimStateSet` which has `void` return type, but changing this funcptr causes mismatch in `Event_CharaAnimCmdExecute`.
     /* 0xD8  */ void                   (*playerAnimReset)();
     /* 0xDC  */ void                   (*playerAnimLock)(void);
-    /* 0xE0  */ void                   (*playerAnimIsLocked)(void);
+    /* 0xE0  */ s32                    (*playerAnimIsLocked)(void);
     /* 0xE4  */ void                   (*playerAnimUnlock)(void);
     /* 0xE8  */ s32                    (*playerAnimPlaybackStateGet)(void);
     /* 0xEC  */ bool                   (*playerMoveSpeedIsZero)(void);
@@ -486,15 +486,15 @@ typedef struct _MapOverlayHdr
     /* 0x108 */ s32                    (*func_108)();
     /* 0x10C */ void                   (*func_10C)();
     /* 0x110 */ void                   (*func_110)();
-    /* 0x114 */ void                   (*func_114)();
+    /* 0x114 */ s32                    (*func_114)(void);
     /* 0x118 */ void                   (*func_118)();
     /* 0x11C */ void                   (*func_11C)();
     /* 0x120 */ void                   (*func_120)();
     /* 0x124 */ void                   (*charaAnimStateSet)(s_SubCharacter* chara, q19_12 afkTime);
-    /* 0x128 */ s32                    (*charaAnimReset)(s_SubCharacter* player); // TODO: Not only used by the player.
-    /* 0x12C */ s32                    (*charaAnimLock)(s_SubCharacter* chara);
-    /* 0x130 */ void                   (*charaAnimIsLocked)(s_SubCharacter* chara);
-    /* 0x134 */ s32                    (*charaAnimUnlock)(s_SubCharacter* chara);
+    /* 0x128 */ void                   (*charaAnimReset)(s_SubCharacter* player); // TODO: Not only used by the player.
+    /* 0x12C */ void                   (*charaAnimLock)(s_SubCharacter* chara);
+    /* 0x130 */ s32                    (*charaAnimIsLocked)(s_SubCharacter* chara);
+    /* 0x134 */ void                   (*charaAnimUnlock)(s_SubCharacter* chara);
     /* 0x138 */ s32                    (*charaAnimPlaybackStateGet)(s_SubCharacter* chara);
     /* 0x13C */ bool                   (*charaPathWaypointExecute)(s_SubCharacter* chara, s32 arg1, VECTOR3* arg2In, s32 angleIn, s32 arg4);
     /* 0x140 */ void                   (*charaVisibleSet)(s_SubCharacter* chara);
@@ -506,11 +506,11 @@ typedef struct _MapOverlayHdr
     /* 0x158 */ void                   (*func_158)(q19_12 x, q19_12 z); // Only map1_s05, map1_s06.
     /* 0x15C */ void                   (*func_15C)();                   // Only map5_s01.
     /* 0x160 */ void                   (*func_160)();                   // Only map5_s01.
-    /* 0x164 */ void                   (*func_164)();                   // Only map5_s01.
+    /* 0x164 */ s16                    (*func_164)(void);                   // Only map5_s01.
     /* 0x168 */ void                   (*particlesUpdate)(s32 unused, s32 mapId, s32);
     /* 0x16C */ void                   (*enviromentSet)(s8, u32);
     /* 0x170 */ void                   (*func_170)();
-    /* 0x174 */ void                   (*func_174)();
+    /* 0x174 */ s32                    (*func_174)(s32);
     /* 0x178 */ void                   (*particleHyperBlasterBeamDraw)(VECTOR3* vec0, q19_12* rotX, q19_12* rotY);
     /* 0x17C */ void                   (*particleBeamDraw)(const VECTOR3* from, const VECTOR3* to);
     /* 0x180 */ void                   (*particleSoundStop)();

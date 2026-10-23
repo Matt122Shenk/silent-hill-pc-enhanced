@@ -231,9 +231,17 @@ void Twinfeeler_TextureLoad(void);
  */
 void Twinfeeler_Translate(VECTOR3* newPos, const VECTOR3* pos, q19_12 headingAngle, q19_12 dist);
 
+#ifdef SH_PC_PORT
+void func_800D3114(void* unused);
+#else
 void func_800D3114(void);
+#endif
 
+#ifdef SH_PC_PORT
+void func_800D326C(void* unused);
+#else
 void func_800D326C(void);
+#endif
 
 void func_800D33D0(void);
 

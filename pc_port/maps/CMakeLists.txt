@@ -105,6 +105,13 @@ function(add_map_overlay MAP_NAME MAP_DEFINE)
             -Wno-unused-function
         )
     endif()
+    # See ../CMakeLists.txt: a mistyped function-pointer call traps in wasm.
+    if(EMSCRIPTEN)
+        target_compile_options(${MAP_NAME} PRIVATE
+            $<$<COMPILE_LANGUAGE:C>:-Wincompatible-function-pointer-types>
+            -Wcast-function-type-mismatch
+        )
+    endif()
 
     # GCC 14 promoted these C warnings to default errors; the Linux map-DLL
     # build (GCC 14) needs them demoted like the exe (pc_port/CMakeLists.txt).
@@ -150,11 +157,17 @@ function(add_map_overlay MAP_NAME MAP_DEFINE)
         # code still binds to the single engine copy. This is PSX overlay
         # semantics — a private copy of the shared code per overlay — expressed
         # at link time instead of by swapping a module in and out.
+        # wasm objects need the script's own rewrite; see prefix_map_syms.py.
+        if(EMSCRIPTEN)
+            set(_prefix_tool --ar "${SH_LLVM_AR}")
+        else()
+            set(_prefix_tool --objcopy "${SH_LLVM_OBJCOPY}")
+        endif()
         add_custom_command(TARGET ${MAP_NAME} POST_BUILD
             COMMAND ${Python3_EXECUTABLE}
                     "${SH_PC_PORT_DIR}/tools/prefix_map_syms.py"
                     --nm "${SH_LLVM_NM}"
-                    --objcopy "${SH_LLVM_OBJCOPY}"
+                    ${_prefix_tool}
                     --archive "$<TARGET_FILE:${MAP_NAME}>"
                     --map-name "${MAP_NAME}"
                     --sym-prefix "${SH_SYM_PREFIX}"

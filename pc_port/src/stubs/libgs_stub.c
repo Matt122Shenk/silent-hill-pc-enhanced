@@ -1728,10 +1728,12 @@ void GsSortOt_GetSubrootBounds(uintptr_t* lo, uintptr_t* hi)
     if (hi) *hi = s_GsSortOt_subrootHi;
 }
 
-void GsSortOt(GsOT *src, GsOT *dst)
+GsOT* GsSortOt(GsOT *src, GsOT *dst)
 {
 #ifdef SH_PC_PORT
-    /* PSX libgs GsSortOt(subroot, root): registers `subroot` as a sub-OT
+    /* Returns dst like libgs does; wasm rejects the void the stub used to
+     * return to callers that read it.
+     * PSX libgs GsSortOt(subroot, root): registers `subroot` as a sub-OT
      * of `root` so that DrawOTag, when walking root, will dive into the
      * subroot's chain at the splice point. The pickup-screen pipeline in
      * item_screens_cam.c func_8004BD74 (arg2==2 path) is:
@@ -1766,9 +1768,9 @@ void GsSortOt(GsOT *src, GsOT *dst)
     GsOT_TAG* src_tail;
     int       n_src;
 
-    if (src == NULL || dst == NULL) return;
-    if (src->org == NULL || dst->org == NULL) return;
-    if (src->tag == NULL) return;
+    if (src == NULL || dst == NULL) return dst;
+    if (src->org == NULL || dst->org == NULL) return dst;
+    if (src->tag == NULL) return dst;
 
     n_src    = 1 << src->length;
     src_tail = &src->org[0];                     /* terminator end of src chain */
@@ -1795,4 +1797,5 @@ void GsSortOt(GsOT *src, GsOT *dst)
 #else
     (void)src; (void)dst;
 #endif
+    return dst;
 }

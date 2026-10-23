@@ -4,6 +4,7 @@
 #include <libgte.h>
 #include <libgpu.h>
 #include <inline_c.h>
+#include <libcd.h>
 #include <string.h>
 
 /* ReadLightMatrix - read GTE light matrix (control regs 8-12) into MATRIX */
@@ -66,9 +67,12 @@ extern int main(int argc, char* argv[]);
 int SDL_main(int argc, char* argv[]) { return main(argc, argv); }
 #endif
 
-void CdMix() { }
-void CdRead2() { }
-void CdReset() { }
+/* Real libcd signatures: wasm rejects a call whose arity or return type
+ * differs from the definition, and every caller passes one argument and reads
+ * the result. 1 is PSY-Q's success value. */
+int CdMix(CdlATV* vol) { (void)vol; return 1; }
+int CdRead2(int mode) { (void)mode; return 1; }
+int CdReset(int mode) { (void)mode; return 1; }
 /* LoadAverageCol: GTE color interpolation — output = (v0*p0 + v1*p1) >> 12
  * v0, v1, v2 are RGB byte triplets; p0, p1 are Q12 fixed-point weights. */
 void LoadAverageCol(unsigned char *v0, unsigned char *v1, long p0, long p1, unsigned char *v2) {
@@ -100,7 +104,7 @@ void gte_ldv3c() { }
 void gte_stsxy3_g3() { }
 void gte_stsxy3c() { }
 void gte_stsz3c() { }
-void OuterProduct12() { }
+void OuterProduct12(VECTOR* v0, VECTOR* v1, VECTOR* v2) { (void)v0; (void)v1; (void)v2; }
 /* SetMulRotMatrix is implemented for real in PsyCross (psx/libgte.c) — it was a
  * no-op here, which dropped the caller's own rotation from the product. */
 VECTOR* Square0(VECTOR* v0, VECTOR* v1) {

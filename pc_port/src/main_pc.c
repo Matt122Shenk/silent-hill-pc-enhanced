@@ -35,7 +35,7 @@
 #endif
 #include <SDL.h>
 #include <SDL_main.h>
-#if defined(__ANDROID__) || defined(SH_IOS)
+#if defined(__ANDROID__) || defined(SH_IOS) || defined(__EMSCRIPTEN__)
 #include <SDL_system.h>   /* SDL_AndroidGetExternalStoragePath */
 #include <sys/stat.h>    /* mkdir */
 #include <errno.h>
@@ -439,6 +439,12 @@ const char* SH_LogPath(void)
         /* Put logs where the user can reach them. The working directory is
          * inside Android/data, which no file manager can open from Android 11
          * on -- so "send me the log" meant "install adb" until now. */
+#if defined(__EMSCRIPTEN__)
+        /* /game is synced to IndexedDB, so a log per session there would pile
+         * up in the player's browser storage forever. The page offers the
+         * MEMFS copy as a download instead. */
+        dir = "/tmp";
+#endif
         if (dir != NULL)
             snprintf(s_logPath, sizeof(s_logPath), "%s/%s", dir, stamp);
         else
@@ -462,7 +468,14 @@ void SH_DebugLogInit(void)
              * diagnosis but it flushes every SH_DBG to disk, which halves
              * framerate under heavy per-frame logging (combat + map churn). */
             static char s_logBuf[64 * 1024];
+#if defined(__EMSCRIPTEN__)
+            /* A wasm trap is a JS exception, so nothing ever gets to flush a
+             * full buffer and the lines that explain a crash are the ones
+             * lost. A write here is only an append to a MEMFS array. */
+            setvbuf(g_ShDebugLog, s_logBuf, _IOLBF, sizeof(s_logBuf));
+#else
             setvbuf(g_ShDebugLog, s_logBuf, _IOFBF, sizeof(s_logBuf));
+#endif
         }
     }
 }
@@ -755,6 +768,14 @@ static int BuildDiscSearchRoots(char roots[][1024], int maxRoots)
             if (n < maxRoots) snprintf(roots[n++], 1024, "%s/gamedata", drop);
         }
     }
+#endif
+
+#if defined(__EMSCRIPTEN__)
+    /* The page writes the disc the player picked here, outside the /game tree
+     * it persists to IndexedDB: a 700 MB image does not belong in the same
+     * store as a 128 KB memory card. See web_port/www/shell.js. */
+    if (n < maxRoots)
+        snprintf(roots[n++], 1024, "/disc");
 #endif
 
 #if defined(SH_IOS)
@@ -1104,6 +1125,16 @@ int main(int argc, char* argv[])
                          dataDir ? dataDir : "unavailable");
             return 1;
         }
+    }
+#endif
+
+#ifdef __EMSCRIPTEN__
+    /* The page has mounted the persistent tree and staged the port's own
+     * assets into it before calling main (web_port/www/shell.js). */
+    if (chdir("/game") != 0)
+    {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Could not enter /game");
+        return 1;
     }
 #endif
 

@@ -1490,7 +1490,12 @@ void Math_Vector3Translate(VECTOR3* outVec, const VECTOR3* inVec, q19_12 heading
     outVec->vz = inVec->vz + Q12_MULT_PRECISE(Math_Cos(headingAngle), dist);
 }
 
+#ifdef SH_PC_PORT
+/* Called as s_800E0930.funcptr_18(ptr); wasm traps the arity mismatch. */
+void func_800D3114(void* unused) // 0x800D3114
+#else
 void func_800D3114(void) // 0x800D3114
+#endif
 {
     VECTOR3     sp10;
     s_800E0930* ptr;
@@ -1541,7 +1546,12 @@ void func_800D3114(void) // 0x800D3114
 
 INCLUDE_RODATA("maps/map4_s03/nonmatchings/map4_s03", D_800CA788);
 
+#ifdef SH_PC_PORT
+/* Called as s_800E0930.funcptr_18(ptr); wasm traps the arity mismatch. */
+void func_800D326C(void* unused) // 0x800D326C
+#else
 void func_800D326C(void) // 0x800D326C
+#endif
 {
     VECTOR3     sp10;
     s_800E0930* ptr;

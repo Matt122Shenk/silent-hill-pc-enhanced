@@ -288,7 +288,14 @@ static s32 Pc_StickMoveDeflection(void)
 
 #define playerProps g_SysWork.playerWork.player.properties.player
 
+#ifdef SH_PC_PORT
+/* Called only through s_AnimInfo.duration.variableFunc, which Anim_DurationGet
+ * invokes as (model, animInfo); wasm traps a call whose arity differs from the
+ * target's. */
+q19_12 Player_VariableAnimDurationGet(s_Model* model, s_AnimInfo* unused) // 0x800706E4
+#else
 q19_12 Player_VariableAnimDurationGet(s_Model* model) // 0x800706E4
+#endif
 {
     q19_12 duration;
 

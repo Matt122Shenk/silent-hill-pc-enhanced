@@ -25,7 +25,11 @@ extern VECTOR3 D_800DBD10;
 extern u16 D_800DBCE4[22]; // Flags.
 extern u8 D_800DBCDC[8];   // Distances.
 
+#ifdef SH_PC_PORT
+void func_800D7F98(bool arg0);
+#else
 void func_800D7F98(void);
+#endif
 
 /** @brief Handles a Health Drink or Handgun Bullets item pickup event. */
 void MapEvent_CommonItemTake(void);

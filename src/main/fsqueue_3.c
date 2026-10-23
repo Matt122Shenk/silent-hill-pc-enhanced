@@ -1,5 +1,8 @@
 
 #include "main/fsqueue.h"
+#ifdef SH_PC_PORT
+#include <psyq/libapi.h> /* open/read/close for the sim: path below */
+#endif
 #include "main/fsmem.h"
 #include "main/fileinfo.h"
 #include "bodyprog/bodyprog.h"

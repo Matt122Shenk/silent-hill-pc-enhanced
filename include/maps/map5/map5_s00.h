@@ -102,7 +102,11 @@ void func_800D6490(VECTOR3* arg0);
 
 u8 Map_RoomIdxGet(s32 x, s32 z);
 
+#ifdef SH_PC_PORT
+void func_800D6790(bool arg0);
+#else
 void func_800D6790(void);
+#endif
 
 void func_800D67F4(void);
 

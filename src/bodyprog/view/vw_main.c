@@ -1,6 +1,7 @@
 #include "game.h"
 #ifdef SH_PC_PORT
 #include "sh_log.h"
+#include "bodyprog/bodyprog.h" /* GsInitCoordinate2 */
 #include <stdio.h>
 #endif
 

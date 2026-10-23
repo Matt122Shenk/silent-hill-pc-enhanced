@@ -56,7 +56,12 @@ u8 Map_RoomIdxGet(s32 x, s32 z) // 0x800D7F24
     return ret;
 }
 
+#ifdef SH_PC_PORT
+/* Installed as bgmEvent, which is called with a bool; see map.h. */
+void func_800D7F98(bool arg0) // 0x800D7F98
+#else
 void func_800D7F98(void) // 0x800D7F98
+#endif
 {
     q19_12 dist0;
     q19_12 dist1;

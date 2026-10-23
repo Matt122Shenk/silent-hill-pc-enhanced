@@ -59,6 +59,7 @@
 #include "pc_credits.h"
 #include "pc_pick.h"
 #include "pc_binds.h"
+#include "lang_text.h"
 
 #include <stdarg.h>
 #include <stdio.h>

@@ -2413,7 +2413,11 @@ void func_80070DF0(s_PlayerExtra* extra, s_SubCharacter* player, s32 weaponAttac
  * @param model Player model.
  * @return Variable animation duration.
  */
+#ifdef SH_PC_PORT
+q19_12 Player_VariableAnimDurationGet(s_Model* model, s_AnimInfo* unused);
+#else
 q19_12 Player_VariableAnimDurationGet(s_Model* model);
+#endif
 
 /** Special player SFX handler for heavy breath and damage. */
 bool func_80071620(u32 animStatus, s_SubCharacter* player, s32 keyframeIdx, e_SfxId sfxId);
@@ -2543,5 +2547,103 @@ void GameState_InGame_Update(void);
 void GameState_MapEvent_Update(void);
 void GameState_PaperMapScreen_Update(void);
 void GameState_LoadMapScreen_Update(void);
+
+#ifdef SH_PC_PORT
+/* Defined in one TU and called from others with no prototype in scope, so
+ * every caller compiled an implicit `int f()` against a void definition.
+ * Native ABIs shrug that off (the garbage return register is ignored); wasm
+ * type-checks every call, and wasm-ld emits a call that pops a value the
+ * callee never pushed -- an invalid module. Signatures are copied from the
+ * definitions. PC-only so the matching build's codegen is untouched. */
+void Bgm_ChannelSet(void);
+void Bgm_TrackSet(s32 bgmIdx);
+void Camera_LookAtSet(VECTOR3* lookAt, q19_12 lookAtOffsetOrPosX, q19_12 lookAtOffsetOrPosY, q19_12 lookAtOffsetOrPosZ, q19_12 angularAccelX, q19_12 angularAccelY, q19_12 angularSpeedXMax, q19_12 angularSpeedYMax, bool warp);
+void Camera_PositionSet(VECTOR3* pos, q19_12 offsetOrPosX, q19_12 offsetOrPosY, q19_12 offsetOrPosZ, q19_12 accelXz, q19_12 accelY, q19_12 speedXzMax, q19_12 speedYMax, bool warp);
+void Chara_CollisionReset(s_SubCharacter* chara);
+void Chara_PositionSet(s_MapPoint2d* mapPoint);
+void Collision_FlagsUpdate(void);
+void Event_MapTake(s32 mapFlagIdx, e_EventFlag eventFlagIdx, s32 mapMsgIdx);
+void Fs_CharaAnimBoneInfoUpdate(void);
+void Fs_CharaAnimDataAlloc(s32 idx, e_CharaId charaId, s_AnmHeader* animFile, GsCOORDINATE2* coord);
+void Fs_CharaAnimDataUpdate(s32 idx, e_CharaId charaId, s_AnmHeader* animFile, GsCOORDINATE2* coord);
+void GameBoot_MapLoad(s32 mapIdx);
+void GameFs_WeaponInfoUpdate(void);
+void Game_RadioSoundStop(void);
+void Game_TimerUpdate(void);
+void Gfx_Primitive2dTextureSet(s32 x, s32 y, s32 otIdx, s32 abr);
+void LmHeader_FixOffsets(s_LmHeader* lmHdr);
+void MapMsg_DisplayAndHandleSelection(bool hasSelection, s32 mapMsgIdx, s32 step0, s32 step1, s32 step2, bool stepSecondary);
+void MapMsg_DisplayWithTexture(e_FsFile textureFileIdx, q19_12 fadeTimestep0, q19_12 fadeTimestep1, s32 mapMsgIdx);
+void MapMsg_DisplayWithTexture1(e_FsFile textureFileIdx, q19_12 fadeTimestep0, q19_12 fadeTimestep1, s32 mapMsgIdx0, s32 mapMsgIdx1);
+void Map_MessageWithAudio(s32 mapMsgIdx, u8* audioIdx, const u16* audioCmds);
+void Map_MessageWithSfx(s32 mapMsgIdx, e_SfxId sfxId, VECTOR3* sfxPos);
+void Map_PlaceIpdAtCell(s16 ipdFileIdx, s32 cellX, s32 cellZ);
+void Math_RotMatrixXyxGte(SVECTOR* rot, MATRIX* mat);
+void Math_RotMatrixZxy(SVECTOR* rot, MATRIX* mat);
+void Mem_Move32(u32* dest, u32* src, s32 byteCount);
+void Particle_SystemUpdate(s32 arg1, e_MapIdx mapIdx, s32 arg3);
+void Pc_MouseCursor_PuzzleClickRequest(void);
+void Player_ControlFreeze(void);
+void Player_ControlUnfreeze(bool setIdle);
+void Player_DamageFeetFront(void);
+void Player_FallBackward(void);
+void SD_Call(u32 cmd);
+void Savegame_EnemyStateUpdate(s_SubCharacter* chara);
+void Screen_BackgroundImgDraw(s_FsImageDesc* image);
+void Sd_AmbientSfxSet(s32 idx);
+void Sd_SetVolume(u8 xaVol, s16 bgmVol, u8 seVol);
+void Sd_SfxAttributesUpdate(u16 sfxId, q0_7 balance, u8 vol, s8 pitch);
+void Sd_SfxStop(u16 sfxId);
+void Sd_XaPreLoadAudioPreTaskAdd(u16 xaIdx);
+void SysWork_StateStepIncrementAfterFade(s32 stateStep, bool cond, s32 fadeType, q19_12 fadeTimestep, bool reset);
+void SysWork_StateStepIncrementDelayed(q19_12 delay, bool reset);
+void Text_Debug_Draw(char* str);
+void Text_Debug_PositionSet(s16 x, s16 y);
+void Vw_WorldScreenMatrixAtPositionGet(MATRIX* worldToScreenMat, q19_12 posX, q19_12 posY, q19_12 posZ);
+void World_CollisionTriggersSet(s_MapOverlayHdr* overlayHeader);
+void World_NearbyPlayerCollisionTriggersGet(void);
+void func_8003A16C(void);
+void func_800485B0(s16 arg0, u8 arg1, u8 arg2, s16 arg3, s16 arg4);
+void func_800485B8(s32 arg0, u8 arg1, u32 arg2);
+void func_8005DC1C(e_SfxId sfxId, const VECTOR3* pos, q23_8 vol, s32 soundType);
+void func_8005DC3C(e_SfxId sfxId, const VECTOR3* pos, q23_8 vol, s32 soundType, s32 pitch);
+void func_8005DD44(e_SfxId sfxId, VECTOR3* pos, q23_8 vol, s8 pitch);
+void func_8005DE0C(e_SfxId sfxId, VECTOR3* pos, s32 vol, q19_12 falloff, s8 pitch);
+void func_80085DF0(void);
+void func_80085EB8(u32 arg0, s_SubCharacter* chara, s32 arg2, bool reset);
+void func_8008605C(e_EventFlag eventFlagIdx, s32 stepTrue, s32 stepFalse, bool stepSecondary);
+void func_800862F8(s32 stateStep, e_FsFile fileIdx, bool reset);
+void func_80086470(u32 stateStep, e_InvItemId itemId, s32 itemCount, bool reset);
+void func_800865FC(bool isPos, s32 idx0, s32 idx1, q3_12 angleY, q19_12 offsetOrPosX, q19_12 offsetOrPosZ);
+void func_800866D4(s32 arg0, s32 arg1, bool reset);
+void func_80086728(s_SubCharacter* chara, s32 arg1, s32 arg2, bool reset);
+void func_8008677C(s_SubCharacter* chara, s32 arg1, s32 arg2);
+void func_800867B4(s32 state, s32 paperMapFileIdx);
+void func_800868DC(s32 idx);
+void func_80086C58(s_SubCharacter* chara, s32 arg1);
+void func_80086E50(e_FsFile fileIdx, q19_12 fadeTimestep0, q19_12 fadeTimestep1);
+void func_80086F44(q19_12 fadeTimestep0, q19_12 fadeTimestep1);
+void func_8008F94C(void);
+void func_800904F4(void);
+void func_800914C4(s32 arg0, u32 val);
+void func_8009151C(u32 arg0, s32 arg1, s32 arg2);
+void func_801E386C(void);
+void open_main(s32 file_idx, s16 num_frames);
+void sharedFunc_800D08B8_0_s00(s8 arg0, u32 arg1);
+void sharedFunc_800D209C_0_s00(void);
+void sharedFunc_800D2E6C_0_s00(void);
+void sharedFunc_800D2E9C_0_s00(q19_12* offsetX, q19_12* offsetZ, q3_12* angle);
+void sharedFunc_800D2EB4_0_s00(void);
+void sharedFunc_800D2EF4_0_s00(void);
+void Math_MatrixTransform(VECTOR3* pos, SVECTOR* rot, GsCOORDINATE2* coord);
+void ReadLightMatrix(MATRIX* m);
+void ReadGeomOffset(s32* ofx, s32* ofy);
+void LoadAverageCol(unsigned char* v0, unsigned char* v1, long p0, long p1, unsigned char* v2);
+void OuterProduct12(VECTOR* v0, VECTOR* v1, VECTOR* v2);
+void GsInitCoordinate2(GsCOORDINATE2* super, GsCOORDINATE2* base);
+void GsSetLsMatrix(MATRIX* mp);
+void GsSortFastSprite(GsSPRITE* sp, GsOT* ot, unsigned short pri);
+GsOT* GsSortOt(GsOT* ot_src, GsOT* ot_dest);
+#endif
 
 #endif

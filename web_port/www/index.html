@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>Silent Hill — Play in Browser</title>
+<meta name="description" content="Play the Silent Hill PC Port in your browser with your own disc image. Desktop keyboard and controller, or touch controls on phones and tablets.">
+<meta name="theme-color" content="#0a0b0a">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Silent Hill">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png" type="image/png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<style>
+:root {
+	--ash:      #b9b6ad;
+	--ash-dim:  #6f6d66;
+	--rust:     #8a4a2f;
+	--rust-lit: #c46a40;
+	--blood:    #7e1b14;
+	--panel:    rgba(10, 11, 10, 0.86);
+	--line:     rgba(140, 120, 95, 0.22);
+	--bg:       #050505;
+}
+* { box-sizing: border-box; }
+html, body {
+	margin: 0; height: 100%; background: var(--bg); color: var(--ash);
+	font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+	overflow: hidden; overscroll-behavior: none;
+	-webkit-tap-highlight-color: transparent;
+}
+/* The canvas IS the game window: SDL's resizable-window path sizes the
+ * drawing buffer from this element's CSS box. */
+#canvas {
+	position: fixed; inset: 0; width: 100vw; height: 100vh; height: 100dvh;
+	display: block; background: #000; outline: none;
+	touch-action: none; user-select: none; -webkit-user-select: none;
+	-webkit-touch-callout: none;
+}
+#launcher {
+	position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+	padding: max(16px, env(safe-area-inset-top)) 16px max(16px, env(safe-area-inset-bottom));
+	background:
+		radial-gradient(ellipse at 50% 35%, rgba(120, 112, 100, 0.18), transparent 60%),
+		radial-gradient(ellipse at 50% 120%, rgba(126, 27, 20, 0.22), transparent 55%),
+		var(--bg);
+	overflow-y: auto; z-index: 10;
+}
+#launcher.hidden { display: none; }
+.card {
+	width: 100%; max-width: 30rem; background: var(--panel); border: 1px solid var(--line);
+	padding: 1.6rem 1.5rem 1.3rem; box-shadow: 0 10px 50px rgba(0,0,0,.6);
+}
+h1 {
+	font-family: Georgia, "Times New Roman", serif; font-weight: normal;
+	letter-spacing: .12em; text-transform: uppercase; font-size: 1.7rem;
+	margin: 0 0 .2rem; color: #d8d4c9;
+}
+.sub { margin: 0 0 1.2rem; color: var(--ash-dim); font-size: .9rem; }
+.step { margin: 0 0 1rem; }
+.label { font-size: .78rem; letter-spacing: .14em; text-transform: uppercase; color: var(--ash-dim); margin-bottom: .45rem; }
+.disc {
+	display: flex; align-items: center; gap: .75rem; padding: .8rem .9rem;
+	border: 1px dashed var(--line); min-height: 3.4rem;
+}
+.disc.ready { border-style: solid; border-color: rgba(196,106,64,.45); }
+.disc .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.disc .meta { font-size: .8rem; color: var(--ash-dim); }
+button, .btn {
+	font: inherit; color: var(--ash); background: transparent; border: 1px solid var(--line);
+	padding: .55rem .95rem; cursor: pointer; letter-spacing: .06em;
+}
+button:hover, .btn:hover { border-color: var(--rust-lit); color: #e7e2d6; }
+button:disabled { opacity: .4; cursor: default; border-color: var(--line); color: var(--ash); }
+#play {
+	width: 100%; padding: .85rem; font-size: 1.05rem; letter-spacing: .2em; text-transform: uppercase;
+	background: var(--blood); border-color: #a0281e; color: #f0e8e0;
+}
+#play:hover:not(:disabled) { background: #9a2419; }
+.row { display: flex; align-items: center; gap: .5rem; font-size: .88rem; margin: .7rem 0 1rem; }
+.row input { accent-color: var(--rust-lit); width: 1rem; height: 1rem; }
+.note { font-size: .8rem; color: var(--ash-dim); line-height: 1.45; margin: .9rem 0 0; }
+.note a { color: var(--rust-lit); }
+.warn { color: #d9a36f; }
+.err { color: #e07a6b; }
+#progress { height: 3px; background: rgba(255,255,255,.06); margin: .9rem 0 0; display: none; }
+#progress > div { height: 100%; width: 0; background: var(--rust-lit); transition: width .15s; }
+#status { font-size: .85rem; min-height: 1.2em; margin-top: .6rem; }
+.controls { display: none; font-size: .78rem; color: var(--ash-dim); margin-top: 1rem; border-top: 1px solid var(--line); padding-top: .8rem; }
+.controls table { border-collapse: collapse; width: 100%; }
+.controls td { padding: .12rem .3rem; }
+.controls td:first-child { color: var(--ash); }
+body.desktop .controls { display: block; }
+#fsbtn {
+	position: fixed; top: max(8px, env(safe-area-inset-top)); left: 50%; transform: translateX(-50%);
+	z-index: 5; display: none; padding: .35rem .7rem; font-size: .8rem;
+	background: rgba(0,0,0,.55); border-color: rgba(255,255,255,.15);
+}
+#crash {
+	position: fixed; inset: 0; z-index: 20; display: none; align-items: center; justify-content: center;
+	background: rgba(0,0,0,.85); padding: 16px;
+}
+#crash .card { max-width: 34rem; }
+#crash pre { white-space: pre-wrap; font-size: .75rem; max-height: 30vh; overflow: auto; color: var(--ash-dim); }
+.actions { display: flex; gap: .5rem; flex-wrap: wrap; margin-top: 1rem; }
+</style>
+</head>
+<body>
+<canvas id="canvas" tabindex="-1" oncontextmenu="event.preventDefault()"></canvas>
+<button id="fsbtn" type="button">Full screen</button>
+
+<div id="launcher">
+	<div class="card">
+		<h1>Silent Hill</h1>
+		<p class="sub">The PC Port, running in your browser.</p>
+
+		<div class="step">
+			<div class="label">Your disc image</div>
+			<div class="disc" id="disc">
+				<div class="name" id="discName">No disc chosen</div>
+				<label class="btn" for="file">Browse…</label>
+				<input type="file" id="file" accept=".bin,application/octet-stream" hidden>
+			</div>
+			<div class="note" id="discMeta">A .bin rip of your own Silent Hill disc. USA, PAL and NTSC-J all work. No .cue needed.</div>
+		</div>
+
+		<label class="row"><input type="checkbox" id="remember" checked> Remember this disc on this device</label>
+
+		<button id="play" type="button" disabled>Play</button>
+		<div id="progress"><div></div></div>
+		<div id="status"></div>
+
+		<div class="controls">
+			<table>
+				<tr><td>D-pad</td><td>Arrow keys</td><td>Cross</td><td>C</td></tr>
+				<tr><td>Square</td><td>X</td><td>Circle</td><td>V</td></tr>
+				<tr><td>Triangle</td><td>Z</td><td>Start</td><td>Enter</td></tr>
+				<tr><td>Select</td><td>Space</td><td>L1 / R1</td><td>A / D</td></tr>
+				<tr><td>L2 / R2</td><td>R-Shift / L-Shift</td><td></td><td></td></tr>
+			</table>
+			A USB or Bluetooth controller also works: press any button on it once the game is running. Rebind keys in-game from the Options menu.
+		</div>
+
+		<p class="note" id="platformNote"></p>
+		<p class="note">Nothing is uploaded. The disc is read on this device only, and saves stay in this browser. Game files are not included. You need your own copy.
+			<a href="/">sh1pc.com</a></p>
+	</div>
+</div>
+
+<div id="crash">
+	<div class="card">
+		<h1>Something went wrong</h1>
+		<p class="sub" id="crashMsg"></p>
+		<pre id="crashDetail"></pre>
+		<div class="actions">
+			<button type="button" id="crashLog">Download log</button>
+			<button type="button" onclick="location.reload()">Reload</button>
+		</div>
+	</div>
+</div>
+
+<script src="shell.js"></script>
+</body>
+</html>

@@ -94,11 +94,18 @@ typedef enum _MainMenuEntry
     /* PC port: the port's Exit row reuses the unused Extra slot. It sits
      * directly under Option in draw order and inside the existing
      * MainMenuEntry_Count, so the row layout, selection wrap and mouse
-     * hit-test all keep working untouched. */
+     * hit-test all keep working untouched. Horde mode appends after Exit;
+     * every consumer loops over MainMenuEntry_Count, so no layout code
+     * changes. */
     MainMenuEntry_Exit     = 4,
+    MainMenuEntry_Horde    = 5,
 #endif
 
+#ifdef SH_PC_PORT
+    MainMenuEntry_Count    = 6
+#else
     MainMenuEntry_Count    = 5
+#endif
 } e_MainMenuEntry;
 
 typedef enum _MainMenuState

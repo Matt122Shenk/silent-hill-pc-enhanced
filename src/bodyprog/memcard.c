@@ -361,6 +361,18 @@ void MemCard_Update(void) // 0x8002EB88
 
         case MemCardProcess_Save_3:
         case MemCardProcess_Save_5:
+#ifdef SH_PC_PORT
+            /* Horde mode runs on a throwaway savegame: never let it reach
+             * the player's memory card, even if a save screen were opened. */
+            {
+                extern int Pc_Horde_Active(void);
+                if (Pc_Horde_Active())
+                {
+                    statusPtr->lastMemCardResult = MemCardResult_FileOpenError;
+                    break;
+                }
+            }
+#endif
             MemCard_Process_Save(statusPtr);
             break;
 

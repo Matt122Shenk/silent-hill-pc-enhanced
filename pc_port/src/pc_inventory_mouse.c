@@ -29,6 +29,7 @@
 #include "bodyprog/items.h"
 #include "bodyprog/sys/joy.h"
 #include "pc_config.h"
+#include "pc_combat.h"
 #include "pc_inventory_mouse.h"
 #include "pc_mouse_cursor.h"
 
@@ -55,7 +56,7 @@ static const s_InvBox INV_BOX_EQUIPPED = { -50, -204,  50, -52 };
 static const s_InvBox INV_BOX_SETTINGS = { -146, 181, -46, 213 };
 static const s_InvBox INV_BOX_EXIT     = { -50,  181,  50, 213 };
 static const s_InvBox INV_BOX_MAP      = {  46,  181, 146, 213 };
-static const s_InvBox INV_BOX_CMD      = {  45, -204, 146, -68 };
+static const s_InvBox INV_BOX_CMD      = {  45, -204, 146, -58 };
 
 /* Carousel slot centres (prim X) for visible offsets -3..+3 from the selected
  * item. The items are 3D models on a 30-deg-per-slot ring, not authored sprites,
@@ -100,6 +101,8 @@ static int Inv_InBox(const s_InvBox* b, s32 x, s32 y)
  * itself is still executed by the stock code. */
 static s32 Inv_CmdCount(s32 itemIdx)
 {
+    s32 n;
+
     switch (g_SavegamePtr->items[itemIdx].command_2)
     {
         case InvCmdId_UseHealth:
@@ -108,17 +111,24 @@ static s32 Inv_CmdCount(s32 itemIdx)
         case InvCmdId_Unequip:
         case InvCmdId_Reload:
         case InvCmdId_Look:
-            return 1;
+            n = 1;
+            break;
 
         case InvCmdId_EquipReload:
         case InvCmdId_UnequipReload:
         case InvCmdId_OnOff:
         case InvCmdId_UseLook:
-            return 2;
+            n = 2;
+            break;
 
         default:
             return 0;
     }
+
+    /* Native D-pad rows for equippable weapons (mirrors Inventory_Logic). */
+    if (Pc_DpadIsAssignable(g_SavegamePtr->items[itemIdx].id_0))
+        n += 4;
+    return n;
 }
 
 static void Inv_Press(u32 bits)

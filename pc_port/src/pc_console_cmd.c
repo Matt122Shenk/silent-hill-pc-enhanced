@@ -38,6 +38,7 @@
 #include "map_registry.h"
 #include "dbg_overlay.h"
 #include "pc_config.h"
+#include "pc_item_toast.h"
 
 #include <stdarg.h>
 #include <stdio.h>
@@ -185,7 +186,10 @@ static void give_item(u8 id, u8 count)
     int stackable = (id >= InvItemId_HealthDrink && id <= InvItemId_Ampoule) ||
                     (id >= InvItemId_HandgunBullets);
     if (stackable || !inventory_has(id))
+    {
         Inventory_AddSpecialItem(id, count ? count : 1);
+        Pc_ItemToast_Show(id, count ? count : 1);
+    }
 }
 
 static void cmd_give(const char* arg)

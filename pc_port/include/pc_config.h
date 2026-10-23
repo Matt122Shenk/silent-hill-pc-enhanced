@@ -115,10 +115,20 @@ typedef struct {
                            * cutscenes stay clamped by Pc_ScriptOwnsShot regardless.
                            * Set 0 to put every non-gameplay screen back on the hard
                            * one-vblank wait. (config key: menu_fps_unlock) */
-    int lowHealthGlow;    /* 1 = pulsing red edge glow while health is low (config key: low_health_glow); off by default */
+    int   lowHealthGlow;    /* 1 = pulsing red edge glow while health is low (config key: low_health_glow); off by default */
+    int   lowHealthOp;      /* low-health glow opacity 0..100 (config key: low_health_op); default 100 */
+    int   hurtFlash;        /* 1 = dark-red fullscreen flash when Harry takes damage (config key: hurt_flash); default 0 */
+    int   hurtFlashOp;      /* hurt-flash opacity 0..100 (config key: hurt_flash_op); default 70 */
     int bulletDecals;     /* 1 = bullet-hole decals where player gunfire hits world geometry
                            * (gamedata/decal.png; up to 64 FIFO, cleared on map load)
                            * (config key: bullet_decals) */
+    int bloodWallDecals;  /* 1 = blood splats on the wall behind an enemy hit by player
+                           * gunfire (native blood TIM art, subtractive; shares the
+                           * bullet-decal pool; cleared on map load)
+                           * (config key: blood_wall_decals) */
+    int silentTake;       /* 1 = common loot (ammo/heals) skips the take screen and lands
+                           * straight in inventory with a fast toast; story items keep
+                           * the animated take (config key: silent_take) */
     int globalCharaPool;  /* 1 = global chara/asset pool: every monster's model+anim+texture stays
                            * resident PC-side (virtual GL texture slots) and chara_global.dll backfills
                            * AI update funcs, so console SPAWN works for every type in any map. Native
@@ -208,6 +218,7 @@ typedef struct {
     int crosshair;          /* 1 = draw a center crosshair while aiming in TPS/OTS (config key: crosshair) */
     int crosshairStyle;     /* reticle shape: 0 = cross (+), 1 = dot, 2 = circle, 3 = dashes/gap (config key: crosshair_style) */
     int aimAssist;          /* 1 = OTS/TPS free-aim aim assist (mouse body-coverage + controller auto-aim) (config key: aim_assist) */
+    int meleeAimWalk;       /* 1 = aiming melee in TPS/OTS forces walk (fixed-camera aim-walk parity) instead of dropping aim on sprint (config key: melee_aim_walk); default 0 */
     int mouseCursor;        /* 1 = mouse controls cursor puzzles + clickable main menu (config key: mouse_cursor) */
     int altButtonSprint;    /* "Always use button based sprinting": 1 = walk by default, sprint ONLY while the bound run control is held — applies to alt cameras (TPS/OTS/FPS) AND 2D control under any camera; 0 = a near-full stick push also sprints (config key: altcam_button_sprint) */
     int immersiveFpsHeadTracking; /* 1 = FPS view direction follows Harry's animated head-bone rotation (idle sway/lean), mouse layered on top (config key: immersive_fps_head_tracking) */
@@ -224,6 +235,54 @@ typedef struct {
     int enablePlugins;       /* 1 = load plugins/*.dll gameplay plugins at boot; 0 = never touch them (config-only key: enable_plugins); default 0 -- a DLL runs arbitrary code, so the surface is strictly opt-in */
     int minimapRequireMap;   /* 1 = only draw the map once the area's paper map has been found; 0 = always draw it (config-only key: minimap_require_map); default 1 */
     float minimapOpacity;    /* minimap opacity percentage, 0..100 (config key: minimap_opacity); default 100 */
+    int   ammoHudCorner;     /* ammo readout corner: 0 = top-left, 1 = top-right, 2 = bottom-left, 3 = bottom-right (config key: ammo_corner); default 2 */
+    float ammoHudScale;      /* ammo readout size percentage, 60..130 (config key: ammo_scale); default 100 */
+    float ammoHudOpacity;    /* ammo readout opacity percentage, 20..100 (config key: ammo_opacity); default 90 */
+    int   ammoHudAlways;     /* 1 = ammo readout stays up while a gun is equipped; 0 = only while aiming, fading a second after release (config key: ammo_always); default 0 */
+    int   ammoHud;           /* master switch for the ammo readout: 0 hides it entirely (config key: ammo_hud); default 1 */
+    int   autoReload;        /* 1 = force a reload when the magazine empties with reserve left (config key: auto_reload); default 0 */
+    int   manualReload;      /* 1 = reload bind (R / Square) reloads a reloadable gun while aiming (config key: manual_reload); default 1 */
+    int   diffAmmo;          /* loot ammo scale preset: 0 = Low (15%), 1 = Medium (50%), 2 = Normal (100%, native), 3 = High (170%) (config key: diff_ammo); default 2 */
+    int   diffHeals;         /* heal power preset: 0 = Low (25%), 1 = Medium (50%), 2 = Normal (100%, native), 3 = High (150%) (config key: diff_heals); default 2 */
+    int   diffEnemyDmg;      /* enemy damage preset: 0 = Low (50%), 1 = Medium (75%), 2 = Normal (100%, native), 3 = High (250%), 4 = Very High (400%), 5 = Hell (700%) (config key: diff_enemy); default 2 */
+    int   enemyHpBars;       /* 1 = red HP bars over live visible enemies in range (config key: enemy_hp_bars); default 0 */
+    int   hpHud;             /* master switch for the health HUD: 0 hides it entirely (config key: hp_hud); default 1 */
+    int   hpStyle;           /* health HUD style: 0 = classic bar, 1 = heartbeat pulse (config key: hp_style); default 0 */
+    int   hpNumber;          /* 1 = numeric HP readout at the bar's right (config key: hp_number); default 0 */
+    int   hpCorner;          /* health HUD corner: 0 = top-left, 1 = top-right, 2 = bottom-left, 3 = bottom-right (config key: hp_corner); default 1 */
+    float hpScale;           /* health HUD size percentage, 60..130 (config key: hp_scale); default 100 */
+    float hpOpacity;         /* health HUD opacity percentage, 20..100 (config key: hp_opacity); default 90 */
+    int   hpAlways;          /* 1 = health HUD always up; 0 = only briefly after damage/heal (config key: hp_always); default 0 */
+    int   shakeHurt;         /* 1 = camera kick when Harry takes damage (config key: shake_hurt); default 0 */
+    int   shakeFire;         /* 1 = camera kick when Harry fires (config key: shake_fire); default 0 */
+    int   shakeDealt;        /* 1 = camera kick when Harry damages an enemy (config key: shake_dealt); default 0 */
+    int   shakeHurtInt;      /* hurt-kick strength 0..200 (config key: shake_hurt_int); default 50 */
+    int   shakeFireInt;      /* fire-kick strength 0..200 (config key: shake_fire_int); default 50 */
+    int   shakeDealtInt;     /* dealt-kick strength 0..200 (config key: shake_dealt_int); default 50 */
+    int   hitmarker;         /* 1 = crosshair flashes red on a player kill (needs the crosshair itself on) (config key: hitmarker); default 0 */
+    int   killFlash;         /* 1 = brief fullscreen flash on a player kill (config key: kill_flash); default 0 */
+    int   killFlashMode;     /* kill flash look: 0 = black & white, 1 = black vignette (config key: kill_flash_mode); default 0 */
+    int   immersionWeapons;  /* 1 = equipped weapon stays hidden unless recently equipped, aimed, fired, reloaded or radio-danger is up (config key: immersion_weapons); default 0 */
+    int   immersionFear;     /* 1 = Harry pants with fear, sparsely and at random, while the radio static is up (config key: immersion_fear); default 0 */
+    int   immersionFlicker;  /* 1 = flashlight browns out in short bursts near enemies (35% per roll while facing one, 15% when merely close; per-pixel modes only) (config key: immersion_flicker); default 0 */
+    int   aimCameraMode;     /* camera style borrowed while aiming: 0 = auto (no change), 1 = classic, 2 = tps, 3 = ots, 4 = fps (config key: aim_camera_mode); default 0 */
+    int   quickHeal;         /* master switch for quick heal (config key: quick_heal); default 1 */
+    int   itemToastBg;       /* toast background opacity 0..100 (config key: item_toast_bg); default 100 (legacy 0/1 values scale x100 on load) */
+    int   healFlash;         /* quick-heal green flash intensity 0..100, 0 disables it (config key: heal_flash); default 100 */
+    int   toastCue;          /* 1 = item toasts play gamedata/sound/custom/toast_cue.wav instead of the confirm SFX (config key: toast_cue); default 0 */
+    int   healCue;           /* 1 = quick heal plays gamedata/sound/custom/heal_cue.wav instead of the heal SFX (config key: heal_cue); default 0 */
+    int   dpadWeapons;       /* 1 = controller D-pad quick-selects weapons instead of moving (config key: dpad_weapons); default 0 */
+    int   dpadUp;            /* item id on D-pad up (config keys: dpad_up/down/left/right); default pipe/rifle/shotgun/handgun */
+    int   dpadDown;
+    int   dpadLeft;
+    int   dpadRight;
+    int   sfxHandgun;        /* loose-file gunshot replacements per weapon bank, 0 = ignore files (config keys: sfx_handgun/sfx_rifle/sfx_shotgun/sfx_blaster); default 1 so existing SND mods keep working */
+    int   sfxRifle;
+    int   sfxShotgun;
+    int   sfxBlaster;
+    int   itemToastCorner;   /* item toast corner: 0 = top-left, 1 = top-right, 2 = bottom-left, 3 = bottom-right (config key: item_toast_corner); default 3 */
+    float itemToastScale;    /* item toast size percentage, 60..130 (config key: item_toast_scale); default 100 */
+    float itemToastOpacity;  /* item toast opacity percentage, 20..100 (config key: item_toast_opacity); default 90 */
     int   adsr;             /* 1 = SPU ADSR envelopes (instrument attack/release fades in sequenced BGM); default 1 (config key: adsr) */
     int   audioOutput;      /* speaker layout: 0 = auto (OpenAL detects the system layout; alsoft.ini honored), 1 = stereo, 2 = quad, 3 = 5.1, 4 = 7.1, 5 = hrtf headphones. With rear speakers active: positional SFX pan on the full circle, wide-stereo BGM layers play from the surrounds (config key: audio_output = auto|stereo|quad|51|71|hrtf) */
     float fpsFov;           /* first-person horizontal FOV in degrees (4:3 basis), 55..110; default 71.1 = the game's OWN projection (H = gsScreenHeight = 224 on the 320-wide progressive frame), so the default is a no-op; applied ONLY during FPS gameplay (config key: fps_fov) */

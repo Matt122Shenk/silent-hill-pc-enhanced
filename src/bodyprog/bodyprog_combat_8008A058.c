@@ -1747,7 +1747,53 @@ s32 func_8008B714(s_SubCharacter* attacker, s_SubCharacter* target, VECTOR3* arg
 #ifdef SH_PC_PORT
         {
             extern s32 Pc_Rando_ScaleWeaponDamage(s32 damageAmount, int targetIsPlayer);
-            damageAmount = Pc_Rando_ScaleWeaponDamage(damageAmount, target == &g_SysWork.playerWork.player);
+            extern s32 Pc_Diff_EnemyDamage(s32 damageAmount);
+            extern void Pc_ShakeKickHurt(void);
+            extern void Pc_ShakeKickDealt(void);
+            extern void Pc_Flash_KickHurt(void);
+            int targetIsPlayer = (target == &g_SysWork.playerWork.player);
+            damageAmount = Pc_Rando_ScaleWeaponDamage(damageAmount, targetIsPlayer);
+            /* Horde player damage: draft reward mult. No-op off-mode. */
+            if (!targetIsPlayer && attacker == &g_SysWork.playerWork.player)
+            {
+                extern int Pc_Horde_Active(void);
+                extern unsigned int Pc_Horde_PlayerDmgPct(void);
+                if (Pc_Horde_Active())
+                {
+                    unsigned int pct = Pc_Horde_PlayerDmgPct();
+                    if (pct != 100)
+                        damageAmount = (s32)(((s64)damageAmount * (s64)pct) / 100);
+                }
+            }
+            if (targetIsPlayer)
+            {
+                damageAmount = Pc_Diff_EnemyDamage(damageAmount);
+                /* Horde threat: enemy hits scale per wave, then the draft
+                 * resistance reward cuts them. No-op off-mode. */
+                {
+                    extern int Pc_Horde_Active(void);
+                    extern unsigned int Pc_Horde_ThreatPct(void);
+                    extern unsigned int Pc_Horde_PlayerResistPct(void);
+                    if (Pc_Horde_Active())
+                    {
+                        unsigned int pct = Pc_Horde_ThreatPct();
+                        unsigned int res = Pc_Horde_PlayerResistPct();
+                        if (pct != 100)
+                            damageAmount = (s32)(((s64)damageAmount * (s64)pct) / 100);
+                        if (res != 100)
+                            damageAmount = (s32)(((s64)damageAmount * (s64)res) / 100);
+                    }
+                }
+                if (damageAmount > Q12(0.0f))
+                {
+                    Pc_ShakeKickHurt();
+                    Pc_Flash_KickHurt();
+                }
+            }
+            else if (attacker == &g_SysWork.playerWork.player && damageAmount > Q12(0.0f))
+            {
+                Pc_ShakeKickDealt();
+            }
         }
 #endif
         target->damage.amount += damageAmount;
@@ -1882,6 +1928,19 @@ s32 func_8008B714(s_SubCharacter* attacker, s_SubCharacter* target, VECTOR3* arg
                     }
                 } else {
                     func_8005F6B0(target, arg2, var_a2, var_a3);
+                }
+                /* Wall blood: a player gunshot that wounds an enemy also leaves
+                 * a splat on the wall behind it (pc_decals.c). The shot ray is
+                 * continued past the impact to the wall there. */
+                if (attacker == &g_SysWork.playerWork.player && target != &g_SysWork.playerWork.player &&
+                    g_GameWork.config.extraBloodColor != 14 &&
+                    (weaponAttack == WEAPON_ATTACK(EquippedWeaponId_Handgun, AttackInputType_Tap) ||
+                     weaponAttack == WEAPON_ATTACK(EquippedWeaponId_HuntingRifle, AttackInputType_Tap) ||
+                     weaponAttack == WEAPON_ATTACK(EquippedWeaponId_Shotgun, AttackInputType_Tap) ||
+                     weaponAttack == WEAPON_ATTACK(EquippedWeaponId_HyperBlaster, AttackInputType_Tap)))
+                {
+                    extern void Pc_DecalAddBloodWall(const VECTOR3* impact, const VECTOR3* dir, const VECTOR3* origin, s32 bloodType);
+                    Pc_DecalAddBloodWall(arg2, &attacker->field_44.field_48[0], &attacker->field_44.field_18, var_a3);
                 }
 #else
                 func_8005F6B0(target, arg2, var_a2, var_a3);

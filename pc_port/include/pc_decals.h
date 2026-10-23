@@ -26,6 +26,15 @@
  * plane with two offset rays so wall decals lie flat on the surface. */
 void Pc_DecalAddBulletImpact(const VECTOR3* pos, const VECTOR3* dir, const VECTOR3* origin);
 
+/* Record a blood splat on the wall behind a gunshot enemy. `impact` = the
+ * bullet's hit point on the enemy (Q19.12); `dir` = bullet direction (Q12);
+ * `origin` = the trace's start point (the hand); `bloodType` = the 1..12
+ * enemy blood index func_8008B714 resolves (mapped to a TIM CLUT row here).
+ * The shot ray is continued past the enemy to the wall, which is then framed
+ * exactly like a bullet-decal wall (same normal sampling, FIFO, map reset);
+ * only the prim differs (native blood TIM cell + subtractive + fog fade). */
+void Pc_DecalAddBloodWall(const VECTOR3* impact, const VECTOR3* dir, const VECTOR3* origin, s32 bloodType);
+
 /* Project + emit all live decals into the world ordering table. Call once
  * per frame during world rendering (after Ipd_ChunkCheckDraw, same OT). */
 void Pc_DecalsDraw(GsOT* ot);

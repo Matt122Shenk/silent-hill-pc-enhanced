@@ -409,6 +409,9 @@ find_path(JPEG_INCLUDE_DIR jpeglib.h)
 target_link_libraries(SilentHillPC PRIVATE
     psycross_static
 )
+if(WIN32)
+    target_link_libraries(SilentHillPC PRIVATE winhttp)
+endif()
 
 # Lua scripting (randomizer): link the vendored interpreter + flag its presence.
 if(SH_HAVE_LUA)

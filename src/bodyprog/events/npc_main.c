@@ -83,6 +83,8 @@ void func_80037E78(s_SubCharacter* chara) // 0x80037E78
         {
             extern void Pc_Rando_OnEnemyKilled(void);
             Pc_Rando_OnEnemyKilled();
+            extern void Pc_Horde_OnEnemyKilled(void);
+            Pc_Horde_OnEnemyKilled();
         }
 #endif
 

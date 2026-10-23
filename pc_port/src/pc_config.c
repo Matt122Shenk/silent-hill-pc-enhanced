@@ -42,7 +42,12 @@ s_PcConfig g_PcConfig = {
     .attractDemos = 1,
     .menuFpsUnlock = 1, /* menus/map/puzzles follow fps_cap; inventory and cutscenes do not */
     .lowHealthGlow = 0, /* 1=pulsing red edge glow below 20 hp (SH2 remake style); off by default */
+    .lowHealthOp = 100,
+    .hurtFlash = 0,
+    .hurtFlashOp = 70,
     .bulletDecals = 0, /* 1=bullet-hole decals at player gunshot impacts (gamedata/decal.png); off by default */
+    .bloodWallDecals = 0, /* 1=blood splats on walls behind gunshot enemies (native TIM art); off by default */
+    .silentTake = 0, /* 1=common loot skips the take screen (fast toast); story items keep it */
     .globalCharaPool = 1, /* 1=all chara assets resident PC-side + chara_global.dll AI backfill (SPAWN anything anywhere) */
     .wholeMapExteriors = 0, /* EXPERIMENTAL: texture+draw every exterior chunk (whole town visible; heavy with fog weakened) */
     .usePgxp        = 0, /* 0=affine textures (PSX look), 1=PGXP perspective correct (WIP) */
@@ -84,6 +89,7 @@ s_PcConfig g_PcConfig = {
     .crosshair           = 0, /* draw a center crosshair while aiming in TPS/OTS */
     .crosshairStyle      = 0, /* 0 = cross (+), 1 = dot, 2 = circle, 3 = dashes/gap */
     .aimAssist           = 1, /* OTS/TPS free-aim aim assist (mouse body-coverage + controller auto-aim) */
+    .meleeAimWalk        = 0,
     .mouseCursor         = 1, /* mouse controls cursor puzzles + clickable main menu */
     .altButtonSprint     = 0, /* alt cams sprint from the run control only (off = full stick push also sprints) */
     .immersiveFpsHeadTracking = 0, /* FPS view follows head-bone rotation (experiment, off by default) */
@@ -97,6 +103,54 @@ s_PcConfig g_PcConfig = {
     .minimapScale            = 100.0f,
     .minimapRequireMap       = 1, /* the map only appears once Harry has found it */
     .minimapOpacity          = 100.0f,
+    .ammoHudCorner           = 2,
+    .ammoHudScale            = 100.0f,
+    .ammoHudOpacity          = 90.0f,
+    .ammoHudAlways           = 0,
+    .ammoHud                 = 1,
+    .autoReload              = 0,
+    .manualReload            = 1,
+    .diffAmmo                = 2,
+    .diffHeals               = 2,
+    .diffEnemyDmg            = 2,
+    .enemyHpBars             = 0,
+    .hpHud                   = 1,
+    .hpStyle                 = 0,
+    .hpNumber                = 0,
+    .hpCorner                = 1,
+    .hpScale                 = 100.0f,
+    .hpOpacity               = 90.0f,
+    .hpAlways                = 0,
+    .shakeHurt               = 0,
+    .shakeFire               = 0,
+    .shakeDealt              = 0,
+    .shakeHurtInt            = 50,
+    .shakeFireInt            = 50,
+    .shakeDealtInt           = 50,
+    .hitmarker               = 0,
+    .killFlash               = 0,
+    .killFlashMode           = 0,
+    .immersionWeapons        = 0,
+    .immersionFear           = 0,
+    .immersionFlicker        = 0,
+    .aimCameraMode           = 0,
+    .quickHeal               = 1,
+    .itemToastBg             = 100,
+    .healFlash               = 100,
+    .toastCue                = 0,
+    .healCue                 = 0,
+    .dpadWeapons             = 0,
+    .dpadUp                  = 129,
+    .dpadDown                = 161,
+    .dpadLeft                = 162,
+    .dpadRight               = 160,
+    .sfxHandgun              = 1,
+    .sfxRifle                = 1,
+    .sfxShotgun              = 1,
+    .sfxBlaster              = 1,
+    .itemToastCorner         = 3,
+    .itemToastScale          = 100.0f,
+    .itemToastOpacity        = 90.0f,
     .disableDpadMovement     = 0, /* D-pad still drives movement (off = byte-identical) */
     .menuFilter              = 0, /* menus unfiltered (off = byte-identical) */
     .adsr                = 1,    /* SPU ADSR envelopes on (BGM instrument fades) */
@@ -167,9 +221,9 @@ s_PcConfig g_PcConfig = {
         .padL3 = "leftstick", .padR3 = "rightstick",
         .padStart = "start", .padSelect = "back",
         .keyChangeCam = "F9", .padChangeCam = "rightstick",
-        .keyReload = "R", .padReload = "NONE",
+        .keyReload = "R", .padReload = "x",
         .keyCycleWeapons = "NONE", .padCycleWeapons = "NONE",
-        .keyQuickHeal = "NONE", .padQuickHeal = "NONE",
+        .keyQuickHeal = "NONE", .padQuickHeal = "leftstick",
         .keyReload2 = "NONE",
         .keyQuickTurn = "NONE", .padQuickTurn = "NONE",
         .keyRearLook = "NONE", .padRearLook = "NONE",
@@ -192,9 +246,9 @@ s_PcConfig g_PcConfig = {
         /* Action binds default to the same as classic until the player rebinds
          * the altcam scheme (Change Camera stays F9/rightstick, reload keyboard R). */
         .keyChangeCam = "F9", .padChangeCam = "rightstick",
-        .keyReload = "R", .padReload = "NONE",
+        .keyReload = "R", .padReload = "x",
         .keyCycleWeapons = "NONE", .padCycleWeapons = "NONE",
-        .keyQuickHeal = "NONE", .padQuickHeal = "NONE",
+        .keyQuickHeal = "NONE", .padQuickHeal = "leftstick",
         .keyReload2 = "NONE",
         .keyQuickTurn = "NONE", .padQuickTurn = "NONE",
         .keyRearLook = "NONE", .padRearLook = "NONE",
@@ -631,9 +685,35 @@ void PcConfig_Load(const char* path)
         {
             g_PcConfig.lowHealthGlow = (atoi(value) != 0);
         }
+        else if (strcmp(key, "low_health_op") == 0)
+        {
+            int v = atoi(value);
+            if (v < 0) v = 0;
+            if (v > 100) v = 100;
+            g_PcConfig.lowHealthOp = v;
+        }
+        else if (strcmp(key, "hurt_flash") == 0)
+        {
+            g_PcConfig.hurtFlash = (atoi(value) != 0);
+        }
+        else if (strcmp(key, "hurt_flash_op") == 0)
+        {
+            int v = atoi(value);
+            if (v < 0) v = 0;
+            if (v > 100) v = 100;
+            g_PcConfig.hurtFlashOp = v;
+        }
         else if (strcmp(key, "bullet_decals") == 0)
         {
             g_PcConfig.bulletDecals = (atoi(value) != 0);
+        }
+        else if (strcmp(key, "blood_wall_decals") == 0)
+        {
+            g_PcConfig.bloodWallDecals = (atoi(value) != 0);
+        }
+        else if (strcmp(key, "silent_take") == 0)
+        {
+            g_PcConfig.silentTake = (atoi(value) != 0);
         }
         else if (strcmp(key, "whole_map_exteriors") == 0)
         {
@@ -933,6 +1013,10 @@ void PcConfig_Load(const char* path)
         {
             g_PcConfig.aimAssist = (atoi(value) != 0);
         }
+        else if (strcmp(key, "melee_aim_walk") == 0)
+        {
+            g_PcConfig.meleeAimWalk = (atoi(value) != 0);
+        }
         else if (strcmp(key, "altcam_button_sprint") == 0)
         {
             g_PcConfig.altButtonSprint = (atoi(value) != 0);
@@ -1068,6 +1152,253 @@ else if (strcmp(key, "enable_plugins") == 0)
             if (v < 0.0f)   v = 0.0f;
             if (v > 100.0f) v = 100.0f;
             g_PcConfig.minimapOpacity = v;
+        }
+        else if (strcmp(key, "ammo_corner") == 0)
+        {
+            int v = atoi(value);
+            g_PcConfig.ammoHudCorner = (v < 0) ? 0 : ((v > 3) ? 3 : v);
+        }
+        else if (strcmp(key, "ammo_scale") == 0)
+        {
+            float v = (float)atof(value);
+            if (v < 60.0f)  v = 60.0f;
+            if (v > 130.0f) v = 130.0f;
+            g_PcConfig.ammoHudScale = v;
+        }
+        else if (strcmp(key, "ammo_opacity") == 0)
+        {
+            float v = (float)atof(value);
+            if (v < 20.0f)  v = 20.0f;
+            if (v > 100.0f) v = 100.0f;
+            g_PcConfig.ammoHudOpacity = v;
+        }
+        else if (strcmp(key, "ammo_always") == 0)
+        {
+            g_PcConfig.ammoHudAlways = (atoi(value) != 0);
+        }
+        else if (strcmp(key, "ammo_hud") == 0)
+        {
+            g_PcConfig.ammoHud = (atoi(value) != 0);
+        }
+        else if (strcmp(key, "auto_reload") == 0)
+        {
+            g_PcConfig.autoReload = (atoi(value) != 0);
+        }
+        else if (strcmp(key, "manual_reload") == 0)
+        {
+            g_PcConfig.manualReload = (atoi(value) != 0);
+        }
+        else if (strcmp(key, "diff_ammo") == 0)
+        {
+            int v = atoi(value);
+            if (v < 0) v = 0;
+            if (v > 3) v = 3;
+            g_PcConfig.diffAmmo = v;
+        }
+        else if (strcmp(key, "diff_heals") == 0)
+        {
+            int v = atoi(value);
+            if (v < 0) v = 0;
+            if (v > 3) v = 3;
+            g_PcConfig.diffHeals = v;
+        }
+        else if (strcmp(key, "diff_enemy") == 0)
+        {
+            int v = atoi(value);
+            if (v < 0) v = 0;
+            if (v > 5) v = 5;
+            g_PcConfig.diffEnemyDmg = v;
+        }
+        else if (strcmp(key, "enemy_hp_bars") == 0)
+        {
+            g_PcConfig.enemyHpBars = (atoi(value) != 0);
+        }
+        else if (strcmp(key, "hp_hud") == 0)
+        {
+            g_PcConfig.hpHud = (atoi(value) != 0);
+        }
+        else if (strcmp(key, "hp_style") == 0)
+        {
+            int v = atoi(value);
+            if (v < 0) v = 0;
+            if (v > 1) v = 1;
+            g_PcConfig.hpStyle = v;
+        }
+        else if (strcmp(key, "hp_number") == 0)
+        {
+            g_PcConfig.hpNumber = (atoi(value) != 0);
+        }
+        else if (strcmp(key, "hp_corner") == 0)
+        {
+            int v = atoi(value);
+            g_PcConfig.hpCorner = (v < 0) ? 0 : ((v > 3) ? 3 : v);
+        }
+        else if (strcmp(key, "hp_scale") == 0)
+        {
+            float v = (float)atof(value);
+            if (v < 60.0f)  v = 60.0f;
+            if (v > 130.0f) v = 130.0f;
+            g_PcConfig.hpScale = v;
+        }
+        else if (strcmp(key, "hp_opacity") == 0)
+        {
+            float v = (float)atof(value);
+            if (v < 20.0f)  v = 20.0f;
+            if (v > 100.0f) v = 100.0f;
+            g_PcConfig.hpOpacity = v;
+        }
+        else if (strcmp(key, "hp_always") == 0)
+        {
+            g_PcConfig.hpAlways = (atoi(value) != 0);
+        }
+        else if (strcmp(key, "shake_hurt") == 0)
+        {
+            g_PcConfig.shakeHurt = (atoi(value) != 0);
+        }
+        else if (strcmp(key, "shake_fire") == 0)
+        {
+            g_PcConfig.shakeFire = (atoi(value) != 0);
+        }
+        else if (strcmp(key, "shake_dealt") == 0)
+        {
+            g_PcConfig.shakeDealt = (atoi(value) != 0);
+        }
+        else if (strcmp(key, "shake_hurt_int") == 0)
+        {
+            int v = atoi(value);
+            if (v < 0) v = 0;
+            if (v > 200) v = 200;
+            g_PcConfig.shakeHurtInt = v;
+        }
+        else if (strcmp(key, "shake_fire_int") == 0)
+        {
+            int v = atoi(value);
+            if (v < 0) v = 0;
+            if (v > 200) v = 200;
+            g_PcConfig.shakeFireInt = v;
+        }
+        else if (strcmp(key, "shake_dealt_int") == 0)
+        {
+            int v = atoi(value);
+            if (v < 0) v = 0;
+            if (v > 200) v = 200;
+            g_PcConfig.shakeDealtInt = v;
+        }
+        else if (strcmp(key, "hitmarker") == 0)
+        {
+            g_PcConfig.hitmarker = (atoi(value) != 0);
+        }
+        else if (strcmp(key, "kill_flash") == 0)
+        {
+            g_PcConfig.killFlash = (atoi(value) != 0);
+        }
+        else if (strcmp(key, "kill_flash_mode") == 0)
+        {
+            int v = atoi(value);
+            if (v < 0) v = 0;
+            if (v > 1) v = 1;
+            g_PcConfig.killFlashMode = v;
+        }
+        else if (strcmp(key, "immersion_weapons") == 0)
+        {
+            g_PcConfig.immersionWeapons = (atoi(value) != 0);
+        }
+        else if (strcmp(key, "immersion_fear") == 0)
+        {
+            g_PcConfig.immersionFear = (atoi(value) != 0);
+        }
+        else if (strcmp(key, "immersion_flicker") == 0)
+        {
+            g_PcConfig.immersionFlicker = (atoi(value) != 0);
+        }
+        else if (strcmp(key, "aim_camera_mode") == 0)
+        {
+            int v = atoi(value);
+            if (v < 0) v = 0;
+            if (v > 4) v = 4;
+            g_PcConfig.aimCameraMode = v;
+        }
+        else if (strcmp(key, "quick_heal") == 0)
+        {
+            g_PcConfig.quickHeal = (atoi(value) != 0);
+        }
+        else if (strcmp(key, "item_toast_bg") == 0)
+        {
+            int v = atoi(value);
+            if (v <= 1) v *= 100; /* legacy boolean */
+            if (v < 0) v = 0;
+            if (v > 100) v = 100;
+            g_PcConfig.itemToastBg = v;
+        }
+        else if (strcmp(key, "heal_flash") == 0)
+        {
+            int v = atoi(value);
+            if (v < 0) v = 0;
+            if (v > 100) v = 100;
+            g_PcConfig.healFlash = v;
+        }
+        else if (strcmp(key, "toast_cue") == 0)
+        {
+            g_PcConfig.toastCue = (atoi(value) != 0);
+        }
+        else if (strcmp(key, "heal_cue") == 0)
+        {
+            g_PcConfig.healCue = (atoi(value) != 0);
+        }
+        else if (strcmp(key, "dpad_weapons") == 0)
+        {
+            g_PcConfig.dpadWeapons = (atoi(value) != 0);
+        }
+        else if (strcmp(key, "dpad_up") == 0)
+        {
+            g_PcConfig.dpadUp = atoi(value);
+        }
+        else if (strcmp(key, "dpad_down") == 0)
+        {
+            g_PcConfig.dpadDown = atoi(value);
+        }
+        else if (strcmp(key, "dpad_left") == 0)
+        {
+            g_PcConfig.dpadLeft = atoi(value);
+        }
+        else if (strcmp(key, "dpad_right") == 0)
+        {
+            g_PcConfig.dpadRight = atoi(value);
+        }
+        else if (strcmp(key, "sfx_handgun") == 0)
+        {
+            g_PcConfig.sfxHandgun = (atoi(value) != 0);
+        }
+        else if (strcmp(key, "sfx_rifle") == 0)
+        {
+            g_PcConfig.sfxRifle = (atoi(value) != 0);
+        }
+        else if (strcmp(key, "sfx_shotgun") == 0)
+        {
+            g_PcConfig.sfxShotgun = (atoi(value) != 0);
+        }
+        else if (strcmp(key, "sfx_blaster") == 0)
+        {
+            g_PcConfig.sfxBlaster = (atoi(value) != 0);
+        }
+        else if (strcmp(key, "item_toast_corner") == 0)
+        {
+            int v = atoi(value);
+            g_PcConfig.itemToastCorner = (v < 0) ? 0 : ((v > 3) ? 3 : v);
+        }
+        else if (strcmp(key, "item_toast_scale") == 0)
+        {
+            float v = (float)atof(value);
+            if (v < 60.0f)  v = 60.0f;
+            if (v > 130.0f) v = 130.0f;
+            g_PcConfig.itemToastScale = v;
+        }
+        else if (strcmp(key, "item_toast_opacity") == 0)
+        {
+            float v = (float)atof(value);
+            if (v < 20.0f)  v = 20.0f;
+            if (v > 100.0f) v = 100.0f;
+            g_PcConfig.itemToastOpacity = v;
         }
         else if (strcmp(key, "disable_dpad_movement") == 0)
         {

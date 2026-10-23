@@ -185,7 +185,7 @@ static GLuint s_anim_tex   = 0;
 /* ---- Randomizer score (left, vertically centred) ----
  * Unlike the panels above this is NOT a debug overlay: it is the gamemode's HUD,
  * so it is gated on a live randomizer run rather than on allow_debug_controls. */
-#define SCORE_COLS 16
+#define SCORE_COLS 28
 #define SCORE_TEX_W (SCORE_COLS * GLYPH_W)
 #define SCORE_TEX_H (1 * GLYPH_H)
 static char   s_score_line[SCORE_COLS];
@@ -1979,6 +1979,11 @@ void DbgOverlay_Render(void)
      * inside the shared panel state block below — and above the early-out, or
      * it would never run during normal gameplay. */
     { extern void Pc_RaToast_Draw(void); Pc_RaToast_Draw(); }
+    { extern void Pc_ItemToast_Draw(void); Pc_ItemToast_Draw(); }
+    { extern void Pc_AmmoHud_Draw(void); Pc_AmmoHud_Draw(); }
+    { extern void Pc_HarryHud_Draw(void); Pc_HarryHud_Draw(); }
+    { extern void Pc_HordeHud_Draw(void); Pc_HordeHud_Draw(); }
+    { extern void Pc_HordeDraft_Draw(void); Pc_HordeDraft_Draw(); }
 
     /* Main-menu achievement browser — same self-contained-GL arrangement as the
      * toast above, and drawn after it so an unlock popup stays on top. */

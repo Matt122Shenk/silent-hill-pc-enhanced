@@ -41,6 +41,8 @@ extern s_WorldEnvWork g_WorldEnvWork;
 #include "main/rng.h"
 #ifdef SH_PC_PORT
 #include <stdio.h>
+#include <stdlib.h>
+#include "pc_config.h"
 extern void vcGetNowCamPos(VECTOR3* cam_pos);
 extern void DebugCamera_Update(void);
 #endif
@@ -585,6 +587,11 @@ void SysState_Gameplay_Update(void) // 0x80038BD4
 void SysState_GamePaused_Update(void) // 0x800391E8
 {
     static s32 D_800A9A68 = 0;
+#ifdef SH_PC_PORT
+    /* Native pause menu selection (rows drawn below the PAUSED header). */
+    static s32 s_pauseSel = 0;
+    int resumeReq = 0;
+#endif
 
 #ifdef SH_PC_PORT
     /* Make pause actually pause. `BgmStatusFlag_Pause` is misleadingly named:
@@ -634,7 +641,30 @@ void SysState_GamePaused_Update(void) // 0x800391E8
     {
         SD_Call(3);
         g_SysWork.sysStateSteps[0]++;
+#ifdef SH_PC_PORT
+        s_pauseSel = 0;
+#endif
     }
+
+#ifdef SH_PC_PORT
+    /* Pause menu: the frozen frame stays behind, rows draw with the same 2D
+     * text path as the PAUSED header (no new assets). English by default,
+     * Spanish when that is the game language. */
+    {
+        static const char* s_rowsEn[5] = { "RESUME", "LOAD", "QUICK OPTIONS", "MAIN MENU", "QUIT" };
+        static const char* s_rowsEs[5] = { "REANUDAR", "CARGAR", "OPCIONES RAPIDAS", "MENU PRINCIPAL", "SALIR" };
+        const char** rows = (g_PcConfig.language == 3) ? s_rowsEs : s_rowsEn;
+        s32 i;
+
+        for (i = 0; i < 5; i++)
+        {
+            Gfx_StringSetColor((i == s_pauseSel) ? StringColorId_White : StringColorId_LightGrey);
+            Gfx_StringSetPosition(SCREEN_POSITION_X(37.0f), SCREEN_POSITION_Y(52.0f + 7.0f * i));
+            Gfx_StringDraw((char*)rows[i], DEFAULT_MAP_MESSAGE_LENGTH);
+        }
+        Gfx_StringSetColor(StringColorId_White);
+    }
+#endif
 
     // Debug button combo to bring up save screen from pause screen.
     // DPad-Left + L2 + L1 + LS-Left + RS-Left + L3
@@ -662,6 +692,103 @@ void SysState_GamePaused_Update(void) // 0x800391E8
 
     if (g_Controller0->clickedBtnFlags & g_GameWorkPtr->config.controllerConfig.pause)
     {
+#ifdef SH_PC_PORT
+        resumeReq = 1;
+#else
+        D_800A9A68 = 0;
+
+        SD_Call(4);
+        SysWork_StateSetNext(SysState_Gameplay);
+#endif
+    }
+
+#ifdef SH_PC_PORT
+    /* Menu navigation: Up/Down move, Enter confirms, Cancel resumes. Same
+     * flags the native Options/save screens use (keyboard arrives through the
+     * same pad emulation). */
+    if (g_Controller0->pulsedBtnFlags & (ControllerFlag_DpadUp | ControllerFlag_LStickUp))
+    {
+        s_pauseSel = (s_pauseSel + 4) % 5;
+        SD_Call(Sfx_MenuMove);
+    }
+    if (g_Controller0->pulsedBtnFlags & (ControllerFlag_DpadDown | ControllerFlag_LStickDown))
+    {
+        s_pauseSel = (s_pauseSel + 1) % 5;
+        SD_Call(Sfx_MenuMove);
+    }
+    if (g_Controller0->clickedBtnFlags & g_GameWorkPtr->config.controllerConfig.cancel)
+    {
+        resumeReq = 1;
+    }
+    if (g_Controller0->clickedBtnFlags & g_GameWorkPtr->config.controllerConfig.enter)
+    {
+        switch (s_pauseSel)
+        {
+            default:
+            case 0:
+                resumeReq = 1;
+                break;
+
+            case 1:
+                /* Load: the F8 quick-load sequence (native slot UI), releasable
+                 * from the pause freeze the same way resume is. Allowed during
+                 * boss fights, like F8. Unmute like resume does: pause entry ran
+                 * SD_Call(3) (muteGame_17) and only the resume path ran SD_Call(4),
+                 * so without this the loaded game stayed silent until the next
+                 * pause cycle. */
+                SD_Call(4);
+                D_800A9A68 = 0;
+                s_pauseSel = 0;
+                Screen_Refresh(320, 0);
+                GameFs_SaveLoadBinLoad();
+                Fs_QueueWaitForEmpty();
+                SysWork_StateSetNext(SysState_Gameplay);
+                Game_StateSetNext(GameState_LoadSavegameScreen);
+                {
+                    extern int g_PcFreezeReleasePending;
+                    g_PcFreezeReleasePending = 1;
+                }
+                return;
+
+            case 2:
+                /* Quick options: resume first (same unmute + freeze release as
+                 * resume), then open the F10 panel with its normal freeze. The
+                 * open-input blackout in Pc_QuickOptions_Update swallows this
+                 * confirm press so it cannot trigger the first F10 row. */
+                SD_Call(4);
+                D_800A9A68 = 0;
+                s_pauseSel = 0;
+                SysWork_StateSetNext(SysState_Gameplay);
+                {
+                    extern int g_PcFreezeReleasePending;
+                    extern void Pc_QuickOptions_Toggle(void);
+                    g_PcFreezeReleasePending = 1;
+                    Pc_QuickOptions_Toggle();
+                }
+                return;
+
+            case 3:
+                /* Main menu: the in-game Escape warm reboot. SysWork_Clear
+                 * inside the reboot drops the GamePaused state with it. */
+                SD_Call(Sfx_MenuConfirm);
+                D_800A9A68 = 0;
+                s_pauseSel = 0;
+                g_SysWork.sysFlags |= SysFlag_DoWarmReset;
+                {
+                    extern int g_PcFreezeReleasePending;
+                    g_PcFreezeReleasePending = 1;
+                }
+                return;
+
+            case 4:
+                exit(0);
+                break;
+        }
+    }
+#endif
+#ifdef SH_PC_PORT
+    if (resumeReq)
+    {
         D_800A9A68 = 0;
 
         SD_Call(4);
@@ -676,6 +803,7 @@ void SysState_GamePaused_Update(void) // 0x800391E8
 #endif
         SysWork_StateSetNext(SysState_Gameplay);
     }
+#endif
 }
 
 void SysState_OptionsMenu_Update(void) // 0x80039344
@@ -1035,6 +1163,19 @@ void SysState_LoadArea_Update(void) // 0x80039C40
     }
     fflush(g_ShDebugLog);
 
+#ifdef SH_PC_PORT
+    /* Horde-mode arena lockdown: swallow every door/room transition before
+     * the door SFX/fade below starts. */
+    {
+        extern int Pc_Horde_VetoTransition(void);
+        if (Pc_Horde_VetoTransition())
+        {
+            SysWork_StateSetNext(SysState_Gameplay);
+            return;
+        }
+    }
+#endif
+
     /* Everything below runs to completion inside THIS single tick, and its
      * blocking parts (GameBoot_MapLoad -> GameFs_PlayerMapAnimLoad ->
      * Fs_QueueWaitForEmpty) only spin on VSync: they never return to MainLoop's
@@ -1353,6 +1494,15 @@ void func_8003A16C(void) // 0x8003A16C
         // Update `savegame` with player info.
         SysWork_SavegameUpdatePlayer();
 
+#ifdef SH_PC_PORT
+        /* Horde mode runs on a throwaway savegame: snapshotting it into the
+         * RAM autosave would clobber the player's real Continue point. */
+        {
+            extern int Pc_Horde_Active(void);
+            if (Pc_Horde_Active())
+                return;
+        }
+#endif
         g_GameWork.autosave = g_GameWork.savegame;
     }
 }

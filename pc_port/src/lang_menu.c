@@ -46,6 +46,7 @@ static const s_MenuTranslation s_MenuTr[] = {
      * mixed-case "Exit" below, which is the options screen's BACK button
      * (German "Zur\xFC" "ck") — these must not share a translation. */
     { "EXIT",     { "BEENDEN", "QUITTER",  "SALIR",     "ESCI"      } },
+    { "HORDE",    { "HORDE",  "HORDE",    "MODO_HORDAS", "ORDA"    } },
     { "EASY",     { "LEICHT", "FACILE",    "FACIL",     "FACILE"    } },
     { "NORMAL",   { NULL,     NULL,        NULL,        "NORMALE"   } },
     { "HARD",     { "SCHWER", "DIFFICILE", "DIFICIL",   "DIFFICILE" } },

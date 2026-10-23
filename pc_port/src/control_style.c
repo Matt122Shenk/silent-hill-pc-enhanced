@@ -56,7 +56,7 @@ const char* Pc_ControlStyleLabel(int idx)
     return g_ControlStyles[idx].label;
 }
 
-void Pc_ControlStyleSet(int style)
+static void Pc_ControlStyleApply(int style)
 {
     int wasTps = g_DebugThirdPersonCam;
 
@@ -80,10 +80,20 @@ void Pc_ControlStyleSet(int style)
      * Not flagged on tps<->ots so cycling between them doesn't jerk the view. */
     if (!wasTps && g_DebugThirdPersonCam)
         g_TpsCamNeedsReset = 1;
+}
+
+void Pc_ControlStyleSet(int style)
+{
+    Pc_ControlStyleApply(style);
 
     /* Persist so the choice survives a restart and the launcher reflects it.
      * Mouse capture is managed per-frame in Pc_ControlStyleUpdate. */
-    PcConfig_SaveKeyValue("control_style", Pc_ControlStyleId(style));
+    PcConfig_SaveKeyValue("control_style", Pc_ControlStyleId(g_ControlStyle));
+}
+
+void Pc_ControlStyleSetTransient(int style)
+{
+    Pc_ControlStyleApply(style);
 }
 
 /* Publish "id:Label|id:Label|..." so the launcher dropdown lists this build's
@@ -160,6 +170,49 @@ static int SwapShoulder_MouseButton(const char* name)
     return 0;
 }
 
+/* Aim-held across BOTH control schemes (+ mouse): the aim-camera watcher
+ * must not depend on the live scheme, because engaging it swaps schemes —
+ * classic R2 is right-trigger while altcam R2 is Mouse2/left-trigger, so a
+ * live-scheme read drops the moment it engages and the camera flickers.
+ * Mirrors the reload-bind resolution (either scheme, primary + secondary). */
+static int AimHeldAnyScheme(void)
+{
+    static SDL_Scancode s_kb[2]  = { SDL_SCANCODE_UNKNOWN, SDL_SCANCODE_UNKNOWN };
+    static SDL_Scancode s_kb2[2] = { SDL_SCANCODE_UNKNOWN, SDL_SCANCODE_UNKNOWN };
+    static int          s_mb[2]  = { 0, 0 };
+    static int          s_pad[2] = { -1, -1 };
+    static int          s_res = 0;
+    const Uint8* keys;
+    int i, held = 0;
+    if (!s_res)
+    {
+        const ControlScheme* sc[2];
+        sc[0] = &g_PcConfig.classic;
+        sc[1] = &g_PcConfig.altcam;
+        for (i = 0; i < 2; i++)
+        {
+            s_mb[i] = SwapShoulder_MouseButton(sc[i]->keyR2);
+            s_kb[i] = (s_mb[i] == 0) ? SDL_GetScancodeFromName(sc[i]->keyR2) : SDL_SCANCODE_UNKNOWN;
+            s_kb2[i] = SDL_GetScancodeFromName(sc[i]->keyR22);
+            s_pad[i] = (sc[i]->padR2[0] != '\0')
+                       ? PsyX_LookupGameControllerMapping(sc[i]->padR2, SDL_CONTROLLER_BUTTON_INVALID)
+                       : SDL_CONTROLLER_BUTTON_INVALID;
+        }
+        s_res = 1;
+    }
+    if (g_SysWork.playerCombat.weaponAttack == (s8)NO_VALUE)
+        return 0;
+    keys = SDL_GetKeyboardState(NULL);
+    for (i = 0; i < 2 && !held; i++)
+    {
+        if (s_mb[i] != 0) { if (SDL_GetMouseState(NULL, NULL) & SDL_BUTTON(s_mb[i])) held = 1; }
+        else if (s_kb[i] != SDL_SCANCODE_UNKNOWN && keys && keys[s_kb[i]]) held = 1;
+        if (!held && s_kb2[i] != SDL_SCANCODE_UNKNOWN && keys && keys[s_kb2[i]]) held = 1;
+        if (!held && s_pad[i] >= 0 && PsyX_RawControllerBindHeld(s_pad[i])) held = 1;
+    }
+    return held;
+}
+
 void Pc_ControlStyleUpdate(void)
 {
     static SDL_Scancode scCam[2] = { SDL_SCANCODE_UNKNOWN, SDL_SCANCODE_UNKNOWN };
@@ -215,6 +268,67 @@ void Pc_ControlStyleUpdate(void)
     }
     prevKey = curKey;
     prevPad = curPad;
+
+    /* Aim camera override (config aim_camera_mode): while aiming, borrow the
+     * configured style; on release hand back the prior one, unless Change
+     * Camera retargeted mid-aim. The engage signal is the PHYSICAL aim hold
+     * across both schemes (AimHeldAnyScheme): isAiming depends on the live
+     * scheme, so engaging (which swaps schemes) would drop it and flicker.
+     * Release has a 500 ms grace so fire blips don't flap the camera.
+     * Transient sets only, so quitting mid-aim never persists the borrow. */
+    {
+        static int s_borrowedStyle = -1;
+        static int s_savedStyle = -1;
+        static Uint32 s_engageAt = 0;
+        static Uint32 s_releaseAt = 0;
+        Uint32 now = SDL_GetTicks();
+        int mode = g_PcConfig.aimCameraMode;
+
+        if (!inGameplay || mode <= 0 || mode > 4)
+        {
+            if ((mode <= 0 || mode > 4) && s_borrowedStyle >= 0 &&
+                s_savedStyle >= 0 && g_ControlStyle == s_borrowedStyle)
+            {
+                Pc_ControlStyleSetTransient(s_savedStyle);
+            }
+            s_borrowedStyle = -1;
+            s_savedStyle = -1;
+            s_engageAt = 0;
+            s_releaseAt = 0;
+        }
+        else if (AimHeldAnyScheme())
+        {
+            s_releaseAt = 0;
+            if (s_borrowedStyle < 0)
+            {
+                if (!s_engageAt) s_engageAt = now + 50;
+                if ((Sint32)(now - s_engageAt) >= 0)
+                {
+                    s_engageAt = 0;
+                    s_savedStyle = g_ControlStyle;
+                    s_borrowedStyle = mode - 1;
+                    if (g_ControlStyle != s_borrowedStyle)
+                        Pc_ControlStyleSetTransient(s_borrowedStyle);
+                }
+            }
+        }
+        else
+        {
+            s_engageAt = 0;
+            if (s_borrowedStyle >= 0)
+            {
+                if (!s_releaseAt) s_releaseAt = now + 500;
+                if ((Sint32)(now - s_releaseAt) >= 0)
+                {
+                    if (g_ControlStyle == s_borrowedStyle && s_savedStyle >= 0)
+                        Pc_ControlStyleSetTransient(s_savedStyle);
+                    s_borrowedStyle = -1;
+                    s_savedStyle = -1;
+                    s_releaseAt = 0;
+                }
+            }
+        }
+    }
 
     /* Menus always use the classic control scheme. An alternate camera's binds
      * (mouse-look, remapped confirm/cancel) would otherwise apply to menu /
@@ -302,12 +416,15 @@ void Pc_ControlStyleUpdate(void)
     }
 
     /* Capture the mouse only while actually playing in TPS/OTS — free cursor in
-     * menus / pause / console, and also while a cursor-driven puzzle is on screen
+     * menus / pause / console, while a cursor-driven puzzle is on screen
      * (those are separate 2D screens; the mouse should drive the puzzle cursor,
-     * not the 3D camera, regardless of the active camera mode). */
+     * not the 3D camera, regardless of the active camera mode), and while the
+     * horde reward draft is up (same deal: pointer over cards, not camera). */
     {
         extern int Pc_MouseCursor_PuzzleActive(void);
-        wantCapture = ((g_DebugThirdPersonCam || g_DebugCamEnabled) && inGameplay && !Pc_MouseCursor_PuzzleActive());
+        extern int Pc_Horde_DraftActive(void);
+        wantCapture = ((g_DebugThirdPersonCam || g_DebugCamEnabled) && inGameplay && !Pc_MouseCursor_PuzzleActive() &&
+                       !Pc_Horde_DraftActive());
     }
     if ((SDL_GetRelativeMouseMode() == SDL_TRUE) != (wantCapture != 0))
     {

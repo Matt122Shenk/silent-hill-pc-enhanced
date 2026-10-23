@@ -1970,6 +1970,21 @@ void Player_LogicUpdate(s_SubCharacter* player, s_PlayerExtra* extra, GsCOORDINA
                                 int stickSprint = !g_PcConfig.altButtonSprint &&
                                                   (lx * lx + ly * ly) >= (96 * 96);
                                 g_Player_IsRunning = cfgRun || stickSprint;
+#ifdef SH_PC_PORT
+                                /* Melee aim-walk (config melee_aim_walk): aiming any
+                                 * melee forces walk, vanilla aim-walk parity (slow
+                                 * and controlled, like the fixed cameras). This
+                                 * also disarms the sprint-cancels-aim kill below,
+                                 * which keys on IsRunning. */
+                                {
+                                    int mawWa = g_SysWork.playerCombat.weaponAttack;
+                                    if (g_PcConfig.meleeAimWalk && g_DebugThirdPersonCam &&
+                                        (g_SysWork.playerCombat.isAiming || g_Player_IsAiming) &&
+                                        mawWa >= WEAPON_ATTACK(EquippedWeaponId_KitchenKnife, AttackInputType_Tap) &&
+                                        mawWa < WEAPON_ATTACK(EquippedWeaponId_Handgun, AttackInputType_Tap))
+                                        g_Player_IsRunning = 0;
+                                }
+#endif
                             }
                             else
 #endif
@@ -4387,6 +4402,11 @@ static void Pc_FreeAimGunUpperBody(s_SubCharacter* player, s_PlayerExtra* extra,
                 /* Fire: the existing (working) damage trigger + ammo + SFX. */
                 s_refireT = PC_GUN_REFIRE_SEC;
                 player->field_44.field_0 = 1;
+#ifdef SH_PC_PORT
+                /* Camera kick on true discharge (not on trigger press, and
+                 * never on dry-fire below). */
+                { extern void Pc_ShakeKickFire(void); Pc_ShakeKickFire(); }
+#endif
                 if (g_SysWork.playerCombat.weaponAttack != WEAPON_ATTACK(EquippedWeaponId_HyperBlaster, AttackInputType_Tap))
                 {
                     g_SysWork.playerCombat.currentWeaponAmmo--;
@@ -5088,6 +5108,11 @@ static bool Player_CombatAnimUpdate(s_SubCharacter* player, s_PlayerExtra* extra
             if (g_SysWork.playerCombat.currentWeaponAmmo != 0)
             {
                 player->field_44.field_0 = 1;
+#ifdef SH_PC_PORT
+                /* Camera kick at the anim's damage window — the bullet truly
+                 * leaves here, frames after the trigger press. */
+                { extern void Pc_ShakeKickFire(void); Pc_ShakeKickFire(); }
+#endif
 
                 if (g_SysWork.playerCombat.weaponAttack != WEAPON_ATTACK(EquippedWeaponId_HyperBlaster, AttackInputType_Tap))
                 {
@@ -6711,7 +6736,16 @@ void Player_CombatStateUpdate(s_SubCharacter* player, s_PlayerExtra* extra) // 0
                     extra->model.controlState                = 0;
                     player->properties.player.field_100 = 0;
 
-                    if (g_SysWork.playerCombat.totalWeaponAmmo != 0)
+                    if (g_SysWork.playerCombat.totalWeaponAmmo != 0
+#ifdef SH_PC_PORT
+                        /* Auto-reload owns refills: no silent top-up on draw
+                         * (partial or empty) — the clip only refills through
+                         * the animated Reload state once it runs dry. Without
+                         * this, raising the gun with ammo in reserve refilled
+                         * instantly and the reload animation never ran. */
+                        && !g_PcConfig.autoReload
+#endif
+                        )
                     {
                         if (g_SysWork.playerCombat.weaponAttack >= WEAPON_ATTACK(EquippedWeaponId_Handgun, AttackInputType_Tap))
                         {

@@ -2,7 +2,7 @@
 /* Config-only PC minimap overlay (corner/shape/opacity configurable).
  *
  * Drawn with PSX PRIMITIVES into the game's own display list — the same path
- * Pc_HealFlashUpdate and every other 2D HUD element uses. An earlier raw-GL
+ * other 2D HUD elements use. An earlier raw-GL
  * overlay was abandoned: borrowing PsyX's live GL context meant any unrestored
  * state corrupted the renderer and killed the NVIDIA driver's async worker.
  *
@@ -564,6 +564,16 @@ static int mm_markers_build(int buf, const s_MmView* vw)
     return count;
 }
 
+/* Horde-mode live-enemy dots: red squares beside Harry's yellow arrow. */
+#define MM_FOE_MAX 8
+
+static void mm_uv_to_panel(int cu, int cv, int x0, int y0, int mmSize,
+                            int u0, int v0, int u1, int v1, s32* outPx, s32* outPy)
+{
+    *outPx = x0 + ((cu - u0) * mmSize) / (u1 - u0);
+    *outPy = y0 + ((cv - v0) * mmSize) / (v1 - v0);
+}
+
 void Pc_MinimapUpdate(void)
 {
     static POLY_F3  s_ring[2][MM_SEG];   /* circle: black outline + backing disc */
@@ -573,6 +583,7 @@ void Pc_MinimapUpdate(void)
     static TILE     s_sqFill[2];         /* square: dark interior when no map */
     static POLY_FT4 s_sqMap[2];          /* square: the map image */
     static POLY_F3  s_mark[2];
+    static TILE     s_foe[2][MM_FOE_MAX];
     static DR_TPAGE s_tp[2];
     int       buf, i;
     s32       packed, px, py;
@@ -581,7 +592,7 @@ void Pc_MinimapUpdate(void)
     int       halfW = SCREEN_WIDTH / 2, mmSize = MM_SIZE;
     s32       mkScale = 4096;
     int       u0 = 0, v0 = 0, u1 = MM_UV_MAX, v1 = MM_UV_MAX;
-    int       markCount = 0;
+    int       markCount = 0, foeCount = 0;
     GsOT_TAG* ot;
 
 
@@ -714,8 +725,7 @@ void Pc_MinimapUpdate(void)
         u1 = u0 + 2 * half;
         v1 = v0 + 2 * half;
 
-        px = x0 + ((cu - u0) * mmSize) / (u1 - u0);
-        py = y0 + ((cv - v0) * mmSize) / (v1 - v0);
+        mm_uv_to_panel(cu, cv, x0, y0, mmSize, u0, v0, u1, v1, &px, &py);
     }
     else
     {
@@ -846,6 +856,72 @@ void Pc_MinimapUpdate(void)
         setXY3(&s_mark[buf], vx[0], vy[0], vx[1], vy[1], vx[2], vy[2]);
     }
 
+    /* --- horde foes: red dots, same paper registration as Harry's arrow.
+     * The placement query only resolves Harry's own position, so each foe
+     * is briefly swapped in (position only, query mode, same frame/thread —
+     * the same trick mm_query_at plays with paperMapIdx). Horde-only. --- */
+    if (haveMap)
+    {
+        extern int Pc_Horde_Active(void);
+        extern int Pc_Horde_LiveEnemies(q19_12* outX, q19_12* outZ, int cap);
+        if (Pc_Horde_Active())
+        {
+            q19_12 fx[MM_FOE_MAX], fz[MM_FOE_MAX];
+            int n = Pc_Horde_LiveEnemies(fx, fz, MM_FOE_MAX);
+            int k;
+
+            for (k = 0; k < n && foeCount < MM_FOE_MAX; k++)
+            {
+                s32 saveX = g_SysWork.playerWork.player.position.vx;
+                s32 saveZ = g_SysWork.playerWork.player.position.vz;
+                s32 saveQ = g_PcMapQueryOnly;
+                s32 fpacked, fmx, fmz, fcu, fcv, fpx, fpy, ds;
+
+                g_SysWork.playerWork.player.position.vx = fx[k];
+                g_SysWork.playerWork.player.position.vz = fz[k];
+                g_PcMapQueryOnly = 1;
+                fpacked = mm_query_at(mm_effective_map_idx());
+                g_PcMapQueryOnly = saveQ;
+                g_SysWork.playerWork.player.position.vx = saveX;
+                g_SysWork.playerWork.player.position.vz = saveZ;
+                if (fpacked == 0)
+                    continue;
+
+                fmx = (s32)(s16)(fpacked & 0xFFFF);
+                fmz = (s32)(s16)((fpacked >> 16) & 0xFFFF);
+                fcu = mm_clamp(((fmx + MM_HALF_X) * MM_UV_MAX) / (2 * MM_HALF_X), 0, MM_UV_MAX);
+                fcv = mm_clamp(((fmz + MM_HALF_Z) * MM_UV_MAX) / (2 * MM_HALF_Z), 0, MM_UV_MAX);
+                mm_uv_to_panel(fcu, fcv, x0, y0, mmSize, u0, v0, u1, v1, &fpx, &fpy);
+                if (round)
+                {
+                    s32 dx = fpx - cx, dy = fpy - cy;
+                    s32 lim = R - mm_scaled(4, mkScale), d = dx * dx + dy * dy;
+                    if (d > lim * lim)
+                    {
+                        s32 kk = 0;
+                        while ((kk + 1) * (kk + 1) <= d) kk++;
+                        if (kk > 0) { fpx = cx + (dx * lim) / kk; fpy = cy + (dy * lim) / kk; }
+                    }
+                }
+                else
+                {
+                    int inset = mm_scaled(4, mkScale);
+                    fpx = mm_clamp(fpx, x0 + inset, x1 - inset);
+                    fpy = mm_clamp(fpy, y0 + inset, y1 - inset);
+                }
+
+                ds = mm_scaled(5, mkScale);
+                if (ds < 2) ds = 2;
+                setTile(&s_foe[buf][foeCount]);
+                setRGB0(&s_foe[buf][foeCount], (u8)((224 * op) / 100), (u8)((24 * op) / 100), (u8)((24 * op) / 100));
+                if (semi) setSemiTrans(&s_foe[buf][foeCount], 1);
+                setWH(&s_foe[buf][foeCount], ds, ds);
+                setXY0(&s_foe[buf][foeCount], fpx - ds / 2, fpy - ds / 2);
+                foeCount++;
+            }
+        }
+    }
+
     /* --- paper-map markings, over the map image and under Harry's arrow --- */
     if (haveMap)
     {
@@ -861,6 +937,8 @@ void Pc_MinimapUpdate(void)
 
     /* AddPrim pushes to the head: add front-to-back, tpage last. */
     AddPrim(ot, &s_mark[buf]);
+    for (i = 0; i < foeCount; i++)
+        AddPrim(ot, &s_foe[buf][i]);
     for (i = 0; i < markCount; i++)
         AddPrim(ot, &s_markPrim[buf][i]);
     if (round)

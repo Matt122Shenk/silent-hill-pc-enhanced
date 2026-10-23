@@ -274,4 +274,8 @@ STATIC_ASSERT_SIZEOF(s_InventoryItem, 4);
 #define INV_AMMO_WEAPON_ID(ammoId) \
     ((ammoId) - INV_ITEM_GROUP_SIZE)
 
+#ifdef SH_PC_PORT
+const char* Pc_ItemDisplayName(u8 itemId);
+#endif
+
 #endif

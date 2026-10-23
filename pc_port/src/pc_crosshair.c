@@ -145,9 +145,13 @@ void Pc_CrosshairDraw(void)
 
     for (i = 0; i < n; i++)
     {
+        /* Kill hitmarker: flash red briefly on a player kill (Pc_Kill_Update
+         * arms it; self-gated on the hitmarker flag inside). */
+        extern int Pc_Kill_Hitmarker(void);
+        int kh = Pc_Kill_Hitmarker();
         p[i].r0 = p[i].r1 = p[i].r2 = p[i].r3 = 255;
-        p[i].g0 = p[i].g1 = p[i].g2 = p[i].g3 = 255;
-        p[i].b0 = p[i].b1 = p[i].b2 = p[i].b3 = 255;
+        p[i].g0 = p[i].g1 = p[i].g2 = p[i].g3 = kh ? (u8)60 : (u8)255;
+        p[i].b0 = p[i].b1 = p[i].b2 = p[i].b3 = kh ? (u8)60 : (u8)255;
     }
 
     ot = &g_OtTags0[buf][4];

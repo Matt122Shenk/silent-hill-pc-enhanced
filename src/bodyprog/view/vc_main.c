@@ -3201,6 +3201,23 @@ void vcSetDataToVwSystem(VC_WORK* w_p, VC_CAM_MV_TYPE cam_mv_type) // 0x80085884
     MATRIX  noise_cam_mat;
     MATRIX  noise_mat;
     SVECTOR noise_ang;
+#ifdef SH_PC_PORT
+    /* Camera kick immersion (pc_shake.c): this is what the renderer is handed
+     * (cam_mat, not cam_pos), so the offset goes on cam_mat.t — Q8 world units
+     * — for this frame only, subtracted before return so smoothing and later
+     * frames never see it. */
+    s32 shX = 0, shY = 0, shZ = 0;
+    {
+        extern void Pc_Shake_Offsets(s32* ox, s32* oy, s32* oz);
+        Pc_Shake_Offsets(&shX, &shY, &shZ);
+        shX = Q12_TO_Q8(shX);
+        shY = Q12_TO_Q8(shY);
+        shZ = Q12_TO_Q8(shZ);
+        w_p->cam_mat.t[0] += shX;
+        w_p->cam_mat.t[1] += shY;
+        w_p->cam_mat.t[2] += shZ;
+    }
+#endif
 
     if (w_p->updateLookAtPoint)
     {
@@ -3240,6 +3257,11 @@ void vcSetDataToVwSystem(VC_WORK* w_p, VC_CAM_MV_TYPE cam_mv_type) // 0x80085884
     {
         vwSetViewInfoDirectMatrix(NULL, &w_p->cam_mat);
     }
+#ifdef SH_PC_PORT
+    w_p->cam_mat.t[0] -= shX;
+    w_p->cam_mat.t[1] -= shY;
+    w_p->cam_mat.t[2] -= shZ;
+#endif
 }
 
 s32 vcCamMatNoise(s32 noise_w, s32 ang_spd1, s32 ang_spd2, q19_12 vcSelfViewTimer) // 0x80085A7C

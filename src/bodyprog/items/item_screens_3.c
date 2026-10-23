@@ -564,6 +564,8 @@ static const char* s_ItemDesc(u8 id) {
         return lang;
     return (idx >= 0 && idx < n && g_ItemDescriptions[idx]) ? g_ItemDescriptions[idx] : "";
 }
+
+const char* Pc_ItemDisplayName(u8 id) { return s_ItemName(id); }
 #endif
 
 // TODO: `Items_` subsystem globals and funcs could be part of `Inventory_` instead, not sure yet.
@@ -2988,16 +2990,31 @@ void Inventory_PlayerItemScroll(u32* selectedItemId) // 0x800523D8
                     case InvItemId_Ampoule:
                         switch (g_SavegamePtr->items[g_SysWork.invItemSelectedIdx].id_0)
                         {
+#ifdef SH_PC_PORT
+                            extern q19_12 Pc_Diff_HealAmount(q19_12 amount);
+#endif
                             case InvItemId_FirstAidKit:
+#ifdef SH_PC_PORT
+                                g_SysWork.playerWork.player.health += Pc_Diff_HealAmount(Q12(80.0f));
+#else
                                 g_SysWork.playerWork.player.health += Q12(80.0f);
+#endif
                                 break;
 
                             case InvItemId_HealthDrink:
+#ifdef SH_PC_PORT
+                                g_SysWork.playerWork.player.health += Pc_Diff_HealAmount(Q12(40.0f));
+#else
                                 g_SysWork.playerWork.player.health += Q12(40.0f);
+#endif
                                 break;
 
                             case InvItemId_Ampoule:
+#ifdef SH_PC_PORT
+                                g_SysWork.playerWork.player.health += Pc_Diff_HealAmount(Q12(100.0f));
+#else
                                 g_SysWork.playerWork.player.health += Q12(100.0f);
+#endif
                                 g_SavegamePtr->healthSaturation    = Q12(300.0f);
                                 break;
                         }

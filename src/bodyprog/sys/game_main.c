@@ -3,6 +3,7 @@
 #ifdef SH_PC_PORT
 #include "sh_log.h"
 #include "pc_config.h"
+#include "pc_item_toast.h"
 #include "xa_player.h"
 #include <SDL_timer.h>
 #include <math.h>
@@ -1151,6 +1152,20 @@ static void Pc_TpsCamera_Apply(void)
             }
         }
 #endif
+#ifdef SH_PC_PORT
+        /* Camera kick immersion (pc_shake.c): the TPS/OTS/FPS orbit commits
+         * its own eye here, bypassing the classic vc path — offset it for
+         * this frame (tpCamPos is a local, nothing to restore). The aim ray
+         * above was already published from the unshaken eye. */
+        {
+            extern void Pc_Shake_Offsets(s32* ox, s32* oy, s32* oz);
+            s32 shX = 0, shY = 0, shZ = 0;
+            Pc_Shake_Offsets(&shX, &shY, &shZ);
+            tpCamPos.vx += shX;
+            tpCamPos.vy += shY;
+            tpCamPos.vz += shZ;
+        }
+#endif
         Vw_SetLookAtMatrix(&tpCamPos, &tpLookAt);
         vwSetViewInfo();
     }
@@ -1604,6 +1619,7 @@ void DebugCamera_Update(void)
         int cur = g_sdlKeyboardState[SDL_SCANCODE_8];
         if (cur && !prevKey) {
             Inventory_AddSpecialItem(0xC0, 15);
+            Pc_ItemToast_Show(InvItemId_HandgunBullets, 15);
             Sd_PlaySfx(Sfx_MenuConfirm, 0, 64);
             SH_DBG_ECHO("[DEBUG] Key 8: Added 15 handgun bullets");
         }
@@ -1636,6 +1652,8 @@ void DebugCamera_Update(void)
             }
             if (!hasRifle) Inventory_AddSpecialItem(InvItemId_HuntingRifle, 1);
             Inventory_AddSpecialItem(InvItemId_RifleShells, 30);
+            if (!hasRifle) Pc_ItemToast_Show(InvItemId_HuntingRifle, 1);
+            Pc_ItemToast_Show(InvItemId_RifleShells, 30);
             Sd_PlaySfx(Sfx_MenuConfirm, 0, 64);
             SH_DBG_ECHO("[DEBUG] Key -: Added%s Rifle Shells x30", hasRifle ? "" : " Hunting Rifle +");
         }
@@ -1656,6 +1674,8 @@ void DebugCamera_Update(void)
             }
             if (!hasShotgun) Inventory_AddSpecialItem(InvItemId_Shotgun, 1);
             Inventory_AddSpecialItem(InvItemId_ShotgunShells, 30);
+            if (!hasShotgun) Pc_ItemToast_Show(InvItemId_Shotgun, 1);
+            Pc_ItemToast_Show(InvItemId_ShotgunShells, 30);
             Sd_PlaySfx(Sfx_MenuConfirm, 0, 64);
             SH_DBG_ECHO("[DEBUG] Key =: Added%s Shotgun Shells x30", hasShotgun ? "" : " Shotgun +");
         }
@@ -2316,6 +2336,11 @@ void MainLoop(void) // 0x80032EE0
             static int s_qoPreloaded = 0;
             if (!s_qoPreloaded) { s_qoPreloaded = 1; Pc_QuickOptions_PreloadGL(); }
         }
+        {
+            extern void Pc_HordeHud_PreloadGL(void);
+            static int s_hordePreloaded = 0;
+            if (!s_hordePreloaded) { s_hordePreloaded = 1; Pc_HordeHud_PreloadGL(); }
+        }
         DbgOverlay_Update();
 
         /* Randomizer: per-area monster placement, entry-door relock timer.
@@ -2323,6 +2348,12 @@ void MainLoop(void) // 0x80032EE0
         {
             extern void Pc_Rando_Update(void);
             Pc_Rando_Update();
+        }
+        /* Horde mode: deferred wave spawns once the world is live.
+         * No-op unless a run is live. */
+        {
+            extern void Pc_Horde_Update(void);
+            Pc_Horde_Update();
         }
         {
             extern void Pc_RandoLua_OnUpdate(void);
@@ -2386,6 +2417,31 @@ void MainLoop(void) // 0x80032EE0
             }
         }
 
+        /* Horde reward draft: modal over gameplay while the player picks.
+         * Same input-swallow arrangement as quick options below; placed
+         * first so a draft never leaks pad edges into the game. */
+        {
+            extern int Pc_Horde_DraftActive(void);
+            extern void Pc_HordeDraft_Update(int, int, int, int, int, int);
+            if (Pc_Horde_DraftActive() &&
+                g_GameWork.gameState == GameState_InGame &&
+                !(g_SysWork.sysFlags & SysFlag_DemoActive))
+            {
+                const s_ControllerConfig* cc = &g_GameWorkPtr->config.controllerConfig;
+                Pc_HordeDraft_Update(
+                    (g_Controller0->heldBtnFlags    & (ControllerFlag_LStickUp    | ControllerFlag_DpadUp))    != 0,
+                    (g_Controller0->heldBtnFlags    & (ControllerFlag_LStickDown  | ControllerFlag_DpadDown))  != 0,
+                    (g_Controller0->heldBtnFlags    & (ControllerFlag_LStickLeft  | ControllerFlag_DpadLeft))  != 0,
+                    (g_Controller0->heldBtnFlags    & (ControllerFlag_LStickRight | ControllerFlag_DpadRight)) != 0,
+                    (g_Controller0->clickedBtnFlags & (cc->enter | cc->action))  != 0,
+                    (g_Controller0->clickedBtnFlags & (cc->cancel | cc->option)) != 0);
+                g_Controller0->heldBtnFlags      = 0;
+                g_Controller0->clickedBtnFlags   = 0;
+                g_Controller0->releasedBtnFlags  = 0;
+                g_Controller0->pulsedBtnFlags    = 0;
+                g_Controller0->pulsedGuiBtnFlags = 0;
+            }
+        }
         {
             extern int  g_PcQuickOptionsActive;
             extern void Pc_QuickOptions_Update(int, int, int, int, int, int, int, int);
@@ -2478,20 +2534,41 @@ void MainLoop(void) // 0x80032EE0
             Pc_ExtraActionsUpdate();
         }
 
+        /* Weapon visibility immersion (own gating inside). */
+        {
+            extern void Pc_Immersion_Update(void);
+            Pc_Immersion_Update();
+        }
+
+        /* Player-kill watcher feeding the hitmarker + kill flash. */
+        {
+            extern void Pc_Kill_Update(void);
+            Pc_Kill_Update();
+        }
+
         /* Rear Look (held): set g_PcRearLookActive for the TPS/OTS camera + head. */
         {
             extern void Pc_RearLookUpdate(void);
             Pc_RearLookUpdate();
         }
 
-        /* "Disable D-pad for movement" applies ONLY during gameplay, so the D-pad
-         * still navigates menus / inventory / the map. Re-evaluated every frame. */
+        /* "Disable D-pad for movement" + D-pad weapon select apply ONLY during
+         * settled gameplay, so the D-pad still navigates menus / inventory /
+         * the map / F10 / console, and demos play back unmodified.
+         * Re-evaluated every frame. Suppression itself happens in PsyX at the
+         * pad-word level (prev-consistent, so no phantom edges); game code
+         * must NOT mask heldBtnFlags here — joy.c derives next frame's edges
+         * from that field, and masking it re-fires every held D-pad press. */
         {
             extern int g_cfg_disableDpadMovement;
+            extern int g_PcConsoleInputActive;
+            extern int g_PcQuickOptionsActive;
             g_cfg_disableDpadMovement =
-                (g_PcConfig.disableDpadMovement &&
+                ((g_PcConfig.disableDpadMovement || g_PcConfig.dpadWeapons) &&
                  g_GameWork.gameState == GameState_InGame &&
-                 g_SysWork.sysState   == SysState_Gameplay) ? 1 : 0;
+                 g_SysWork.sysState   == SysState_Gameplay &&
+                 !g_PcConsoleInputActive && !g_PcQuickOptionsActive &&
+                 !(g_SysWork.sysFlags & SysFlag_DemoActive)) ? 1 : 0;
         }
 
         /* Mouse cursor: drive free-cursor puzzles + the main menu from the mouse.
@@ -2702,13 +2779,11 @@ void MainLoop(void) // 0x80032EE0
         ML_TRACE("Screen_FadeUpdate");
         Screen_FadeUpdate();
 #ifdef SH_PC_PORT
-        /* Quick Heal green pulse — full-screen additive tile into OT2, same window as
-         * the fade. Self-gated on its timer (no-op when not healing). */
+        /* Flash envelopes (heal/low-health/hurt): game-side timers resolved as
+         * shader levels by the post chain. Self-gated no-ops at rest. */
         {
-            extern void Pc_HealFlashUpdate(void);
-            extern void Pc_LowHealthGlowUpdate(void);
-            Pc_HealFlashUpdate();
-            Pc_LowHealthGlowUpdate(); /* optional low-health red edge pulse, same window */
+            extern void Pc_Flash_Update(void);
+            Pc_Flash_Update();
 
             /* Minimap: load the area's paper-map TIM here (game side) when it
              * changes — the Fs queue must not be touched from the GL hook that

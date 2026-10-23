@@ -21,11 +21,17 @@
 
 enum { SND_AL = 1, SND_SDL };
 
+/* Capped overlap so rapid cues layer instead of cutting each other. */
+#define PCUISOUND_VOICES 3
+
 struct PcUiSound
 {
     int              kind;
-    ALuint           alBuf, alSrc;
-    SDL_AudioDeviceID dev;
+    ALuint           alBuf;
+    ALuint           alSrc[PCUISOUND_VOICES];
+    int              alNext;
+    SDL_AudioDeviceID dev[PCUISOUND_VOICES];
+    int              devNext;
     Uint8*           wav;   /* kept for every replay on the SDL path */
     Uint32           len;
     Uint8*           scaled;      /* one cached attenuated copy (SDL path) */
@@ -63,27 +69,40 @@ PcUiSound* PcUiSound_Load(const char* path)
 
     if (alcGetCurrentContext())
     {
+        int i;
         alGenBuffers(1, &snd->alBuf);
-        alGenSources(1, &snd->alSrc);
+        alGenSources(PCUISOUND_VOICES, snd->alSrc);
         alBufferData(snd->alBuf, spec.channels == 2 ? AL_FORMAT_STEREO16 : AL_FORMAT_MONO16,
                      wav, (ALsizei)len, spec.freq);
         SDL_FreeWAV(wav);                    /* AL copied it */
-        alSourcei(snd->alSrc, AL_BUFFER, (ALint)snd->alBuf);
-        /* Relative + at the listener, so a cue is never attenuated or panned by
-         * wherever the 3D listener happens to be. */
-        alSourcei(snd->alSrc, AL_SOURCE_RELATIVE, AL_TRUE);
-        alSource3f(snd->alSrc, AL_POSITION, 0.0f, 0.0f, 0.0f);
+        for (i = 0; i < PCUISOUND_VOICES; i++)
+        {
+            alSourcei(snd->alSrc[i], AL_BUFFER, (ALint)snd->alBuf);
+            /* Relative + at the listener, so a cue is never attenuated or panned by
+             * wherever the 3D listener happens to be. */
+            alSourcei(snd->alSrc[i], AL_SOURCE_RELATIVE, AL_TRUE);
+            alSource3f(snd->alSrc[i], AL_POSITION, 0.0f, 0.0f, 0.0f);
+        }
         snd->kind = SND_AL;
     }
     else
     {
         SDL_AudioSpec want = spec;
+        int i, opened = 0;
         want.samples  = 1024;
         want.callback = NULL;
         if (!SDL_WasInit(SDL_INIT_AUDIO))
             SDL_InitSubSystem(SDL_INIT_AUDIO);
-        snd->dev = SDL_OpenAudioDevice(NULL, 0, &want, NULL, 0);
-        if (!snd->dev)
+        for (i = 0; i < PCUISOUND_VOICES; i++)
+        {
+            snd->dev[i] = SDL_OpenAudioDevice(NULL, 0, &want, NULL, 0);
+            if (snd->dev[i])
+            {
+                SDL_PauseAudioDevice(snd->dev[i], 0);
+                opened++;
+            }
+        }
+        if (!opened)
         {
             SH_DBG("[UISND] SDL audio for %s: %s", path, SDL_GetError());
             SDL_FreeWAV(wav);
@@ -92,7 +111,6 @@ PcUiSound* PcUiSound_Load(const char* path)
         }
         snd->wav = wav;
         snd->len = len;
-        SDL_PauseAudioDevice(snd->dev, 0);
         snd->kind = SND_SDL;
     }
 
@@ -109,13 +127,53 @@ void PcUiSound_PlayGain(PcUiSound* snd, float gain)
 
     if (snd->kind == SND_AL)
     {
-        alSourcef(snd->alSrc, AL_GAIN, gain);
-        alSourceStop(snd->alSrc);
-        alSourcePlay(snd->alSrc);
+        ALuint src = 0;
+        int i;
+        for (i = 0; i < PCUISOUND_VOICES; i++)
+        {
+            ALint st = AL_STOPPED;
+            alGetSourcei(snd->alSrc[i], AL_SOURCE_STATE, &st);
+            if (st != AL_PLAYING && st != AL_PAUSED)
+            {
+                src = snd->alSrc[i];
+                break;
+            }
+        }
+        if (!src)
+        {
+            src = snd->alSrc[snd->alNext];
+            snd->alNext = (snd->alNext + 1) % PCUISOUND_VOICES;
+            alSourceStop(src);
+        }
+        alSourcef(src, AL_GAIN, gain);
+        alSourcePlay(src);
     }
     else if (snd->kind == SND_SDL)
     {
         const Uint8* play = snd->wav;
+        SDL_AudioDeviceID dev = 0;
+        int v;
+
+        for (v = 0; v < PCUISOUND_VOICES; v++)
+        {
+            if (snd->dev[v] && SDL_GetQueuedAudioSize(snd->dev[v]) < 4096)
+            {
+                dev = snd->dev[v];
+                break;
+            }
+        }
+        if (!dev)
+        {
+            int k;
+            for (k = 0; k < PCUISOUND_VOICES; k++)
+            {
+                snd->devNext = (snd->devNext + 1) % PCUISOUND_VOICES;
+                if (snd->dev[snd->devNext])
+                    break;
+            }
+            dev = snd->dev[snd->devNext];
+            SDL_ClearQueuedAudio(dev);
+        }
 
         /* No per-source gain on a raw queue, so an attenuated copy is scaled
          * once and kept. Only one alternate gain is cached, which is all a
@@ -139,8 +197,7 @@ void PcUiSound_PlayGain(PcUiSound* snd, float gain)
             if (snd->scaled)
                 play = snd->scaled;
         }
-        SDL_ClearQueuedAudio(snd->dev);
-        SDL_QueueAudio(snd->dev, play, snd->len);
+        SDL_QueueAudio(dev, play, snd->len);
     }
 }
 

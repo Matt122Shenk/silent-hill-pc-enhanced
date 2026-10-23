@@ -8,9 +8,14 @@
 #include "bodyprog/chara/chara.h"
 #include "bodyprog/math/math.h"
 #include "bodyprog/collision/ray.h"
+#include "bodyprog/sys/joy.h"
+#include "bodyprog/sound/sfx_id_enum.h"
+#include "pc_item_toast.h"
+#include "pc_ui_sound.h"
 #include "pc_combat.h"
 #include "pc_config.h"
 #include "bodyprog/item_screens.h"
+#include "bodyprog/items.h"
 #include "sh_log.h"      /* SH_DBG */
 #include "dbg_overlay.h" /* DbgOverlay_ToastLine — quick-heal result line */
 #include <stdio.h>
@@ -45,7 +50,7 @@ int g_PcQuickTurnRequest = 0;
 int g_PcRearLookActive = 0;
 
 /* PC-only: Quick Heal green screen pulse — Q12 seconds remaining. Counted down and
- * drawn each frame by Pc_HealFlashUpdate (hooked in game_main.c). 0 = no flash. */
+ * resolved as a shader level each frame by Pc_Flash_Update (hooked in game_main.c). 0 = no flash. */
 s32 g_PcHealFlashTimer = 0;
 
 /* Monotonic per-frame counter for the edge caches below. Bumped once per frame
@@ -67,7 +72,7 @@ s32 g_PcInputFrame = 0;
  * (since each fresh slot starts with prev=0), instantly closing it. */
 bool PC_KeyboardKeyClicked(int sdlScancode)
 {
-    #define PC_KEY_CACHE_SIZE 16 /* both schemes' reload/reload2/cycle/heal/quick-turn keys share this never-evicting cache */
+    #define PC_KEY_CACHE_SIZE 32 /* both schemes' reload/reload2/cycle/heal/quick-turn keys + D-pad arrows share this never-evicting cache */
     static int  s_keys[PC_KEY_CACHE_SIZE]   = {0};
     static bool s_prev[PC_KEY_CACHE_SIZE]   = {0};
     static bool s_edge[PC_KEY_CACHE_SIZE]   = {0};
@@ -205,6 +210,209 @@ bool PC_PlayerManualReloadRequested(void)
     return g_PcReloadRequest != 0;
 }
 
+/* Auto reload: latch a reload the same way a key press does when the
+ * magazine runs dry with reserve left. Both gun FSMs consume the latch, so
+ * one site covers the native and free-aim paths. Blaster/melee never qualify
+ * (blaster has no reload), and the in-flight guards make a mid-reload set
+ * harmless. */
+static void Pc_AutoReloadSample(void)
+{
+    int idx, id;
+    if (!g_PcConfig.autoReload)
+        return;
+    if (g_GameWork.gameState != GameState_InGame ||
+        g_SysWork.sysState   != SysState_Gameplay ||
+        g_Player_DisableControl ||
+        (g_SysWork.sysFlags & SysFlag_DemoActive))
+        return;
+    idx = g_SysWork.playerCombat.weaponInventoryIdx;
+    if (idx < 0 || idx >= INV_ITEM_COUNT_MAX)
+        return;
+    id = g_SavegamePtr->items[idx].id_0;
+    if (id < InvItemId_Handgun || id > InvItemId_Shotgun)
+        return;
+    if (g_SysWork.playerCombat.currentWeaponAmmo != 0 ||
+        g_SysWork.playerCombat.totalWeaponAmmo == 0)
+        return;
+    g_PcReloadRequest = 1;
+    s_reloadLatchT    = Q12(0.30f);
+}
+
+/* D-pad weapon assignments (F10 HUD 2 page): dir 0 = Up, 1 = Down,
+// 2 = Left, 3 = Right. None (Unequipped) + the 11 equippables in
+// Pc_CycleWeapons order. */
+static const u8 s_dpadOrder[] = {
+    InvItemId_Unequipped,
+    InvItemId_KitchenKnife, InvItemId_SteelPipe, InvItemId_RockDrill,
+    InvItemId_Hammer, InvItemId_Chainsaw, InvItemId_Katana, InvItemId_Axe,
+    InvItemId_Handgun, InvItemId_HuntingRifle, InvItemId_Shotgun, InvItemId_HyperBlaster,
+};
+#define DPAD_ORDER_COUNT ((int)(sizeof(s_dpadOrder) / sizeof(s_dpadOrder[0])))
+
+static s32 Pc_FindItemSlot(u8 id);
+static int Pc_ActionSafe(void);
+static void Pc_EquipWeapon(u8 invItemId, s32 slot);
+
+static int* Pc_DpadAssignSlot(int dir)
+{
+    switch (dir) {
+    case 0:  return &g_PcConfig.dpadUp;
+    case 1:  return &g_PcConfig.dpadDown;
+    case 2:  return &g_PcConfig.dpadLeft;
+    default: return &g_PcConfig.dpadRight;
+    }
+}
+
+static int Pc_DpadValidId(int id)
+{
+    int i;
+    for (i = 1; i < DPAD_ORDER_COUNT; i++)
+        if (s_dpadOrder[i] == (u8)id)
+            return 1;
+    return 0;
+}
+
+const char* Pc_DpadAssignLabel(int dir, char* buf, int bufsz)
+{
+    int* p = Pc_DpadAssignSlot(dir);
+    const char* raw;
+    size_t n = 0;
+    if (!p || bufsz <= 0) return "";
+    if (*p == InvItemId_Unequipped) { snprintf(buf, (size_t)bufsz, "None"); return buf; }
+    raw = Pc_ItemDisplayName((u8)*p);
+    if (!raw || !raw[0] || raw[0] == ' ') { snprintf(buf, (size_t)bufsz, "None"); return buf; }
+    while (raw[n] && n + 1 < (size_t)bufsz && n < 60) { buf[n] = (raw[n] == '_') ? ' ' : raw[n]; n++; }
+    buf[n] = '\0';
+    return buf;
+}
+
+void Pc_DpadAssignAdjust(int dir, int step)
+{
+    int* p = Pc_DpadAssignSlot(dir);
+    int i;
+    char buf[16];
+    const char* key;
+    for (i = 0; i < DPAD_ORDER_COUNT; i++)
+        if (s_dpadOrder[i] == (u8)*p)
+            break;
+    if (i >= DPAD_ORDER_COUNT) i = 0;
+    i = (i + step + DPAD_ORDER_COUNT * 2) % DPAD_ORDER_COUNT;
+    *p = s_dpadOrder[i];
+    key = (dir == 0) ? "dpad_up" : (dir == 1) ? "dpad_down" : (dir == 2) ? "dpad_left" : "dpad_right";
+    snprintf(buf, sizeof(buf), "%d", *p);
+    PcConfig_SaveKeyValue(key, buf);
+    Sd_PlaySfx(Sfx_MenuConfirm, 0, 64);
+}
+
+int Pc_DpadIsAssignable(u8 id)
+{
+    return Pc_DpadValidId((int)id);
+}
+
+void Pc_DpadAssignWeapon(int dir, u8 weaponId)
+{
+    static const char* const keys[4] = { "dpad_up", "dpad_down", "dpad_left", "dpad_right" };
+    int* dst;
+    int  other;
+    char buf[16];
+
+    if (dir < 0 || dir > 3 || !Pc_DpadValidId((int)weaponId))
+        return;
+    dst = Pc_DpadAssignSlot(dir);
+
+    for (other = 0; other < 4; other++)
+    {
+        if (other != dir && *Pc_DpadAssignSlot(other) == (int)weaponId)
+            break;
+    }
+    if (other < 4)
+    {
+        int tmp = *dst;
+        *dst = (int)weaponId;
+        *Pc_DpadAssignSlot(other) = tmp;
+        snprintf(buf, sizeof(buf), "%d", *dst);
+        PcConfig_SaveKeyValue(keys[dir], buf);
+        snprintf(buf, sizeof(buf), "%d", *Pc_DpadAssignSlot(other));
+        PcConfig_SaveKeyValue(keys[other], buf);
+    }
+    else
+    {
+        *dst = (int)weaponId;
+        snprintf(buf, sizeof(buf), "%d", *dst);
+        PcConfig_SaveKeyValue(keys[dir], buf);
+    }
+}
+
+/* D-pad weapon quick-select: edge-triggered equip + travel suppression.
+// Runs in Pc_ExtraActionsUpdate (before the FSMs read the pad each frame).
+// Menus/inventory/map/F10/console/demo never see the mask: it only applies
+// in settled gameplay, and keyboard arrows + sticks are untouched. */
+/* D-pad weapon quick-select: edge-triggered equip on physical D-pad presses
+ * and keyboard arrows. Reads RAW sources with own edge caches — never the
+ * parsed pad word, whose D-pad bits are suppressed while this mode owns them
+ * (no edges there by design). Runs in Pc_ExtraActionsUpdate (before the FSMs
+ * read input each frame). Menus/inventory/map/F10/console/demo never see it:
+ * same settled-gameplay gate as the suppression. */
+static void Pc_DpadWeaponsSample(void)
+{
+    int d;
+    extern int g_PcConsoleInputActive;
+    extern int g_PcQuickOptionsActive;
+    if (!g_PcConfig.dpadWeapons)
+        return;
+    if (g_GameWork.gameState != GameState_InGame ||
+        g_SysWork.sysState   != SysState_Gameplay ||
+        g_Player_DisableControl ||
+        (g_SysWork.sysFlags & SysFlag_DemoActive) ||
+        g_PcConsoleInputActive || g_PcQuickOptionsActive)
+        return;
+    for (d = 0; d < 4; d++)
+    {
+        int id, slot, fired = 0;
+        int padBtn, kbBtn, kb2Btn;
+        switch (d) {
+        case 0:  padBtn = g_cfg_controllerMapping.gc_dpad_up;
+                 kbBtn  = g_cfg_keyboardMapping.kc_dpad_up;
+                 kb2Btn = g_cfg_keyboardMapping2.kc_dpad_up;
+                 break;
+        case 1:  padBtn = g_cfg_controllerMapping.gc_dpad_down;
+                 kbBtn  = g_cfg_keyboardMapping.kc_dpad_down;
+                 kb2Btn = g_cfg_keyboardMapping2.kc_dpad_down;
+                 break;
+        case 2:  padBtn = g_cfg_controllerMapping.gc_dpad_left;
+                 kbBtn  = g_cfg_keyboardMapping.kc_dpad_left;
+                 kb2Btn = g_cfg_keyboardMapping2.kc_dpad_left;
+                 break;
+        default: padBtn = g_cfg_controllerMapping.gc_dpad_right;
+                 kbBtn  = g_cfg_keyboardMapping.kc_dpad_right;
+                 kb2Btn = g_cfg_keyboardMapping2.kc_dpad_right;
+                 break;
+        }
+        if (PC_RawControllerButtonClicked(padBtn))
+            fired = 1;
+        if (!fired && kbBtn != SDL_SCANCODE_UNKNOWN && PC_KeyboardKeyClicked(kbBtn))
+            fired = 1;
+        if (!fired && g_cfg_allowMouseSecondary && kb2Btn != SDL_SCANCODE_UNKNOWN &&
+            PC_KeyboardKeyClicked(kb2Btn))
+            fired = 1;
+        if (!fired)
+            continue;
+        id = *Pc_DpadAssignSlot(d);
+        if (id == InvItemId_Unequipped || !Pc_DpadValidId(id))
+            continue;
+        slot = Pc_FindItemSlot((u8)id);
+        if (slot == NO_VALUE) { Sd_PlaySfx(Sfx_MenuCancel, 0, 64); continue; }
+        if (g_SavegamePtr->equippedWeapon == id)
+            continue;
+        /* No mid-aim/mid-swing swaps: the model load blocks (same rule as
+         * cycle/heal). */
+        if (!Pc_ActionSafe())
+            continue;
+        Pc_EquipWeapon((u8)id, slot);
+        Sd_PlaySfx(Sfx_MenuConfirm, 0, 64);
+    }
+}
+
 static void Pc_ManualReloadSample(int sch)
 {
     int e1, e2, e3;
@@ -217,7 +425,7 @@ static void Pc_ManualReloadSample(int sch)
     e2 = (s_kbReload2[sch] != SDL_SCANCODE_UNKNOWN) && PC_KeyboardKeyClicked(s_kbReload2[sch]);
     e3 = (s_padReload[sch] >= 0) && PC_RawControllerButtonClicked(s_padReload[sch]);
 
-    if ((e1 || e2 || e3) && Pc_ManualReloadConditions()) {
+    if ((e1 || e2 || e3) && g_PcConfig.manualReload && Pc_ManualReloadConditions()) {
         g_PcReloadRequest = 1;
         s_reloadLatchT    = Q12(0.30f);
     } else if (g_PcReloadRequest) {
@@ -365,9 +573,36 @@ static s32 Pc_HealItemCount(u8 id)
     return 0;
 }
 
+/* Quick-heal feedback cue: custom WAV when assigned, else the inventory
+ * heal SFX. */
+static PcUiSound* s_healCue;
+static int        s_healCueTried;
+
+static void Pc_HealCue_Play(void)
+{
+    /* Same native-SFX-level coherence as the toast cue below. */
+    float seGain = (float)g_GameWork.config.volumeSe / 128.0f;
+    if (g_PcConfig.healCue)
+    {
+        if (!s_healCueTried)
+        {
+            s_healCueTried = 1;
+            s_healCue = PcUiSound_Load("gamedata/sound/custom/heal_cue.wav");
+        }
+        if (s_healCue)
+        {
+            PcUiSound_PlayGain(s_healCue, seGain);
+            return;
+        }
+    }
+    Sd_PlaySfx(Sfx_Unk1325, -0x40, 0x40); /* same feedback SFX as the inventory heal */
+}
+
 /* Auto-use the most sensible OWNED healing item for the current health. */
 void Pc_QuickHeal(void)
 {
+    if (!g_PcConfig.quickHeal)
+        return;
     q19_12 health  = g_SysWork.playerWork.player.health;
     s32    hp      = health >> Q12_SHIFT;
     s32    deficit = 100 - hp;
@@ -405,14 +640,16 @@ void Pc_QuickHeal(void)
         SH_DBG("[QUICKHEAL] item %d looked owned but Player_ItemRemove found none -- no heal", (int)chosen);
         return;
     }
+    Pc_ItemToast_ShowConsumed(chosen);
 
     switch (chosen) {
-        case InvItemId_FirstAidKit: health += Q12(80.0f);  break;
-        case InvItemId_HealthDrink: health += Q12(40.0f);  break;
-        case InvItemId_Ampoule:     health += Q12(100.0f); g_SavegamePtr->healthSaturation = Q12(300.0f); break;
+        extern q19_12 Pc_Diff_HealAmount(q19_12 amount);
+        case InvItemId_FirstAidKit: health += Pc_Diff_HealAmount(Q12(80.0f));  break;
+        case InvItemId_HealthDrink: health += Pc_Diff_HealAmount(Q12(40.0f));  break;
+        case InvItemId_Ampoule:     health += Pc_Diff_HealAmount(Q12(100.0f)); g_SavegamePtr->healthSaturation = Q12(300.0f); break;
     }
     g_SysWork.playerWork.player.health = CLAMP(health, Q12(0.0f), Q12(100.0f));
-    Sd_PlaySfx(Sfx_Unk1325, -0x40, 0x40); /* same feedback SFX as the inventory heal */
+    Pc_HealCue_Play();
     g_PcHealFlashTimer = Q12(0.35f); /* brief green heal pulse (drawn by Pc_HealFlashUpdate) */
 
     /* Report what was spent and what is left, since quick heal picks the item for
@@ -430,143 +667,6 @@ void Pc_QuickHeal(void)
                  (int)Pc_HealItemCount(InvItemId_Ampoule));
         DbgOverlay_ToastLine(line);
     }
-}
-
-/* Per-frame draw for the Quick Heal green pulse: an additive full-screen green TILE
- * that eases out over ~0.35s. Mirrors the screen-fade full-screen-tile path (static
- * double-buffered prims into OT2 bucket 4). Called from game_main.c after the fade
- * update. Self-gates on the timer, so it is byte-identical output when not healing. */
-void Pc_HealFlashUpdate(void)
-{
-    static TILE     s_tile[2];
-    static DR_TPAGE s_tp[2];
-    int buf;
-    s32 g;
-
-    if (g_PcHealFlashTimer <= 0)
-        return;
-
-    g_PcHealFlashTimer -= g_DeltaTime; /* fps-independent countdown (Q12 seconds) */
-    if (g_PcHealFlashTimer < 0)
-        g_PcHealFlashTimer = 0;
-
-    buf = g_ActiveBufferIdx;
-    g   = (g_PcHealFlashTimer * 96) / Q12(0.35f); /* peak additive green ~96, eases to 0 */
-
-    setTile(&s_tile[buf]);
-    setSemiTrans(&s_tile[buf], 1);
-    setRGB0(&s_tile[buf], 0, (u8)g, 0);
-    setWH(&s_tile[buf], SCREEN_WIDTH * 4, SCREEN_HEIGHT * 2);
-    setXY0(&s_tile[buf], -SCREEN_WIDTH, -SCREEN_HEIGHT); /* cover the full Hor+ width */
-
-    setDrawTPage(&s_tp[buf], 0, 1, getTPageN(0, 1, 0, 0)); /* abr=1 = additive */
-
-    AddPrim(&g_OtTags0[buf][4], &s_tile[buf]);
-    AddPrim(&g_OtTags0[buf][4], &s_tp[buf]);
-}
-
-/* Low-health glow: a slow red pulse breathing in from the screen edges while
- * health is under 20 (the SH2 remake's cue). Four additive Gouraud bands,
- * red at the border fading to black inward, so it reads as a vignette rather
- * than a damage flash; the same OT2 bucket + additive tpage as the heal pulse.
- * Strength scales with the deficit (faint at 19 hp, full at the brink) and
- * breathes on a ~1.6 s cycle driven by the game clock, so it holds still with
- * the game. Optional: config low_health_glow (PC Options > HUD / quick options). */
-void Pc_LowHealthGlowUpdate(void)
-{
-    #define GLOW_HP_MAX   20
-    #define GLOW_PERIOD   Q12(1.6f)
-    #define GLOW_R_MIN    36
-    #define GLOW_R_MAX    112
-    static POLY_G4  s_band[2][4];
-    static DR_TPAGE s_tp[2];
-    static s32      s_phase;
-    extern int      g_PsxCutsceneActive;
-    extern int      g_PsxPresentLastFrame;
-    extern int      g_PcHorPlusEnabled;
-    s32 hp, pulse, strength, r, halfW, halfH, dx, dy, buf, i;
-
-    if (!g_PcConfig.lowHealthGlow)
-        return;
-    if (g_GameWork.gameState != GameState_InGame || g_SysWork.sysState != SysState_Gameplay)
-        return;
-    if (g_PsxCutsceneActive || g_PsxPresentLastFrame)
-        return;
-
-    hp = g_SysWork.playerWork.player.health >> Q12_SHIFT;
-    if (hp <= 0 || hp >= GLOW_HP_MAX)
-        return;
-
-    s_phase += g_DeltaTime;
-    while (s_phase >= GLOW_PERIOD)
-        s_phase -= GLOW_PERIOD;
-    pulse    = (Math_Sin((s32)(((s64)s_phase * 4096) / GLOW_PERIOD)) + Q12(1.0f)) >> 1; /* 0..4096 */
-    strength = ((GLOW_HP_MAX - hp) * Q12(1.0f)) / GLOW_HP_MAX;                           /* 0..4096 by deficit */
-    r        = GLOW_R_MIN + (((GLOW_R_MAX - GLOW_R_MIN) * pulse) >> 12);
-    r        = (r * (Q12(0.5f) + (strength >> 1))) >> 12;                                 /* half at 19 hp, full at 0 */
-    if (r <= 0)
-        return;
-
-    /* Centre-origin OT2 space (same as the heal tile). Hor+ shows more width
-     * than the PSX frame, so the side bands follow the window's aspect. */
-    halfH = SCREEN_HEIGHT / 2;
-    halfW = SCREEN_WIDTH / 2;
-    if (g_PcHorPlusEnabled && g_PcConfig.windowHeight > 0)
-    {
-        /* Same visible-extent bound the mesh cull and the overlay quads use:
-         * window aspect * PAR / hfov. The old `halfH * winW / winH` dropped
-         * both the pixel aspect and hfov, landing at ~199 units where the
-         * visible half-extent at 16:9 is ~286 -- so the glow stopped well
-         * short of the screen edges. See project_widescreen_frame_bound_class. */
-        extern float g_PsxPixelAspect;
-        extern float g_PsxWorldHScale;
-        const float hs = (g_PsxWorldHScale > 0.01f) ? g_PsxWorldHScale : 1.0f;
-        float       w  = (((float)halfH * (float)g_PcConfig.windowWidth) /
-                          (float)g_PcConfig.windowHeight) * g_PsxPixelAspect / hs;
-
-        halfW = (s32)(w + 0.5f);
-        /* Cap well past 32:9 but inside the s16 prim range. */
-        if (halfW > 512) halfW = 512;
-        if (halfW < SCREEN_WIDTH / 2) halfW = SCREEN_WIDTH / 2;
-    }
-    dy  = (halfH * 27) / 100; /* halved 2026-08-25: the 55/40 bands swallowed a third of the screen */
-    dx  = (halfW * 20) / 100;
-    buf = g_ActiveBufferIdx;
-
-    for (i = 0; i < 4; i++)
-    {
-        POLY_G4* q = &s_band[buf][i];
-        setPolyG4(q);
-        setSemiTrans(q, 1);
-        switch (i)
-        {
-            case 0: /* top: red along the top edge, black at the inner edge */
-                setXY4(q, -halfW, -halfH, halfW, -halfH, -halfW, -halfH + dy, halfW, -halfH + dy);
-                setRGB0(q, (u8)r, 0, 0); setRGB1(q, (u8)r, 0, 0); setRGB2(q, 0, 0, 0); setRGB3(q, 0, 0, 0);
-                break;
-            case 1: /* bottom */
-                setXY4(q, -halfW, halfH - dy, halfW, halfH - dy, -halfW, halfH, halfW, halfH);
-                setRGB0(q, 0, 0, 0); setRGB1(q, 0, 0, 0); setRGB2(q, (u8)r, 0, 0); setRGB3(q, (u8)r, 0, 0);
-                break;
-            case 2: /* left */
-                setXY4(q, -halfW, -halfH, -halfW + dx, -halfH, -halfW, halfH, -halfW + dx, halfH);
-                setRGB0(q, (u8)r, 0, 0); setRGB1(q, 0, 0, 0); setRGB2(q, (u8)r, 0, 0); setRGB3(q, 0, 0, 0);
-                break;
-            default: /* right */
-                setXY4(q, halfW - dx, -halfH, halfW, -halfH, halfW - dx, halfH, halfW, halfH);
-                setRGB0(q, 0, 0, 0); setRGB1(q, (u8)r, 0, 0); setRGB2(q, 0, 0, 0); setRGB3(q, (u8)r, 0, 0);
-                break;
-        }
-        AddPrim(&g_OtTags0[buf][4], q);
-    }
-    /* Added last so it is drawn first: additive blend for the bands above. */
-    setDrawTPage(&s_tp[buf], 0, 1, getTPageN(0, 1, 0, 0));
-    AddPrim(&g_OtTags0[buf][4], &s_tp[buf]);
-
-    #undef GLOW_HP_MAX
-    #undef GLOW_PERIOD
-    #undef GLOW_R_MIN
-    #undef GLOW_R_MAX
 }
 
 /* Per-frame dispatch for the bound Cycle Weapons + Quick Heal actions (reload is
@@ -609,6 +709,8 @@ void Pc_ExtraActionsUpdate(void)
                    (s_padQt[sch]    >= 0 && PC_RawControllerButtonClicked(s_padQt[sch]));
 
     Pc_ManualReloadSample(sch);
+    Pc_AutoReloadSample();
+    Pc_DpadWeaponsSample();
 
     /* Reload is an AIMING action, so it must NOT be subject to Pc_ActionSafe's
      * movement-state ceiling (Aim=19 outranks SidestepRightStumble=18, so that

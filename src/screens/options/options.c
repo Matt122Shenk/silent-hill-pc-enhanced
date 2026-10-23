@@ -7,6 +7,8 @@
 #include "bodyprog/events/radio.h"
 #include "bodyprog/gfx/map_effects.h"
 #include "bodyprog/item_screens.h"
+#include "bodyprog/items.h"
+#include "bodyprog/savegame.h"
 #include "bodyprog/math/math.h"
 #include "bodyprog/screen/screen_data.h"
 #include "bodyprog/screen/screen_draw.h"
@@ -26,6 +28,8 @@
 #include <string.h>
 #include "sh_log.h"
 #include "pc_config.h"
+#include "pc_combat.h"
+#include "pc_item_toast.h"
 #include "pc_mouse_cursor.h"
 #include "map_registry.h"
 #include "lang_text.h" /* PAL Language row (title-screen options) */
@@ -263,6 +267,13 @@ static const s_PcOpt PCOPT_T[] = {
     { "Aim_Zoom",          NULL, "tps_aim_zoom_amount",    NULL, 0, NULL, NULL, 1, PCK_SLIDER, &g_PcConfig.tpsAimZoom,  NULL, 0.0f, 200.0f, 5.0f },
     { "OTS_Aim_In_TPS",    &g_PcConfig.tpsOtsAim,          "tps_ots_aim",           VAL_ONOFF, 2, LBL_ONOFF, NULL, 1, PCK_INT },
     { "Camera_Collision",  &g_PcConfig.tpsCameraCollision, "tps_camera_collision",  VAL_ONOFF, 2, LBL_ONOFF, NULL, 1, PCK_INT },
+    /* Ammo readout rows (pc_ammo_hud.c reads these live). Room-driven
+     * placement like Bullet_Decals on Controls: the HUD page is at its
+     * ceiling and this page had space. */
+    { "Ammo_Corner",       &g_PcConfig.ammoHudCorner,      "ammo_corner",            VAL_MMCNR, 4, LBL_MMCNR, NULL, 1, PCK_INT },
+    { "Ammo_Scale",        NULL, "ammo_scale",             NULL, 0, NULL, NULL, 1, PCK_SLIDER, &g_PcConfig.ammoHudScale,     NULL, 60.0f, 130.0f, 5.0f },
+    { "Ammo_Opacity",      NULL, "ammo_opacity",           NULL, 0, NULL, NULL, 1, PCK_SLIDER, &g_PcConfig.ammoHudOpacity,   NULL, 20.0f, 100.0f, 5.0f },
+    { "Ammo_Always",       &g_PcConfig.ammoHudAlways,      "ammo_always",            VAL_ONOFF, 2, LBL_ONOFF, NULL, 1, PCK_INT },
     { "Prev_Page",         NULL,                           NULL,                    NULL,      0, NULL,      NULL, 0, PCK_PREV },
     { "Next_Page",         NULL,                           NULL,                    NULL,      0, NULL,      NULL, 0, PCK_NEXT },
     { "Back",              NULL,                           NULL,                    NULL,      0, NULL,      NULL, 0, PCK_BACK },
@@ -280,6 +291,11 @@ static const s_PcOpt PCOPT_H[] = {
     { "Minimap_Reqs_Map",  &g_PcConfig.minimapRequireMap,  "minimap_require_map",  VAL_ONOFF, 2, LBL_ONOFF, NULL, 1, PCK_INT },
     /* Pulsing red edge glow below 20 hp (pc_combat.c Pc_LowHealthGlowUpdate). */
     { "Low_HP_Glow",       &g_PcConfig.lowHealthGlow,      "low_health_glow",       VAL_ONOFF, 2, LBL_ONOFF, NULL, 1, PCK_INT },
+    /* Item pickup toast (pc_item_toast.c reads these live): corner, size and
+     * opacity, mirroring the minimap rows above. */
+    { "Toast_Corner",      &g_PcConfig.itemToastCorner,    "item_toast_corner",     VAL_MMCNR, 4, LBL_MMCNR, NULL, 1, PCK_INT },
+    { "Toast_Scale",       NULL, "item_toast_scale",       NULL, 0, NULL, NULL, 1, PCK_SLIDER, &g_PcConfig.itemToastScale,   NULL, 60.0f, 130.0f, 5.0f },
+    { "Toast_Opacity",     NULL, "item_toast_opacity",     NULL, 0, NULL, NULL, 1, PCK_SLIDER, &g_PcConfig.itemToastOpacity, NULL, 20.0f, 100.0f, 5.0f },
     { "Prev_Page",         NULL,                           NULL,                    NULL,      0, NULL,      NULL, 0, PCK_PREV },
     { "Back",              NULL,                           NULL,                    NULL,      0, NULL,      NULL, 0, PCK_BACK },
 };
@@ -527,7 +543,16 @@ void PcOpt_QuickAdjust(const void* h, int dir)
  * volumes (main Options menu rows). Same apply paths as those screens. */
 enum { QO_X_SHADOW = 0, QO_X_SPEAKERS, QO_X_BGM, QO_X_SFX,
        QO_X_ASPECT, QO_X_CRTTRIM, QO_X_HFOV, QO_X_VFOV, QO_X_PAR, QO_X_VSHIFT,
-       QO_X_CUTSHIFT };
+       QO_X_CUTSHIFT, QO_X_AMMOHUD, QO_X_AUTORELOAD,
+       QO_X_DPAD_ON, QO_X_DPAD_UP, QO_X_DPAD_DOWN, QO_X_DPAD_LEFT, QO_X_DPAD_RIGHT,
+       QO_X_QUICKHEAL, QO_X_TOASTBG, QO_X_HEALFLASH,
+       QO_X_AIMCAM, QO_X_TRWEAPON, QO_X_TRHEAL, QO_X_TRMELEE, QO_X_IMMWEAPONS, QO_X_IMMFEAR, QO_X_IMMBLOOD, QO_X_IMMFLICKER, QO_X_MANRELOAD,
+       QO_X_DIFFAMMO, QO_X_DIFFHEALS, QO_X_DIFFENEMY, QO_X_HPBARS,
+       QO_X_HHSTYLE, QO_X_HHNUMBER, QO_X_HHCORNER, QO_X_HHSCALE, QO_X_HHOPACITY, QO_X_HHALWAYS, QO_X_HHHUD,
+       QO_X_MELEEAIMWALK,
+       QO_X_SHHURT, QO_X_SHFIRE, QO_X_SHDEALT, QO_X_SHHURTI, QO_X_SHFIREI, QO_X_SHDEALTI,
+       QO_X_HITMARKER, QO_X_KILLFLASH, QO_X_KILLMODE,
+       QO_X_LOWOP, QO_X_HURTFLASH, QO_X_HURTOP };
 
 /* display_aspect = crt puts the picture on (4:3 x trim), so one framebuffer
  * pixel lands on screen this many times wider than tall at trim 1.0. It is the
@@ -539,6 +564,108 @@ extern void Pc_QuickOptions_InvalidateRows(void);
 static const int         QO_SHADOW_SIZES[] = { 256, 512, 1024, 2048, 4096, 8192 };
 static const char* const QO_SPEAKER_LBL[]  = { "Auto", "Stereo", "Quad", "5.1", "7.1" };
 static const char* const QO_SPEAKER_IDS[]  = { "auto", "stereo", "quad", "51", "71" };
+static const char* const QO_AIMCAM_LBL[]   = { "Auto", "Classic", "TPS", "OTS", "FPS" };
+static const char* const QO_DIFF_LBL[]     = { "Low", "Medium", "Normal", "High" };
+static const char* const QO_EDIFF_LBL[]    = { "Low", "Medium", "Normal", "High", "Very High", "Hell" };
+static const char* const QO_HHSTYLE_LBL[]  = { "Bar", "Pulse" };
+static const char* const QO_KILLMODE_LBL[] = { "B&W", "Vignette" };
+static const char* const QO_HHCORNER_LBL[] = { "Top-Left", "Top-Right", "Bottom-Left", "Bottom-Right" };
+/* Trainer page (F10): grant guns + ammo and heals without the console. */
+static const u8 s_trWeapons[] = { InvItemId_Handgun, InvItemId_HuntingRifle, InvItemId_Shotgun, InvItemId_HyperBlaster };
+static const u8 s_trHeals[] = { InvItemId_HealthDrink, InvItemId_FirstAidKit, InvItemId_Ampoule };
+static const u8 s_trMeleeList[] = { InvItemId_KitchenKnife, InvItemId_SteelPipe, InvItemId_RockDrill,
+                                InvItemId_Hammer, InvItemId_Chainsaw, InvItemId_Katana, InvItemId_Axe };
+static int s_trWeapon = 0, s_trHeal = 0, s_trMeleeIdx = 0;
+
+static void TrPretty(const char* raw, char* buf, int bufsz)
+{
+    int n = 0;
+    if (bufsz <= 0) return;
+    if (!raw || !raw[0] || raw[0] == ' ') raw = "?";
+    while (raw[n] && n + 1 < bufsz && n < 60) { buf[n] = (raw[n] == '_') ? ' ' : raw[n]; n++; }
+    buf[n] = '\0';
+}
+
+const char* PcOpt_TrainerWeaponLabel(char* buf, int bufsz)
+{
+    TrPretty(Pc_ItemDisplayName(s_trWeapons[s_trWeapon]), buf, bufsz);
+    return buf;
+}
+
+const char* PcOpt_TrainerHealLabel(char* buf, int bufsz)
+{
+    TrPretty(Pc_ItemDisplayName(s_trHeals[s_trHeal]), buf, bufsz);
+    return buf;
+}
+
+void PcOpt_TrainerWeaponStep(int dir)
+{
+    int n = (int)(sizeof(s_trWeapons) / sizeof(s_trWeapons[0]));
+    s_trWeapon = (s_trWeapon + dir + n * 2) % n;
+    Sd_PlaySfx(Sfx_MenuMove, 0, 64);
+}
+
+void PcOpt_TrainerHealStep(int dir)
+{
+    int n = (int)(sizeof(s_trHeals) / sizeof(s_trHeals[0]));
+    s_trHeal = (s_trHeal + dir + n * 2) % n;
+    Sd_PlaySfx(Sfx_MenuMove, 0, 64);
+}
+
+const char* PcOpt_TrainerMeleeLabel(char* buf, int bufsz)
+{
+    TrPretty(Pc_ItemDisplayName(s_trMeleeList[s_trMeleeIdx]), buf, bufsz);
+    return buf;
+}
+
+void PcOpt_TrainerMeleeStep(int dir)
+{
+    int n = (int)(sizeof(s_trMeleeList) / sizeof(s_trMeleeList[0]));
+    s_trMeleeIdx = (s_trMeleeIdx + dir + n * 2) % n;
+    Sd_PlaySfx(Sfx_MenuMove, 0, 64);
+}
+
+void PcOpt_TrainerGiveWeapon(void)
+{
+    u8 id = s_trWeapons[s_trWeapon];
+    u8 ammo = 0;
+    int i, owned = 0;
+    for (i = 0; i < g_SavegamePtr->inventorySlotCount && i < INV_ITEM_COUNT_MAX; i++)
+        if (g_SavegamePtr->items[i].id_0 == id) { owned = 1; break; }
+    if (!owned)
+    {
+        Inventory_AddSpecialItem(id, 1);
+        Pc_ItemToast_Show(id, 1);
+    }
+    switch (id) {
+    case InvItemId_Handgun:      ammo = InvItemId_HandgunBullets; break;
+    case InvItemId_HuntingRifle: ammo = InvItemId_RifleShells;    break;
+    case InvItemId_Shotgun:      ammo = InvItemId_ShotgunShells;  break;
+    default: break;
+    }
+    if (ammo != 0)
+    {
+        Inventory_AddSpecialItem(ammo, 30);
+        Pc_ItemToast_Show(ammo, 30);
+    }
+    Sd_PlaySfx(Sfx_MenuConfirm, 0, 64);
+}
+
+void PcOpt_TrainerGiveHeal(void)
+{
+    u8 id = s_trHeals[s_trHeal];
+    Inventory_AddSpecialItem(id, 3);
+    Pc_ItemToast_Show(id, 3);
+    Sd_PlaySfx(Sfx_MenuConfirm, 0, 64);
+}
+
+void PcOpt_TrainerGiveMelee(void)
+{
+    u8 id = s_trMeleeList[s_trMeleeIdx];
+    Inventory_AddSpecialItem(id, 1);
+    Pc_ItemToast_Show(id, 1);
+    Sd_PlaySfx(Sfx_MenuConfirm, 0, 64);
+}
 
 const char* PcOpt_QuickExtraLabel(int which, char* buf, int bufsz)
 {
@@ -581,6 +708,96 @@ const char* PcOpt_QuickExtraLabel(int which, char* buf, int bufsz)
     case QO_X_CUTSHIFT:
         snprintf(buf, bufsz, "%+d rows", (int)g_PcConfig.cutsceneVShift);
         return buf;
+    case QO_X_AMMOHUD:
+        return g_PcConfig.ammoHud ? "On" : "Off";
+    case QO_X_AUTORELOAD:
+        return g_PcConfig.autoReload ? "On" : "Off";
+    case QO_X_MANRELOAD:
+        return g_PcConfig.manualReload ? "On" : "Off";
+    case QO_X_DPAD_ON:
+        return g_PcConfig.dpadWeapons ? "On" : "Off";
+    case QO_X_DPAD_UP:    return Pc_DpadAssignLabel(0, buf, bufsz);
+    case QO_X_DPAD_DOWN:  return Pc_DpadAssignLabel(1, buf, bufsz);
+    case QO_X_DPAD_LEFT:  return Pc_DpadAssignLabel(2, buf, bufsz);
+    case QO_X_DPAD_RIGHT: return Pc_DpadAssignLabel(3, buf, bufsz);
+    case QO_X_QUICKHEAL:
+        return g_PcConfig.quickHeal ? "On" : "Off";
+    case QO_X_TOASTBG:
+        snprintf(buf, bufsz, "%d%%", g_PcConfig.itemToastBg);
+        return buf;
+    case QO_X_HEALFLASH:
+        snprintf(buf, bufsz, "%d%%", g_PcConfig.healFlash);
+        return buf;
+    case QO_X_IMMWEAPONS:
+        return g_PcConfig.immersionWeapons ? "On" : "Off";
+    case QO_X_IMMFEAR:
+        return g_PcConfig.immersionFear ? "On" : "Off";
+    case QO_X_IMMBLOOD:
+        return g_PcConfig.bloodWallDecals ? "On" : "Off";
+    case QO_X_IMMFLICKER:
+        return g_PcConfig.immersionFlicker ? "On" : "Off";
+    case QO_X_DIFFAMMO:
+        return QO_DIFF_LBL[g_PcConfig.diffAmmo & 3];
+    case QO_X_DIFFHEALS:
+        return QO_DIFF_LBL[g_PcConfig.diffHeals & 3];
+    case QO_X_DIFFENEMY:
+        return QO_EDIFF_LBL[g_PcConfig.diffEnemyDmg % 6];
+    case QO_X_HPBARS:
+        return g_PcConfig.enemyHpBars ? "On" : "Off";
+    case QO_X_HHHUD:
+        return g_PcConfig.hpHud ? "On" : "Off";
+    case QO_X_MELEEAIMWALK:
+        return g_PcConfig.meleeAimWalk ? "On" : "Off";
+    case QO_X_HHSTYLE:
+        return QO_HHSTYLE_LBL[g_PcConfig.hpStyle & 1];
+    case QO_X_HHNUMBER:
+        return g_PcConfig.hpNumber ? "On" : "Off";
+    case QO_X_HHCORNER:
+        return QO_HHCORNER_LBL[g_PcConfig.hpCorner & 3];
+    case QO_X_HHSCALE:
+        snprintf(buf, bufsz, "%.0f%%", g_PcConfig.hpScale);
+        return buf;
+    case QO_X_HHOPACITY:
+        snprintf(buf, bufsz, "%.0f%%", g_PcConfig.hpOpacity);
+        return buf;
+    case QO_X_HHALWAYS:
+        return g_PcConfig.hpAlways ? "On" : "Off";
+    case QO_X_SHHURT:
+        return g_PcConfig.shakeHurt ? "On" : "Off";
+    case QO_X_SHFIRE:
+        return g_PcConfig.shakeFire ? "On" : "Off";
+    case QO_X_SHDEALT:
+        return g_PcConfig.shakeDealt ? "On" : "Off";
+    case QO_X_SHHURTI:
+        snprintf(buf, bufsz, "%d%%", g_PcConfig.shakeHurtInt);
+        return buf;
+    case QO_X_SHFIREI:
+        snprintf(buf, bufsz, "%d%%", g_PcConfig.shakeFireInt);
+        return buf;
+    case QO_X_SHDEALTI:
+        snprintf(buf, bufsz, "%d%%", g_PcConfig.shakeDealtInt);
+        return buf;
+    case QO_X_HITMARKER:
+        return g_PcConfig.hitmarker ? "On" : "Off";
+    case QO_X_KILLFLASH:
+        return g_PcConfig.killFlash ? "On" : "Off";
+    case QO_X_KILLMODE:
+        return QO_KILLMODE_LBL[g_PcConfig.killFlashMode & 1];
+    case QO_X_LOWOP:
+        snprintf(buf, bufsz, "%d%%", g_PcConfig.lowHealthOp);
+        return buf;
+    case QO_X_HURTFLASH:
+        return g_PcConfig.hurtFlash ? "On" : "Off";
+    case QO_X_HURTOP:
+        snprintf(buf, bufsz, "%d%%", g_PcConfig.hurtFlashOp);
+        return buf;
+    case QO_X_AIMCAM: {
+        int v = g_PcConfig.aimCameraMode;
+        return (v >= 0 && v < 5) ? QO_AIMCAM_LBL[v] : "Auto";
+    }
+    case QO_X_TRWEAPON: return PcOpt_TrainerWeaponLabel(buf, bufsz);
+    case QO_X_TRHEAL:   return PcOpt_TrainerHealLabel(buf, bufsz);
+    case QO_X_TRMELEE:  return PcOpt_TrainerMeleeLabel(buf, bufsz);
     default:
         return "";
     }
@@ -794,6 +1011,270 @@ void PcOpt_QuickExtraAdjust(int which, int dir)
         SD_Call(Sfx_MenuMove);
         break;
     }
+    case QO_X_AMMOHUD:
+        g_PcConfig.ammoHud = !g_PcConfig.ammoHud;
+        PcConfig_SaveKeyValue("ammo_hud", g_PcConfig.ammoHud ? "1" : "0");
+        Sd_PlaySfx(Sfx_MenuMove, 0, 64);
+        break;
+    case QO_X_AUTORELOAD:
+        g_PcConfig.autoReload = !g_PcConfig.autoReload;
+        PcConfig_SaveKeyValue("auto_reload", g_PcConfig.autoReload ? "1" : "0");
+        Sd_PlaySfx(Sfx_MenuMove, 0, 64);
+        break;
+    case QO_X_MANRELOAD:
+        g_PcConfig.manualReload = !g_PcConfig.manualReload;
+        PcConfig_SaveKeyValue("manual_reload", g_PcConfig.manualReload ? "1" : "0");
+        Sd_PlaySfx(Sfx_MenuMove, 0, 64);
+        break;
+    case QO_X_DPAD_ON:
+        g_PcConfig.dpadWeapons = !g_PcConfig.dpadWeapons;
+        PcConfig_SaveKeyValue("dpad_weapons", g_PcConfig.dpadWeapons ? "1" : "0");
+        Sd_PlaySfx(Sfx_MenuMove, 0, 64);
+        break;
+    case QO_X_DPAD_UP:    Pc_DpadAssignAdjust(0, dir); break;
+    case QO_X_DPAD_DOWN:  Pc_DpadAssignAdjust(1, dir); break;
+    case QO_X_DPAD_LEFT:  Pc_DpadAssignAdjust(2, dir); break;
+    case QO_X_DPAD_RIGHT: Pc_DpadAssignAdjust(3, dir); break;
+    case QO_X_QUICKHEAL:
+        g_PcConfig.quickHeal = !g_PcConfig.quickHeal;
+        PcConfig_SaveKeyValue("quick_heal", g_PcConfig.quickHeal ? "1" : "0");
+        Sd_PlaySfx(Sfx_MenuMove, 0, 64);
+        break;
+    case QO_X_TOASTBG: {
+        int v = g_PcConfig.itemToastBg + dir * 5;
+        if (v < 0) v = 0;
+        if (v > 100) v = 100;
+        if (v == g_PcConfig.itemToastBg) { SD_Call(Sfx_MenuError); break; }
+        g_PcConfig.itemToastBg = v;
+        snprintf(buf, sizeof(buf), "%d", v);
+        PcConfig_SaveKeyValue("item_toast_bg", buf);
+        Sd_PlaySfx(Sfx_MenuMove, 0, 64);
+        break;
+    }
+    case QO_X_HEALFLASH: {
+        int v = g_PcConfig.healFlash + dir * 5;
+        if (v < 0) v = 0;
+        if (v > 100) v = 100;
+        if (v == g_PcConfig.healFlash) { SD_Call(Sfx_MenuError); break; }
+        g_PcConfig.healFlash = v;
+        snprintf(buf, sizeof(buf), "%d", v);
+        PcConfig_SaveKeyValue("heal_flash", buf);
+        Sd_PlaySfx(Sfx_MenuMove, 0, 64);
+        break;
+    }
+    case QO_X_AIMCAM: {
+        int v = (g_PcConfig.aimCameraMode + dir + 5) % 5;
+        char b2[16];
+        g_PcConfig.aimCameraMode = v;
+        snprintf(b2, sizeof(b2), "%d", v);
+        PcConfig_SaveKeyValue("aim_camera_mode", b2);
+        Sd_PlaySfx(Sfx_MenuMove, 0, 64);
+        break;
+    }
+    case QO_X_IMMWEAPONS:
+        g_PcConfig.immersionWeapons = !g_PcConfig.immersionWeapons;
+        PcConfig_SaveKeyValue("immersion_weapons", g_PcConfig.immersionWeapons ? "1" : "0");
+        Sd_PlaySfx(Sfx_MenuMove, 0, 64);
+        break;
+    case QO_X_IMMFEAR:
+        g_PcConfig.immersionFear = !g_PcConfig.immersionFear;
+        PcConfig_SaveKeyValue("immersion_fear", g_PcConfig.immersionFear ? "1" : "0");
+        Sd_PlaySfx(Sfx_MenuMove, 0, 64);
+        break;
+    case QO_X_IMMBLOOD:
+        g_PcConfig.bloodWallDecals = !g_PcConfig.bloodWallDecals;
+        PcConfig_SaveKeyValue("blood_wall_decals", g_PcConfig.bloodWallDecals ? "1" : "0");
+        Sd_PlaySfx(Sfx_MenuMove, 0, 64);
+        break;
+    case QO_X_IMMFLICKER:
+        g_PcConfig.immersionFlicker = !g_PcConfig.immersionFlicker;
+        PcConfig_SaveKeyValue("immersion_flicker", g_PcConfig.immersionFlicker ? "1" : "0");
+        Sd_PlaySfx(Sfx_MenuMove, 0, 64);
+        break;
+    case QO_X_DIFFAMMO: {
+        char b2[16];
+        g_PcConfig.diffAmmo = (g_PcConfig.diffAmmo + dir + 4) & 3;
+        snprintf(b2, sizeof(b2), "%d", g_PcConfig.diffAmmo);
+        PcConfig_SaveKeyValue("diff_ammo", b2);
+        Sd_PlaySfx(Sfx_MenuMove, 0, 64);
+        break;
+    }
+    case QO_X_DIFFHEALS: {
+        char b2[16];
+        g_PcConfig.diffHeals = (g_PcConfig.diffHeals + dir + 4) & 3;
+        snprintf(b2, sizeof(b2), "%d", g_PcConfig.diffHeals);
+        PcConfig_SaveKeyValue("diff_heals", b2);
+        Sd_PlaySfx(Sfx_MenuMove, 0, 64);
+        break;
+    }
+    case QO_X_DIFFENEMY: {
+        char b2[16];
+        g_PcConfig.diffEnemyDmg = (g_PcConfig.diffEnemyDmg + dir + 6) % 6;
+        snprintf(b2, sizeof(b2), "%d", g_PcConfig.diffEnemyDmg);
+        PcConfig_SaveKeyValue("diff_enemy", b2);
+        Sd_PlaySfx(Sfx_MenuMove, 0, 64);
+        break;
+    }
+    case QO_X_HPBARS:
+        g_PcConfig.enemyHpBars = !g_PcConfig.enemyHpBars;
+        PcConfig_SaveKeyValue("enemy_hp_bars", g_PcConfig.enemyHpBars ? "1" : "0");
+        Sd_PlaySfx(Sfx_MenuMove, 0, 64);
+        break;
+    case QO_X_HHHUD:
+        g_PcConfig.hpHud = !g_PcConfig.hpHud;
+        PcConfig_SaveKeyValue("hp_hud", g_PcConfig.hpHud ? "1" : "0");
+        Sd_PlaySfx(Sfx_MenuMove, 0, 64);
+        break;
+    case QO_X_MELEEAIMWALK:
+        g_PcConfig.meleeAimWalk = !g_PcConfig.meleeAimWalk;
+        PcConfig_SaveKeyValue("melee_aim_walk", g_PcConfig.meleeAimWalk ? "1" : "0");
+        Sd_PlaySfx(Sfx_MenuMove, 0, 64);
+        break;
+    case QO_X_HHSTYLE:
+        g_PcConfig.hpStyle ^= 1;
+        PcConfig_SaveKeyValue("hp_style", g_PcConfig.hpStyle ? "1" : "0");
+        Sd_PlaySfx(Sfx_MenuMove, 0, 64);
+        break;
+    case QO_X_HHNUMBER:
+        g_PcConfig.hpNumber = !g_PcConfig.hpNumber;
+        PcConfig_SaveKeyValue("hp_number", g_PcConfig.hpNumber ? "1" : "0");
+        Sd_PlaySfx(Sfx_MenuMove, 0, 64);
+        break;
+    case QO_X_HHCORNER: {
+        char b2[16];
+        g_PcConfig.hpCorner = (g_PcConfig.hpCorner + dir + 4) & 3;
+        snprintf(b2, sizeof(b2), "%d", g_PcConfig.hpCorner);
+        PcConfig_SaveKeyValue("hp_corner", b2);
+        Sd_PlaySfx(Sfx_MenuMove, 0, 64);
+        break;
+    }
+    case QO_X_HHSCALE: {
+        float v = g_PcConfig.hpScale + (float)dir * 5.0f;
+        char b2[16];
+        if (v < 60.0f) v = 60.0f;
+        if (v > 130.0f) v = 130.0f;
+        if (v == g_PcConfig.hpScale) { SD_Call(Sfx_MenuError); break; }
+        g_PcConfig.hpScale = v;
+        snprintf(b2, sizeof(b2), "%.0f", v);
+        PcConfig_SaveKeyValue("hp_scale", b2);
+        Sd_PlaySfx(Sfx_MenuMove, 0, 64);
+        break;
+    }
+    case QO_X_HHOPACITY: {
+        float v = g_PcConfig.hpOpacity + (float)dir * 5.0f;
+        char b2[16];
+        if (v < 20.0f) v = 20.0f;
+        if (v > 100.0f) v = 100.0f;
+        if (v == g_PcConfig.hpOpacity) { SD_Call(Sfx_MenuError); break; }
+        g_PcConfig.hpOpacity = v;
+        snprintf(b2, sizeof(b2), "%.0f", v);
+        PcConfig_SaveKeyValue("hp_opacity", b2);
+        Sd_PlaySfx(Sfx_MenuMove, 0, 64);
+        break;
+    }
+    case QO_X_HHALWAYS:
+        g_PcConfig.hpAlways = !g_PcConfig.hpAlways;
+        PcConfig_SaveKeyValue("hp_always", g_PcConfig.hpAlways ? "1" : "0");
+        Sd_PlaySfx(Sfx_MenuMove, 0, 64);
+        break;
+    case QO_X_SHHURT:
+        g_PcConfig.shakeHurt = !g_PcConfig.shakeHurt;
+        PcConfig_SaveKeyValue("shake_hurt", g_PcConfig.shakeHurt ? "1" : "0");
+        Sd_PlaySfx(Sfx_MenuMove, 0, 64);
+        break;
+    case QO_X_SHFIRE:
+        g_PcConfig.shakeFire = !g_PcConfig.shakeFire;
+        PcConfig_SaveKeyValue("shake_fire", g_PcConfig.shakeFire ? "1" : "0");
+        Sd_PlaySfx(Sfx_MenuMove, 0, 64);
+        break;
+    case QO_X_SHDEALT:
+        g_PcConfig.shakeDealt = !g_PcConfig.shakeDealt;
+        PcConfig_SaveKeyValue("shake_dealt", g_PcConfig.shakeDealt ? "1" : "0");
+        Sd_PlaySfx(Sfx_MenuMove, 0, 64);
+        break;
+    case QO_X_SHHURTI: {
+        int v = g_PcConfig.shakeHurtInt + dir * 5;
+        char b2[16];
+        if (v < 0) v = 0;
+        if (v > 200) v = 200;
+        if (v == g_PcConfig.shakeHurtInt) { SD_Call(Sfx_MenuError); break; }
+        g_PcConfig.shakeHurtInt = v;
+        snprintf(b2, sizeof(b2), "%d", v);
+        PcConfig_SaveKeyValue("shake_hurt_int", b2);
+        Sd_PlaySfx(Sfx_MenuMove, 0, 64);
+        break;
+    }
+    case QO_X_SHFIREI: {
+        int v = g_PcConfig.shakeFireInt + dir * 5;
+        char b2[16];
+        if (v < 0) v = 0;
+        if (v > 200) v = 200;
+        if (v == g_PcConfig.shakeFireInt) { SD_Call(Sfx_MenuError); break; }
+        g_PcConfig.shakeFireInt = v;
+        snprintf(b2, sizeof(b2), "%d", v);
+        PcConfig_SaveKeyValue("shake_fire_int", b2);
+        Sd_PlaySfx(Sfx_MenuMove, 0, 64);
+        break;
+    }
+    case QO_X_SHDEALTI: {
+        int v = g_PcConfig.shakeDealtInt + dir * 5;
+        char b2[16];
+        if (v < 0) v = 0;
+        if (v > 200) v = 200;
+        if (v == g_PcConfig.shakeDealtInt) { SD_Call(Sfx_MenuError); break; }
+        g_PcConfig.shakeDealtInt = v;
+        snprintf(b2, sizeof(b2), "%d", v);
+        PcConfig_SaveKeyValue("shake_dealt_int", b2);
+        Sd_PlaySfx(Sfx_MenuMove, 0, 64);
+        break;
+    }
+    case QO_X_HITMARKER:
+        g_PcConfig.hitmarker = !g_PcConfig.hitmarker;
+        PcConfig_SaveKeyValue("hitmarker", g_PcConfig.hitmarker ? "1" : "0");
+        Sd_PlaySfx(Sfx_MenuMove, 0, 64);
+        break;
+    case QO_X_KILLFLASH:
+        g_PcConfig.killFlash = !g_PcConfig.killFlash;
+        PcConfig_SaveKeyValue("kill_flash", g_PcConfig.killFlash ? "1" : "0");
+        Sd_PlaySfx(Sfx_MenuMove, 0, 64);
+        break;
+    case QO_X_KILLMODE:
+        g_PcConfig.killFlashMode ^= 1;
+        PcConfig_SaveKeyValue("kill_flash_mode", g_PcConfig.killFlashMode ? "1" : "0");
+        Sd_PlaySfx(Sfx_MenuMove, 0, 64);
+        break;
+    case QO_X_LOWOP: {
+        int v = g_PcConfig.lowHealthOp + dir * 5;
+        char b2[16];
+        if (v < 0) v = 0;
+        if (v > 100) v = 100;
+        if (v == g_PcConfig.lowHealthOp) { SD_Call(Sfx_MenuError); break; }
+        g_PcConfig.lowHealthOp = v;
+        snprintf(b2, sizeof(b2), "%d", v);
+        PcConfig_SaveKeyValue("low_health_op", b2);
+        Sd_PlaySfx(Sfx_MenuMove, 0, 64);
+        break;
+    }
+    case QO_X_HURTFLASH:
+        g_PcConfig.hurtFlash = !g_PcConfig.hurtFlash;
+        PcConfig_SaveKeyValue("hurt_flash", g_PcConfig.hurtFlash ? "1" : "0");
+        Sd_PlaySfx(Sfx_MenuMove, 0, 64);
+        break;
+    case QO_X_HURTOP: {
+        int v = g_PcConfig.hurtFlashOp + dir * 5;
+        char b2[16];
+        if (v < 0) v = 0;
+        if (v > 100) v = 100;
+        if (v == g_PcConfig.hurtFlashOp) { SD_Call(Sfx_MenuError); break; }
+        g_PcConfig.hurtFlashOp = v;
+        snprintf(b2, sizeof(b2), "%d", v);
+        PcConfig_SaveKeyValue("hurt_flash_op", b2);
+        Sd_PlaySfx(Sfx_MenuMove, 0, 64);
+        break;
+    }
+    case QO_X_TRWEAPON: PcOpt_TrainerWeaponStep(dir); break;
+    case QO_X_TRHEAL:   PcOpt_TrainerHealStep(dir); break;
+    case QO_X_TRMELEE:  PcOpt_TrainerMeleeStep(dir); break;
     default:
         break;
     }

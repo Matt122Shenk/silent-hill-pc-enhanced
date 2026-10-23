@@ -17,6 +17,10 @@
 #ifdef SH_PC_PORT
 #include "pc_inventory_mouse.h"
 #include "pc_mouse_cursor.h"
+#include "pc_item_toast.h"
+#ifdef SH_PC_PORT
+#include "pc_combat.h"
+#endif
 #endif
 
 static const s32 pad_rodata_80025EAC = 0;
@@ -138,6 +142,7 @@ void GameState_ItemScreens_Update(void) // 0x8004C9B0
             if (Inventory_HyperBlasterUnlockTest() == 1)
             {
                 Inventory_AddSpecialItem(InvItemId_HyperBlaster, 1);
+                Pc_ItemToast_Show(InvItemId_HyperBlaster, 1);
             }
 
 #if VERSION_REGION_IS(NTSCJ)
@@ -945,6 +950,17 @@ void Inventory_Logic(void) // 0x8004D518
                     break;
             }
 
+#ifdef SH_PC_PORT
+            /* D-pad quick-select rows for equippable weapons (native mirror of
+             * the F10 assignments): native rows first, Up/Down/Left/Right
+             * after. Bounds, highlight box and mouse hit-testing all key off
+             * cmdCountMax, so they follow with no further changes. */
+            if (Pc_DpadIsAssignable(g_SavegamePtr->items[curItemIdx].id_0))
+            {
+                cmdCountMax += 4;
+            }
+#endif
+
             if (g_Inventory_IsDownPulsed)
             {
                 if (g_Inventory_CmdSelectedIdx < (cmdCountMax - 1))
@@ -967,6 +983,19 @@ void Inventory_Logic(void) // 0x8004D518
             {
                 g_Inventory_SelectionBordersDraw = 1;
 
+#ifdef SH_PC_PORT
+                /* D-pad rows live past the native ones: assigning here stays in
+                 * the list (more pads can follow) and the generic confirm below
+                 * plays, like every other row. */
+                if (Pc_DpadIsAssignable(g_SavegamePtr->items[curItemIdx].id_0) &&
+                    g_Inventory_CmdSelectedIdx >= (cmdCountMax - 4))
+                {
+                    Pc_DpadAssignWeapon(g_Inventory_CmdSelectedIdx - (cmdCountMax - 4),
+                                        g_SavegamePtr->items[curItemIdx].id_0);
+                }
+                else
+                {
+#endif
                 switch (g_SavegamePtr->items[curItemIdx].command_2)
                 {
                     case InvCmdId_OnOff:
@@ -1201,6 +1230,9 @@ void Inventory_Logic(void) // 0x8004D518
                         }
                         break;
                 }
+#ifdef SH_PC_PORT
+                }
+#endif
 
                 if (g_GameWork.gameStateSteps[1] == 12)
                 {
@@ -1304,7 +1336,11 @@ void Gfx_Inventory_CmdOptionsDraw(void) // 0x8004E864
         "Detail",
         "On",
         "Off",
-        "Look"
+        "Look",
+        "Up",
+        "Down",
+        "Left",
+        "Right"
     };
 
     ot = &g_OrderingTable2[g_ActiveBufferIdx];
@@ -1393,6 +1429,40 @@ void Gfx_Inventory_CmdOptionsDraw(void) // 0x8004E864
         case 11:
             break;
     }
+
+#ifdef SH_PC_PORT
+    /* D-pad rows below the native ones for equippable weapons. Native rows
+     * keep their exact positions; directions continue at the same 16px pitch
+     * the highlight box and the mouse hit-testing already step with. */
+    if (Pc_DpadIsAssignable(g_SavegamePtr->items[idx].id_0) &&
+        g_Inventory_SelectionId >= InventorySelectionId_ItemCmd &&
+        g_Inventory_SelectionId <= InventorySelectionId_EquippedItemCmd)
+    {
+        s32 nativeRows = 1;
+        s32 baseY;
+        s32 d;
+
+        switch (g_SavegamePtr->items[idx].command_2)
+        {
+            case InvCmdId_EquipReload:
+            case InvCmdId_UnequipReload:
+            case InvCmdId_OnOff:
+            case InvCmdId_UseLook:
+                nativeRows = 2;
+                break;
+
+            default:
+                break;
+        }
+
+        baseY = (nativeRows == 2) ? -42 : -34;
+        for (d = 0; d < 4; d++)
+        {
+            Gfx_StringSetPosition(222, baseY + ((nativeRows + d) * 16));
+            Gfx_StringDraw((char*)STRS[8 + d], 10);
+        }
+    }
+#endif
 
     if (g_Inventory_SelectionId >= InventorySelectionId_ItemCmd &&
         g_Inventory_SelectionId <= InventorySelectionId_EquippedItemCmd)

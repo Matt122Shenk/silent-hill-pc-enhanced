@@ -21,7 +21,8 @@ typedef struct PcUiSound PcUiSound;
  * problem; every other call tolerates NULL, so callers need no error path. */
 PcUiSound* PcUiSound_Load(const char* path);
 
-/* Restart the cue from the beginning. No-op on NULL. */
+/* Play the cue, layering over in-flight instances up to a small voice cap
+ * (past that the oldest instance is stolen). No-op on NULL. */
 void PcUiSound_Play(PcUiSound* snd);
 
 /* As above at a relative gain (1.0 = as authored). Lets one loaded clip serve

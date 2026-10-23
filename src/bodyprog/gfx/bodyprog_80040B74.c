@@ -760,6 +760,7 @@ void Ipd_TexturesInit(void) // 0x80041D48
     /* The reset above also freed the decal slot's GL texture; drop the decal
      * FIFO and let pc_decals.c re-register lazily on its next draw. */
     { extern void Pc_DecalsReset(void); Pc_DecalsReset(); }
+    { extern void Pc_HpBarsReset(void); Pc_HpBarsReset(); }
 #endif
 }
 

@@ -46,6 +46,7 @@
 #include "pc_rando.h"
 #include "pc_rando_config.h"
 #include "pc_rando_data.h"
+#include "pc_item_toast.h"
 #include "sh_log.h"
 
 #include <string.h>
@@ -1563,7 +1564,10 @@ void Pc_Rando_RespawnArea(void)
 void Pc_Rando_GiveItem(int itemId, int count)
 {
     if (Pc_Rando_Active())
+    {
         Inventory_AddSpecialItem((u8)itemId, (u8)count);
+        Pc_ItemToast_Show((unsigned char)itemId, (unsigned char)count);
+    }
 }
 
 void Pc_Rando_OnNewGame(void)

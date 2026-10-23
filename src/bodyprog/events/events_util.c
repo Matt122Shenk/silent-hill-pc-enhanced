@@ -17,6 +17,8 @@
 
 #ifdef SH_PC_PORT
 #include "sh_log.h"
+#include "pc_config.h"
+#include "pc_item_toast.h"
 /* The upstream merge moved the paper-map state machines here from
  * bodyprog_80085D78.c (Event_MapTake/func_800867B4, same PSX addresses);
  * the PC fixes below must live in THIS copy — the old one is dead code.
@@ -1129,6 +1131,29 @@ void Event_ItemTake(e_InvItemId itemId, s32 itemCount, e_EventFlag eventFlagIdx,
         itemId       = (e_InvItemId)_id;
         itemCount    = _cnt;
         mapMsgIdxCpy = _msg;
+    }
+
+    /* Difficulty ammo scale (config diff_ammo): after the randomizer remap so
+     * it scales the final granted count. Take screen + toast below read these
+     * locals, so the shown count stays correct. Scripted non-pickup grants
+     * (direct Event_InvItemCmd calls) are intentionally untouched. */
+    if (itemId >= InvItemId_HandgunBullets && itemId <= InvItemId_ShotgunShells)
+    {
+        extern s32 Pc_Diff_AmmoCount(s32 count);
+        itemCount = Pc_Diff_AmmoCount(itemCount);
+    }
+
+    /* Silent take (config silent_take): common loot skips the take screen and
+     * lands in inventory with a fast toast. Story items keep the flow below. */
+    if (g_SysWork.sysStateSteps[1] == EventState_Initialize &&
+        g_PcConfig.silentTake && Pc_ItemToast_IsCommon((unsigned char)itemId))
+    {
+        Savegame_EventFlagSet(eventFlagIdx);
+        Event_InvItemCmd(InvItemCmd_AddItem, itemId, itemCount, false);
+        Pc_ItemToast_Show((unsigned char)itemId, (unsigned char)itemCount);
+        g_MapOverlayHdr.playerControlUnfreeze(false);
+        SysWork_StateSetNext(SysState_Gameplay);
+        return;
     }
 #endif
 

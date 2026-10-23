@@ -17,6 +17,22 @@ extern int g_PcReloadRequest;
  * outside the PSX controller mapping. */
 bool PC_KeyboardKeyClicked(int sdlScancode);
 
+/* D-pad weapon assignments (F10 HUD 2 page): dir 0 = Up, 1 = Down,
+// 2 = Left, 3 = Right. Label shows the assigned weapon ("None" when
+// unassigned); adjust cycles the fixed weapon list and saves the key. */
+const char* Pc_DpadAssignLabel(int dir, char* buf, int bufsz);
+void Pc_DpadAssignAdjust(int dir, int step);
+
+/* Native-inventory assignment: 1 if the item can sit on a D-pad pad
+ * (the equippable weapons in s_dpadOrder, melee and guns alike). */
+int Pc_DpadIsAssignable(u8 id);
+
+/* Put weaponId on pad dir (0 = Up, 1 = Down, 2 = Left, 3 = Right): if it is
+ * already on another pad the two pads swap, else it takes the pad and
+ * whatever was there becomes unassigned. Persists the changed keys. No SFX
+ * (callers in sounding menus play their own confirm). */
+void Pc_DpadAssignWeapon(int dir, u8 weaponId);
+
 /* OTS/TPS free-aim aim assist: snap the bullet aim point onto a nearby enemy's
  * body axis so a hit registers anywhere on the body (mouse) or with a magnetic
  * auto-aim window (controller). Returns the chosen g_SysWork.npcs[] index or

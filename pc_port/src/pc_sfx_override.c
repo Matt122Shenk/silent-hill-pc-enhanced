@@ -361,6 +361,18 @@ static const unsigned char* SfxOverride_BankSample(const unsigned char* d, long 
     return d + bodies + running;
 }
 
+/* Per-weapon enable flags (config sfx_handgun/sfx_rifle/sfx_shotgun/sfx_blaster,
+ * all default on so existing loose-file mods keep working). Other banks are
+ * never gated. */
+static int SfxOverride_WeaponEnabled(const char* bank)
+{
+    if (strcmp(bank, "PISTOL") == 0)  return g_PcConfig.sfxHandgun;
+    if (strcmp(bank, "RIFEL") == 0)   return g_PcConfig.sfxRifle;
+    if (strcmp(bank, "SHOTGUN") == 0) return g_PcConfig.sfxShotgun;
+    if (strcmp(bank, "HYPER") == 0)   return g_PcConfig.sfxBlaster;
+    return 1;
+}
+
 void Pc_SfxOverride_OnBankLoaded(const void* vabHeader, int spuBase, int discSector)
 {
     const unsigned char* vh = (const unsigned char*)vabHeader;
@@ -389,6 +401,11 @@ void Pc_SfxOverride_OnBankLoaded(const void* vabHeader, int spuBase, int discSec
     SfxOverride_DropSlot(spuBase);
 
     if (!SfxOverride_BankName(discSector, bank, (int)sizeof(bank)))
+    {
+        return;
+    }
+
+    if (!SfxOverride_WeaponEnabled(bank))
     {
         return;
     }

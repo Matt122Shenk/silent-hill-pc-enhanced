@@ -55,8 +55,10 @@ void MainMenu_FogUpdate(void);
 static s32 g_MainMenuState              = 0;
 static s32 g_MainMenu_SelectedEntry     = MainMenuEntry_Start;
 #ifdef SH_PC_PORT
-/* The port adds an Exit row, always available alongside Option. */
-#define MAINMENU_BASE_ENTRY_FLAGS ((1 << MainMenuEntry_Start) | (1 << MainMenuEntry_Option) | (1 << MainMenuEntry_Exit))
+/* The port adds an Exit row, always available alongside Option, and a Horde
+ * row for the wave-survival mode (likewise always available: it needs no
+ * save). */
+#define MAINMENU_BASE_ENTRY_FLAGS ((1 << MainMenuEntry_Start) | (1 << MainMenuEntry_Option) | (1 << MainMenuEntry_Exit) | (1 << MainMenuEntry_Horde))
 #else
 #define MAINMENU_BASE_ENTRY_FLAGS ((1 << MainMenuEntry_Start) | (1 << MainMenuEntry_Option))
 #endif
@@ -86,7 +88,7 @@ void GameState_MainMenu_Update(void) // 0x8003AB28
      * map must have NO effect until New Game selects it (title.c New Game
      * path below). */
 #endif
-    #define MAIN_MENU_GAME_STATE_COUNT 5
+    #define MAIN_MENU_GAME_STATE_COUNT 6
 
     s32 NEXT_GAME_STATES[MAIN_MENU_GAME_STATE_COUNT] =
     {
@@ -94,7 +96,8 @@ void GameState_MainMenu_Update(void) // 0x8003AB28
         GameState_AutoLoadSavegame,
         GameState_MovieOpening,
         GameState_OptionScreen,
-        GameState_MovieIntro
+        GameState_MovieIntro,
+        GameState_MovieOpening /* Horde: same boot as Start; the run retargets the map */
     };
 
     bool        playInGameDemo;
@@ -361,7 +364,10 @@ void GameState_MainMenu_Update(void) // 0x8003AB28
                 switch (g_MainMenu_SelectedEntry)
                 {
                     case MainMenuEntry_Continue:
-                        if (g_GameWork.autosave.playerHealth > Q12(0.0f))
+                        {
+                            extern void Pc_Horde_EndRun(void);
+                            Pc_Horde_EndRun();
+                            if (g_GameWork.autosave.playerHealth > Q12(0.0f))
                         {
                             g_GameWork.savegame = g_GameWork.autosave;
                         }
@@ -373,6 +379,7 @@ void GameState_MainMenu_Update(void) // 0x8003AB28
                         GameBoot_PlayerInit();
                         g_SysWork.processFlags = ProcessFlag_Continue;
                         GameBoot_MapLoad(g_SavegamePtr->mapIdx);
+                        }
                         break;
 
                     case MainMenuEntry_Load:
@@ -383,6 +390,17 @@ void GameState_MainMenu_Update(void) // 0x8003AB28
                         ScreenFade_Reset();
                         g_MainMenuState = MenuState_DifficultySelector;
                         break;
+
+#ifdef SH_PC_PORT
+                    case MainMenuEntry_Horde:
+                        {
+                            extern void Pc_Horde_Request(void);
+                            Pc_Horde_Request();
+                        }
+                        ScreenFade_Reset();
+                        g_MainMenuState = MenuState_DifficultySelector;
+                        break;
+#endif
 
                     case MainMenuEntry_Option:
                         GameFs_OptionBinLoad();
@@ -512,6 +530,15 @@ void GameState_MainMenu_Update(void) // 0x8003AB28
 
 #ifdef SH_PC_PORT
                 {
+                    extern int Pc_Horde_Requested(void);
+                    extern void Pc_Horde_OnNewGame(void);
+                    if (Pc_Horde_Requested())
+                    {
+                        GameBoot_SavegameInitialize(MapIdx_MAP2_S00, newGameSelectedDifficultyIdx - 1);
+                        Pc_Horde_OnNewGame();
+                    }
+                    else
+                    {
                     int mapId = MapRegistry_FindByName(g_PcConfig.mapName);
                     if (mapId < 0) mapId = 0;
                     GameBoot_SavegameInitialize(mapId, newGameSelectedDifficultyIdx - 1);
@@ -522,6 +549,7 @@ void GameState_MainMenu_Update(void) // 0x8003AB28
                     {
                         extern void Pc_Rando_OnNewGame(void);
                         Pc_Rando_OnNewGame();
+                    }
                     }
 
                     /* Gameplay plugins: same timing rationale as the randomizer
@@ -561,6 +589,12 @@ void GameState_MainMenu_Update(void) // 0x8003AB28
             else if (g_Controller0->clickedBtnFlags & g_GameWorkPtr->config.controllerConfig.cancel)
             {
                 SD_Call(Sfx_MenuCancel);
+#ifdef SH_PC_PORT
+                {
+                    extern void Pc_Horde_EndRun(void);
+                    Pc_Horde_EndRun();
+                }
+#endif
                 g_MainMenuState = 1;
             }
             break;
@@ -591,6 +625,13 @@ void GameState_MainMenu_Update(void) // 0x8003AB28
                 {
                     NEXT_GAME_STATES[MainMenuEntry_Start] = GameState_MainLoadScreen;
                     skipToGameStep                        = 4;
+                }
+                /* Horde mode boots straight into the arena: the opening movie
+                 * (Harry's car) belongs to the vanilla story, not the run. */
+                {
+                    extern int Pc_Horde_Active(void);
+                    if (Pc_Horde_Active())
+                        NEXT_GAME_STATES[MainMenuEntry_Horde] = GameState_MainLoadScreen;
                 }
 #endif
 
@@ -806,12 +847,13 @@ static void MainMenu_MainTextDraw(void) // 0x8003B568
         "START",
         "OPTION",
 #ifdef SH_PC_PORT
-        "EXIT" /* PC port: quits the game. Reuses the unused Extra slot. */
+        "EXIT", /* PC port: quits the game. Reuses the unused Extra slot. */
+        "HORDE" /* PC port: wave-survival mode in the MAP1_S00 streets. */
 #else
         "EXTRA" /** @unused See `e_MainMenuEntry`. */
 #endif
     };
-    static const u8 STR_OFFSETS_X[] = { 29, 50, 32, 39, 33 }; // @unused Element at index 4. See `g_MainMenu_VisibleEntryFlags`.
+    static const u8 STR_OFFSETS_X[] = { 29, 50, 32, 39, 33, 32 }; // @unused Element at index 4. See `g_MainMenu_VisibleEntryFlags`.
 
     s32 i;
 

@@ -14,6 +14,7 @@
 
 #include "bodyprog/collision/collision.h"
 #include "bodyprog/collision/ray.h"
+#include "bodyprog/bodyprog.h"
 #include "bodyprog/math/math.h"
 #include "bodyprog/screen/screen_data.h"
 #include "bodyprog/gfx/world.h"
@@ -25,10 +26,21 @@
 #include "sh_log.h"
 #include "stb_image.h"
 
+extern int Pc_BloodFogKeep(s32 z);
+
 #define DECAL_MAX       64
 #define DECAL_HALF      Q12(0.05f) /* quad half-extent (~5cm) */
 #define DECAL_OFFSET    Q12(0.02f) /* lift along the normal against z-fighting */
 #define DECAL_FLOOR_TOL Q12(0.15f) /* |impactY - floorY| for the FLOOR case (blood splats use the same) */
+
+/* Wall-blood splat quad: native floor-blood TIM cell + CLUT row + SUBTRACTIVE
+ * page (0x4B, the same page func_800611C0 draws floor blood with) + the same
+ * fog-tinted + fog-faded colour. All of it rides the prim, so orientation is
+ * the only wall-specific work (axisU/axisV on the sampled normal). */
+#define BLOOD_HALF       Q12(0.12f) /* splat half-extent (~12cm) */
+#define BLOOD_TPAGE      0x4B
+#define BLOOD_VBASE      224 /* mature-splat TIM row, as in func_800611C0 */
+#define BLOOD_FOG_BRIGHT 0x80 /* mature-splat brightness, as in func_800611C0 */
 
 /* Hires-override virtual pool slot reserved for the decal (Ipd_TexturesInit
  * excludes it from the chunk pool). UVs are TIM-native space: the override
@@ -71,6 +83,10 @@ typedef struct {
     VECTOR3 center; /* Q19.12 world, already offset along the normal */
     VECTOR3 axisU;  /* Q12 half-extent tangent */
     VECTOR3 axisV;  /* Q12 half-extent bitangent */
+    s32     isBlood;  /* 0 = bullet hole (decal.png), 1 = wall blood (native TIM) */
+    s32     clutRow;  /* blood TIM CLUT row (func_8005F55C mapping) */
+    s32     uvBase;   /* blood TIM U cell (0 or 32, the two func_800611C0 columns) */
+    s32     uvFlip;   /* bit 0 = mirror U, bit 1 = mirror V */
 } s_PcDecal;
 
 static s_PcDecal s_decals[DECAL_MAX];
@@ -85,6 +101,105 @@ static int            s_rgbaH         = 0;
 static int            s_texRegistered = 0;
 static int            s_texMissing    = 0; /* decal.png absent/broken — logged once, feature off */
 
+/* Frame a wall decal on the sampled wall plane: two parallel rays offset
+ * sideways from the shot span the wall's XZ heading so the quad lies flat ON
+ * the wall instead of tilting to face the shooter (which reads wrong on
+ * angled shots). Falls back to shooter-facing when a sample ray misses or
+ * lands on a different surface. Returns 0 on a near-vertical shot (no wall
+ * heading to face). `half` = Q12 quad half-extent. */
+static int Pc_DecalWallFrame(const VECTOR3* wallPos, const VECTOR3* dir, const VECTOR3* origin,
+                             s32 half, VECTOR3* centerOut, VECTOR3* axisUOut, VECTOR3* axisVOut)
+{
+    float fx  = (float)dir->vx;
+    float fz  = (float)dir->vz;
+    float mag = sqrtf(fx * fx + fz * fz);
+    s32   nx;
+    s32   nz;
+
+    if (mag < 1.0f)
+    {
+        return 0;
+    }
+
+    /* Unit shot heading (XZ) and its perpendicular, Q12. */
+    nx = (s32)(-fx * 4096.0f / mag);
+    nz = (s32)(-fz * 4096.0f / mag);
+
+    {
+        s32        px = Q12_MULT(-nz, Q12(0.25f)); /* sideways sample offset */
+        s32        pz = Q12_MULT(nx, Q12(0.25f));
+        s_RayTrace tr[2];
+        VECTOR3    h[2];
+        int        s;
+
+        for (s = 0; s < 2; s++)
+        {
+            s32     sgn = s ? -1 : 1;
+            VECTOR3 from;
+            VECTOR3 to;
+
+            from.vx = origin->vx + sgn * px;
+            from.vy = origin->vy;
+            from.vz = origin->vz + sgn * pz;
+            /* Aim past the wall so the sample definitely reaches it. */
+            to.vx = wallPos->vx + sgn * px - Q12_MULT(nx, Q12(0.5f));
+            to.vy = wallPos->vy;
+            to.vz = wallPos->vz + sgn * pz - Q12_MULT(nz, Q12(0.5f));
+
+            if (!Ray_TraceQuery(&tr[s], &from, &to) || tr[s].character != NULL)
+            {
+                break;
+            }
+            h[s] = tr[s].target;
+        }
+
+        if (s == 2)
+        {
+            float wx = (float)(h[1].vx - h[0].vx);
+            float wz = (float)(h[1].vz - h[0].vz);
+            float wm = sqrtf(wx * wx + wz * wz);
+
+            /* Degenerate span (corner/edge hit) -> keep the fallback. */
+            if (wm > 512.0f)
+            {
+                s32 wnx = (s32)(-wz * 4096.0f / wm);
+                s32 wnz = (s32)(wx * 4096.0f / wm);
+
+                /* Orient the wall normal back toward the shooter. */
+                if (Q12_MULT(wnx, nx) + Q12_MULT(wnz, nz) < 0)
+                {
+                    wnx = -wnx;
+                    wnz = -wnz;
+                }
+                nx = wnx;
+                nz = wnz;
+            }
+        }
+    }
+
+    centerOut->vx = wallPos->vx + Q12_MULT(nx, DECAL_OFFSET);
+    centerOut->vy = wallPos->vy;
+    centerOut->vz = wallPos->vz + Q12_MULT(nz, DECAL_OFFSET);
+
+    axisUOut->vx = Q12_MULT(nz, half); /* horizontal, along the wall */
+    axisUOut->vy = 0;
+    axisUOut->vz = Q12_MULT(-nx, half);
+    axisVOut->vx = 0;
+    axisVOut->vy = half; /* vertical (blood is blobby/radial: no "up" to respect) */
+    axisVOut->vz = 0;
+    return 1;
+}
+
+static void Pc_DecalPush(const s_PcDecal* d)
+{
+    s_decals[s_decalHead] = *d;
+    s_decalHead           = (s_decalHead + 1) % DECAL_MAX;
+    if (s_decalCount < DECAL_MAX)
+    {
+        s_decalCount++;
+    }
+}
+
 void Pc_DecalAddBulletImpact(const VECTOR3* pos, const VECTOR3* dir, const VECTOR3* origin)
 {
     s_CollisionSurface surf;
@@ -96,6 +211,7 @@ void Pc_DecalAddBulletImpact(const VECTOR3* pos, const VECTOR3* dir, const VECTO
     }
 
     d.center = *pos;
+    d.isBlood = 0;
 
     Collision_SurfaceGet(&surf, d.center.vx, d.center.vz);
     if (ABS(d.center.vy - surf.groundHeight) < DECAL_FLOOR_TOL)
@@ -112,98 +228,59 @@ void Pc_DecalAddBulletImpact(const VECTOR3* pos, const VECTOR3* dir, const VECTO
     else
     {
         /* WALL: SH1 collision carries no surface normals, so sample the wall
-         * plane with two parallel rays offset sideways from the shot — their
-         * clipped hit points span the wall's XZ heading, so the decal lies
-         * flat ON the wall instead of tilting to face the shooter (which read
-         * wrong on angled shots). Falls back to shooter-facing when a sample
-         * ray misses or lands on a different surface. */
-        float fx  = (float)dir->vx;
-        float fz  = (float)dir->vz;
-        float mag = sqrtf(fx * fx + fz * fz);
-        s32   nx;
-        s32   nz;
-        s32   planeOk = 0;
-
-        if (mag < 1.0f)
+         * plane (see Pc_DecalWallFrame). */
+        if (!Pc_DecalWallFrame(pos, dir, origin, DECAL_HALF, &d.center, &d.axisU, &d.axisV))
         {
-            return; /* near-vertical shot; no wall heading to face */
+            return;
         }
-
-        /* Unit shot heading (XZ) and its perpendicular, Q12. */
-        nx = (s32)(-fx * 4096.0f / mag);
-        nz = (s32)(-fz * 4096.0f / mag);
-
-        {
-            s32        px = Q12_MULT(-nz, Q12(0.25f)); /* sideways sample offset */
-            s32        pz = Q12_MULT(nx, Q12(0.25f));
-            s_RayTrace tr[2];
-            VECTOR3    h[2];
-            int        s;
-
-            for (s = 0; s < 2; s++)
-            {
-                s32     sgn = s ? -1 : 1;
-                VECTOR3 from;
-                VECTOR3 to;
-
-                from.vx = origin->vx + sgn * px;
-                from.vy = origin->vy;
-                from.vz = origin->vz + sgn * pz;
-                /* Aim past the wall so the sample definitely reaches it. */
-                to.vx = pos->vx + sgn * px - Q12_MULT(nx, Q12(0.5f));
-                to.vy = pos->vy;
-                to.vz = pos->vz + sgn * pz - Q12_MULT(nz, Q12(0.5f));
-
-                if (!Ray_TraceQuery(&tr[s], &from, &to) || tr[s].character != NULL)
-                {
-                    break;
-                }
-                h[s] = tr[s].target;
-            }
-
-            if (s == 2)
-            {
-                float wx = (float)(h[1].vx - h[0].vx);
-                float wz = (float)(h[1].vz - h[0].vz);
-                float wm = sqrtf(wx * wx + wz * wz);
-
-                /* Degenerate span (corner/edge hit) -> keep the fallback. */
-                if (wm > 512.0f)
-                {
-                    s32 wnx = (s32)(-wz * 4096.0f / wm);
-                    s32 wnz = (s32)(wx * 4096.0f / wm);
-
-                    /* Orient the wall normal back toward the shooter. */
-                    if (Q12_MULT(wnx, nx) + Q12_MULT(wnz, nz) < 0)
-                    {
-                        wnx = -wnx;
-                        wnz = -wnz;
-                    }
-                    nx      = wnx;
-                    nz      = wnz;
-                    planeOk = 1;
-                }
-            }
-        }
-        (void)planeOk;
-
-        d.center.vx += Q12_MULT(nx, DECAL_OFFSET);
-        d.center.vz += Q12_MULT(nz, DECAL_OFFSET);
-
-        d.axisU.vx = Q12_MULT(nz, DECAL_HALF); /* horizontal, along the wall */
-        d.axisU.vy = 0;
-        d.axisU.vz = Q12_MULT(-nx, DECAL_HALF);
-        d.axisV.vx = 0;
-        d.axisV.vy = DECAL_HALF; /* vertical */
-        d.axisV.vz = 0;
     }
 
-    s_decals[s_decalHead] = d;
-    s_decalHead           = (s_decalHead + 1) % DECAL_MAX;
-    if (s_decalCount < DECAL_MAX)
+    Pc_DecalPush(&d);
+}
+
+void Pc_DecalAddBloodWall(const VECTOR3* impact, const VECTOR3* dir, const VECTOR3* origin, s32 bloodType)
+{
+    s_CollisionSurface surf;
+    s_RayTrace         wallTr;
+    VECTOR3            from;
+    VECTOR3            to;
+    s_PcDecal          d;
+
+    if (!g_PcConfig.bloodWallDecals)
     {
-        s_decalCount++;
+        return;
     }
+
+    /* Continue the shot ray past the enemy to the wall behind it. `dir`
+     * already spans the full bullet range, so a wall the bullet could reach
+     * is always within this segment. */
+    from = *impact;
+    to.vx = impact->vx + dir->vx;
+    to.vy = impact->vy + dir->vy;
+    to.vz = impact->vz + dir->vz;
+    if (!Ray_TraceQuery(&wallTr, &from, &to) || wallTr.character != NULL)
+    {
+        return;
+    }
+
+    /* Floor-level hits belong to the floor blood system. */
+    Collision_SurfaceGet(&surf, wallTr.target.vx, wallTr.target.vz);
+    if (ABS(wallTr.target.vy - surf.groundHeight) < DECAL_FLOOR_TOL)
+    {
+        return;
+    }
+
+    if (!Pc_DecalWallFrame(&wallTr.target, dir, origin, BLOOD_HALF, &d.center, &d.axisU, &d.axisV))
+    {
+        return;
+    }
+
+    d.isBlood = 1;
+    d.clutRow = func_8005F55C(bloodType);
+    d.uvBase  = (rand() & 1) ? 32 : 0;
+    d.uvFlip  = rand() & 3;
+
+    Pc_DecalPush(&d);
 }
 
 /* Register the PNG into the reserved pool slot. Called from the draw path so
@@ -275,14 +352,33 @@ void Pc_DecalsDraw(GsOT* ot)
 {
     POLY_FT4* poly;
     int       i;
+    int       showBullet;
+    int       showBlood;
+    int       texOk = 0;
 
-    if (!g_PcConfig.bulletDecals || s_decalCount == 0)
+    showBullet = g_PcConfig.bulletDecals;
+    showBlood  = g_PcConfig.bloodWallDecals;
+    if ((!showBullet && !showBlood) || s_decalCount == 0)
     {
         return;
     }
-    if (!Pc_DecalEnsureTexture())
+    if (showBullet)
     {
-        return;
+        int hasBullet = 0;
+
+        for (i = 0; i < s_decalCount; i++)
+        {
+            if (!s_decals[i].isBlood)
+            {
+                hasBullet = 1;
+                break;
+            }
+        }
+        /* Native-TIM blood needs no PNG; only gate the bullet holes on it. */
+        if (hasBullet)
+        {
+            texOk = Pc_DecalEnsureTexture();
+        }
     }
 
     poly = (POLY_FT4*)GsOUT_PACKET_P;
@@ -363,6 +459,66 @@ void Pc_DecalsDraw(GsOT* ot)
         if (bucket >= ORDERING_TABLE_SIZE)
         {
             bucket = ORDERING_TABLE_SIZE - 1;
+        }
+
+        if (d->isBlood)
+        {
+            /* Wall blood: the floor-blood prim (func_800611C0) on a wall
+             * frame — native TIM cell + SUBTRACTIVE page + fog-tinted colour
+             * faded to black at the world's own rate (both blend modes vanish
+             * as their source goes to zero, as PC_BLOOD_FOG_FADE notes). */
+            CVECTOR c0;
+            CVECTOR c1;
+            int     keep;
+            int     u0;
+            int     u1;
+            int     v0;
+            int     v1;
+
+            if (!showBlood)
+            {
+                continue;
+            }
+
+            /* bucketSum IS the average corner SZ (each otz is SZ >> 2), the
+             * same depth measure the floor blood passes in. */
+            func_80055A90(&c0, &c1, BLOOD_FOG_BRIGHT, bucketSum * 16);
+            keep = Pc_BloodFogKeep(bucketSum);
+            if (keep <= 0)
+            {
+                continue;
+            }
+            c0.r = (u8)(((int)c0.r * keep) >> 8);
+            c0.g = (u8)(((int)c0.g * keep) >> 8);
+            c0.b = (u8)(((int)c0.b * keep) >> 8);
+
+            setPolyFT4(poly);
+            setSemiTrans(poly, true);
+            setRGB0(poly, c0.r, c0.g, c0.b);
+            poly->tpage = BLOOD_TPAGE;
+            poly->clut  = (u16)(((d->clutRow << 6)) | 0x13);
+            u0 = (d->uvFlip & 1) ? d->uvBase + DECAL_UV_MAX : d->uvBase;
+            u1 = (d->uvFlip & 1) ? d->uvBase : d->uvBase + DECAL_UV_MAX;
+            v0 = (d->uvFlip & 2) ? BLOOD_VBASE + DECAL_UV_MAX : BLOOD_VBASE;
+            v1 = (d->uvFlip & 2) ? BLOOD_VBASE : BLOOD_VBASE + DECAL_UV_MAX;
+            poly->u0 = (u8)u0;
+            poly->v0 = (u8)v0;
+            poly->u1 = (u8)u1;
+            poly->v1 = (u8)v0;
+            poly->u2 = (u8)u0;
+            poly->v2 = (u8)v1;
+            poly->u3 = (u8)u1;
+            poly->v3 = (u8)v1;
+            setXY4(poly, sx[0], sy[0], sx[1], sy[1], sx[2], sy[2], sx[3], sy[3]);
+
+            addPrim(&ot->org[bucket], poly);
+            poly++;
+            continue;
+        }
+
+        if (!showBullet || !texOk)
+        {
+            continue;
         }
 
         /* Fully fogged: stop drawing entirely, the way PSX drops world polys

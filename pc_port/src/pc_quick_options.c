@@ -44,14 +44,31 @@ extern int         PcOpt_QuickRealtime(const void* h);
  * enum there -- these are indices into its switch, nothing more. */
 enum { QO_X_SHADOW = 0, QO_X_SPEAKERS, QO_X_BGM, QO_X_SFX,
        QO_X_ASPECT, QO_X_CRTTRIM, QO_X_HFOV, QO_X_VFOV, QO_X_PAR, QO_X_VSHIFT,
-       QO_X_CUTSHIFT };
+       QO_X_CUTSHIFT, QO_X_AMMOHUD, QO_X_AUTORELOAD,
+       QO_X_DPAD_ON, QO_X_DPAD_UP, QO_X_DPAD_DOWN, QO_X_DPAD_LEFT, QO_X_DPAD_RIGHT,
+       QO_X_QUICKHEAL, QO_X_TOASTBG, QO_X_HEALFLASH,
+       QO_X_AIMCAM, QO_X_TRWEAPON, QO_X_TRHEAL, QO_X_TRMELEE, QO_X_IMMWEAPONS, QO_X_IMMFEAR, QO_X_IMMBLOOD, QO_X_IMMFLICKER, QO_X_MANRELOAD,
+       QO_X_DIFFAMMO, QO_X_DIFFHEALS, QO_X_DIFFENEMY, QO_X_HPBARS,
+       QO_X_HHSTYLE, QO_X_HHNUMBER, QO_X_HHCORNER, QO_X_HHSCALE, QO_X_HHOPACITY, QO_X_HHALWAYS, QO_X_HHHUD,
+       QO_X_MELEEAIMWALK,
+       QO_X_SHHURT, QO_X_SHFIRE, QO_X_SHDEALT, QO_X_SHHURTI, QO_X_SHFIREI, QO_X_SHDEALTI,
+       QO_X_HITMARKER, QO_X_KILLFLASH, QO_X_KILLMODE,
+       QO_X_LOWOP, QO_X_HURTFLASH, QO_X_HURTOP };
 extern const char* PcOpt_QuickExtraLabel(int which, char* buf, int bufsz);
 extern void        PcOpt_QuickExtraAdjust(int which, int dir);
 extern void        PcOpt_QuickViewReset(void);
+extern const char* PcOpt_TrainerWeaponLabel(char* buf, int bufsz);
+extern const char* PcOpt_TrainerHealLabel(char* buf, int bufsz);
+extern void        PcOpt_TrainerWeaponStep(int dir);
+extern void        PcOpt_TrainerHealStep(int dir);
+extern void        PcOpt_TrainerMeleeStep(int dir);
+extern void        PcOpt_TrainerGiveWeapon(void);
+extern void        PcOpt_TrainerGiveHeal(void);
+extern void        PcOpt_TrainerGiveMelee(void);
 
 #define QO_GARBAGE  48
-#define QO_MAX_ROWS 16
-#define QO_PAGES    5
+#define QO_MAX_ROWS 19
+#define QO_PAGES    11
 #define QO_DD_MAX     64  /* dropdown entries cached */
 #define QO_DD_VISIBLE 8
 
@@ -62,15 +79,15 @@ extern void        PcOpt_QuickViewReset(void);
 /* ROW_ACTION fires from Confirm/click ONLY -- unlike every other row kind,
  * Left/Right must not trigger it, or scrolling past "Reset View Settings"
  * with the arrows would undo the player's tuning. */
-enum { ROW_OPT = 0, ROW_EXTRA, ROW_PAGE, ROW_CLOSE, ROW_CHEAT, ROW_ACTION };
-enum { QO_A_VIEWRESET = 0 };
+enum { ROW_OPT = 0, ROW_EXTRA, ROW_PAGE, ROW_PREV, ROW_CLOSE, ROW_CHEAT, ROW_ACTION };
+enum { QO_A_VIEWRESET = 0, QO_A_GIVEWEAPON, QO_A_GIVEHEAL, QO_A_GIVEMELEE };
 
 typedef struct
 {
     int         kind;   /* ROW_* */
     const char* key;    /* ROW_OPT: config key looked up in options.c */
     int         extra;  /* ROW_EXTRA: QO_X_*; ROW_CHEAT: row index */
-    const char* label;  /* ROW_EXTRA / ROW_PAGE / ROW_CLOSE display name */
+    const char* label;  /* ROW_EXTRA / ROW_PAGE / ROW_PREV / ROW_CLOSE display name */
     int         cpage;  /* ROW_CHEAT: PC_CHEATS_PAGE_* */
 } QoRowDef;
 
@@ -87,6 +104,8 @@ static const QoRowDef s_page0[] = {
     { ROW_OPT,   "flashlight_size",      0, NULL },
     { ROW_EXTRA, NULL, QO_X_SHADOW,         "Shadow Resolution" },
     { ROW_OPT,   "bullet_decals",        0, NULL },
+    { ROW_EXTRA, NULL, QO_X_HPBARS,         "Enemy HP Bars" },
+    { ROW_PREV,  NULL, 0,                   "Prev page  (Visual Feedback)" },
     { ROW_PAGE,  NULL, 0,                   "Next page  (HUD & Audio)" },
     { ROW_CLOSE, NULL, 0,                   "Close" },
 };
@@ -98,12 +117,99 @@ static const QoRowDef s_page1[] = {
     { ROW_OPT,   "minimap_opacity",      0, NULL },
     { ROW_OPT,   "minimap_require_map",  0, NULL },
     { ROW_OPT,   "crosshair",            0, NULL },
-    { ROW_OPT,   "low_health_glow",      0, NULL },
+    { ROW_OPT,   "item_toast_corner",  0, NULL },
+    { ROW_OPT,   "item_toast_scale",   0, NULL },
+    { ROW_OPT,   "item_toast_opacity", 0, NULL },
     { ROW_EXTRA, NULL, QO_X_SPEAKERS,       "Speaker Layout" },
     { ROW_EXTRA, NULL, QO_X_BGM,            "Music Volume" },
     { ROW_EXTRA, NULL, QO_X_SFX,            "Effects Volume" },
     { ROW_OPT,   "fmv_volume",           0, NULL },
+    { ROW_PREV,  NULL, 0,                   "Prev page  (Graphics)" },
+    { ROW_PAGE,  NULL, 0,                   "Next page  (HUD 2)" },
+    { ROW_CLOSE, NULL, 0,                   "Close" },
+};
+
+static const QoRowDef s_pageHud2[] = {
+    { ROW_OPT,   "ammo_corner",    0, NULL },
+    { ROW_OPT,   "ammo_scale",     0, NULL },
+    { ROW_OPT,   "ammo_opacity",   0, NULL },
+    { ROW_OPT,   "ammo_always",    0, NULL },
+    { ROW_EXTRA, NULL, QO_X_AMMOHUD,     "Ammo HUD" },
+    { ROW_EXTRA, NULL, QO_X_AUTORELOAD,  "Auto Reload" },
+    { ROW_EXTRA, NULL, QO_X_MANRELOAD,   "Manual Reload" },
+    { ROW_EXTRA, NULL, QO_X_DPAD_ON,     "D-Pad Weapons" },
+    { ROW_EXTRA, NULL, QO_X_DPAD_UP,     "D-Pad Up" },
+    { ROW_EXTRA, NULL, QO_X_DPAD_DOWN,   "D-Pad Down" },
+    { ROW_EXTRA, NULL, QO_X_DPAD_LEFT,   "D-Pad Left" },
+    { ROW_EXTRA, NULL, QO_X_DPAD_RIGHT,  "D-Pad Right" },
+    { ROW_EXTRA, NULL, QO_X_QUICKHEAL,   "Quick Heal" },
+    { ROW_EXTRA, NULL, QO_X_TOASTBG,     "Toast Background" },
+    { ROW_PREV,  NULL, 0,                   "Prev page  (HUD & Audio)" },
     { ROW_PAGE,  NULL, 0,                   "Next page  (View)" },
+    { ROW_CLOSE, NULL, 0,                   "Close" },
+};
+
+static const QoRowDef s_pageTrainer[] = {
+    { ROW_EXTRA,  NULL, QO_X_TRWEAPON,    "Weapon" },
+    { ROW_ACTION, NULL, QO_A_GIVEWEAPON,  "Give Weapon + Ammo" },
+    { ROW_EXTRA,  NULL, QO_X_TRMELEE,     "Melee" },
+    { ROW_ACTION, NULL, QO_A_GIVEMELEE,   "Give Melee" },
+    { ROW_EXTRA,  NULL, QO_X_TRHEAL,      "Heal" },
+    { ROW_ACTION, NULL, QO_A_GIVEHEAL,    "Give Heals x3" },
+    { ROW_PREV,   NULL, 0,                   "Prev page  (Debug)" },
+    { ROW_PAGE,   NULL, 0,                   "Next page  (Immersion)" },
+    { ROW_CLOSE, NULL, 0,                   "Close" },
+};
+
+static const QoRowDef s_pageImmersion[] = {
+    { ROW_EXTRA,  NULL, QO_X_IMMWEAPONS,  "Weapon Immersion" },
+    { ROW_EXTRA,  NULL, QO_X_IMMFEAR,     "Fear Panting" },
+    { ROW_EXTRA,  NULL, QO_X_IMMBLOOD,    "Blood Walls" },
+    { ROW_EXTRA,  NULL, QO_X_IMMFLICKER,   "Flicker" },
+    { ROW_PREV,   NULL, 0,                   "Prev page  (Trainer)" },
+    { ROW_PAGE,   NULL, 0,                   "Next page  (Difficulty)" },
+    { ROW_CLOSE, NULL, 0,                   "Close" },
+};
+
+static const QoRowDef s_pageDifficulty[] = {
+    { ROW_EXTRA,  NULL, QO_X_DIFFAMMO,    "Ammo" },
+    { ROW_EXTRA,  NULL, QO_X_DIFFHEALS,   "Heals" },
+    { ROW_EXTRA,  NULL, QO_X_DIFFENEMY,   "Enemy Damage" },
+    { ROW_PREV,   NULL, 0,                   "Prev page  (Immersion)" },
+    { ROW_PAGE,   NULL, 0,                   "Next page  (Health)" },
+    { ROW_CLOSE, NULL, 0,                   "Close" },
+};
+
+static const QoRowDef s_pageHealth[] = {
+    { ROW_EXTRA,  NULL, QO_X_HHHUD,        "Health HUD" },
+    { ROW_EXTRA,  NULL, QO_X_HHSTYLE,     "Style" },
+    { ROW_EXTRA,  NULL, QO_X_HHNUMBER,    "Number" },
+    { ROW_EXTRA,  NULL, QO_X_HHCORNER,    "Corner" },
+    { ROW_EXTRA,  NULL, QO_X_HHSCALE,     "Scale" },
+    { ROW_EXTRA,  NULL, QO_X_HHOPACITY,   "Opacity" },
+    { ROW_EXTRA,  NULL, QO_X_HHALWAYS,    "Always Show" },
+    { ROW_PREV,   NULL, 0,                   "Prev page  (Difficulty)" },
+    { ROW_PAGE,   NULL, 0,                   "Next page  (Visual Feedback)" },
+    { ROW_CLOSE, NULL, 0,                   "Close" },
+};
+
+static const QoRowDef s_pageShake[] = {
+    { ROW_EXTRA,  NULL, QO_X_SHHURT,      "Hurt Kick" },
+    { ROW_EXTRA,  NULL, QO_X_SHHURTI,     "Hurt Strength" },
+    { ROW_EXTRA,  NULL, QO_X_SHFIRE,      "Fire Kick" },
+    { ROW_EXTRA,  NULL, QO_X_SHFIREI,     "Fire Strength" },
+    { ROW_EXTRA,  NULL, QO_X_SHDEALT,     "Dealt Kick" },
+    { ROW_EXTRA,  NULL, QO_X_SHDEALTI,    "Dealt Strength" },
+    { ROW_EXTRA,  NULL, QO_X_HITMARKER,   "Hitmarker" },
+    { ROW_EXTRA,  NULL, QO_X_KILLFLASH,   "Kill Flash" },
+    { ROW_EXTRA,  NULL, QO_X_KILLMODE,    "Flash Style" },
+    { ROW_EXTRA,  NULL, QO_X_HEALFLASH,   "Heal Flash" },
+    { ROW_OPT,   "low_health_glow",      0, NULL },
+    { ROW_EXTRA,  NULL, QO_X_LOWOP,       "Low Opacity" },
+    { ROW_EXTRA,  NULL, QO_X_HURTFLASH,   "Hurt Flash" },
+    { ROW_EXTRA,  NULL, QO_X_HURTOP,      "Hurt Opacity" },
+    { ROW_PREV,   NULL, 0,                   "Prev page  (Health)" },
+    { ROW_PAGE,   NULL, 0,                   "Next page  (Graphics)" },
     { ROW_CLOSE, NULL, 0,                   "Close" },
 };
 
@@ -121,17 +227,22 @@ static const QoRowDef s_page1[] = {
  * it zooms both axes together with the shape held fixed. */
 static const QoRowDef s_page2Simple[] = {
     { ROW_EXTRA,  NULL, QO_X_ASPECT,       "Control Type" },
+    { ROW_EXTRA,  NULL, QO_X_AIMCAM,       "Aim Camera" },
+    { ROW_EXTRA,  NULL, QO_X_MELEEAIMWALK, "Melee Aim Walk" },
     { ROW_EXTRA,  NULL, QO_X_CRTTRIM,      "Aspect Trim" },
     { ROW_EXTRA,  NULL, QO_X_VFOV,         "FOV" },
     { ROW_EXTRA,  NULL, QO_X_VSHIFT,       "Vertical Shift" },
     { ROW_EXTRA,  NULL, QO_X_CUTSHIFT,     "Cutscene Shift" },
     { ROW_ACTION, NULL, QO_A_VIEWRESET,    "Reset View Settings" },
+    { ROW_PREV,   NULL, 0,                 "Prev page  (HUD 2)" },
     { ROW_PAGE,   NULL, 0,                 "Next page  (Cheats)" },
-    { ROW_CLOSE,  NULL, 0,                 "Close" },
+    { ROW_CLOSE, NULL, 0,                 "Close" },
 };
 
 static const QoRowDef s_page2Advanced[] = {
     { ROW_EXTRA,  NULL, QO_X_ASPECT,       "Control Type" },
+    { ROW_EXTRA,  NULL, QO_X_AIMCAM,       "Aim Camera" },
+    { ROW_EXTRA,  NULL, QO_X_MELEEAIMWALK, "Melee Aim Walk" },
     { ROW_EXTRA,  NULL, QO_X_CRTTRIM,      "Aspect Trim" },
     { ROW_EXTRA,  NULL, QO_X_HFOV,         "Horizontal FOV" },
     { ROW_EXTRA,  NULL, QO_X_VFOV,         "Vertical FOV" },
@@ -139,8 +250,9 @@ static const QoRowDef s_page2Advanced[] = {
     { ROW_EXTRA,  NULL, QO_X_CUTSHIFT,     "Cutscene Shift" },
     { ROW_EXTRA,  NULL, QO_X_PAR,          "Pixel Aspect" },
     { ROW_ACTION, NULL, QO_A_VIEWRESET,    "Reset View Settings" },
+    { ROW_PREV,   NULL, 0,                 "Prev page  (HUD 2)" },
     { ROW_PAGE,   NULL, 0,                 "Next page  (Cheats)" },
-    { ROW_CLOSE,  NULL, 0,                 "Close" },
+    { ROW_CLOSE, NULL, 0,                 "Close" },
 };
 
 /* Set when the row SET changes under the cached text (a Control Type switch,
@@ -168,12 +280,12 @@ static const QoRowDef* qo_view_page(int* count)
 static QoRowDef s_cheatRows[2][QO_MAX_ROWS];
 static int      s_cheatRowCount[2];
 
-static const QoRowDef* qo_cheat_page(int cpage, const char* nextLabel, int* count)
+static const QoRowDef* qo_cheat_page(int cpage, const char* prevLabel, const char* nextLabel, int* count)
 {
     if (s_cheatRowCount[cpage] == 0)
     {
         int n = Pc_Cheats_Count(cpage), i, k = 0;
-        if (n > QO_MAX_ROWS - 2) n = QO_MAX_ROWS - 2;
+        if (n > QO_MAX_ROWS - 3) n = QO_MAX_ROWS - 3;
         for (i = 0; i < n; i++)
         {
             s_cheatRows[cpage][k].kind  = ROW_CHEAT;
@@ -183,6 +295,7 @@ static const QoRowDef* qo_cheat_page(int cpage, const char* nextLabel, int* coun
             s_cheatRows[cpage][k].cpage = cpage;
             k++;
         }
+        s_cheatRows[cpage][k].kind = ROW_PREV;  s_cheatRows[cpage][k].label = prevLabel; k++;
         s_cheatRows[cpage][k].kind = ROW_PAGE;  s_cheatRows[cpage][k].label = nextLabel; k++;
         s_cheatRows[cpage][k].kind = ROW_CLOSE; s_cheatRows[cpage][k].label = "Close";   k++;
         s_cheatRowCount[cpage] = k;
@@ -194,17 +307,26 @@ static const QoRowDef* qo_cheat_page(int cpage, const char* nextLabel, int* coun
 static const QoRowDef* qo_page_rows(int page, int* count)
 {
     if (page == 1) { *count = (int)(sizeof(s_page1) / sizeof(s_page1[0])); return s_page1; }
-    if (page == 2) return qo_view_page(count);
-    if (page == 3) return qo_cheat_page(PC_CHEATS_PAGE_CHEATS, "Next page  (Debug)",    count);
-    if (page == 4) return qo_cheat_page(PC_CHEATS_PAGE_DEBUG,  "Next page  (Graphics)", count);
+    if (page == 2) { *count = (int)(sizeof(s_pageHud2) / sizeof(s_pageHud2[0])); return s_pageHud2; }
+    if (page == 3) return qo_view_page(count);
+    if (page == 4) return qo_cheat_page(PC_CHEATS_PAGE_CHEATS, "Prev page  (View)", "Next page  (Debug)",    count);
+    if (page == 5) return qo_cheat_page(PC_CHEATS_PAGE_DEBUG,  "Prev page  (Cheats)", "Next page  (Trainer)", count);
+    if (page == 6) { *count = (int)(sizeof(s_pageTrainer) / sizeof(s_pageTrainer[0])); return s_pageTrainer; }
+    if (page == 7) { *count = (int)(sizeof(s_pageImmersion) / sizeof(s_pageImmersion[0])); return s_pageImmersion; }
+    if (page == 8) { *count = (int)(sizeof(s_pageDifficulty) / sizeof(s_pageDifficulty[0])); return s_pageDifficulty; }
+    if (page == 9) { *count = (int)(sizeof(s_pageHealth) / sizeof(s_pageHealth[0])); return s_pageHealth; }
+    if (page == 10) { *count = (int)(sizeof(s_pageShake) / sizeof(s_pageShake[0])); return s_pageShake; }
     *count = (int)(sizeof(s_page0) / sizeof(s_page0[0]));
     return s_page0;
 }
 
 static const char* const s_pageTitles[QO_PAGES] = {
     "QUICK OPTIONS  -  GRAPHICS", "QUICK OPTIONS  -  HUD & AUDIO",
-    "QUICK OPTIONS  -  VIEW & ASPECT",
-    "QUICK OPTIONS  -  CHEATS",   "QUICK OPTIONS  -  DEBUG" };
+    "QUICK OPTIONS  -  HUD 2",     "QUICK OPTIONS  -  VIEW & ASPECT",
+    "QUICK OPTIONS  -  CHEATS",   "QUICK OPTIONS  -  DEBUG",
+    "QUICK OPTIONS  -  TRAINER", "QUICK OPTIONS  -  IMMERSION",
+    "QUICK OPTIONS  -  DIFFICULTY", "QUICK OPTIONS  -  HEALTH",
+    "QUICK OPTIONS  -  VISUAL FEEDBACK" };
 
 /* ------------------------------------------------------------------ */
 /* State                                                               */
@@ -247,6 +369,16 @@ static int    s_valueW[QO_MAX_ROWS], s_valueH[QO_MAX_ROWS];
 static char   s_valueText[QO_MAX_ROWS][48];
 static int    s_bakedForPx;
 static int    s_bakedForPage = -1;
+
+/* Description panel (right-side help): baked wrapped lines for the selected
+ * row, re-baked when selection, page or language changes. */
+#define QO_DESC_LINES 8
+#define QO_DESC_WRAP  44
+static GLuint s_texDesc[QO_DESC_LINES];
+static int    s_descW[QO_DESC_LINES], s_descH[QO_DESC_LINES];
+static int    s_descN = 0;
+static int    s_descSel = -1, s_descPage = -1, s_descLang = -1, s_descWrap = -1;
+static int    s_descMaxW = 0;
 
 /* Geometry published by Draw for Update's mouse hit-test (viewport px, y up). */
 static float s_vpW = 1920.0f, s_vpH = 1080.0f;
@@ -920,6 +1052,12 @@ static void qo_free_text(void)
     s_texCursor = 0; /* re-uploaded on the next draw */
     qo_retire(s_texTitle); s_texTitle = 0;
     qo_retire(s_texHint);  s_texHint  = 0;
+    for (i = 0; i < QO_DESC_LINES; i++)
+    {
+        qo_retire(s_texDesc[i]); s_texDesc[i] = 0;
+    }
+    s_descN = 0;
+    s_descSel = -1; s_descPage = -1; s_descLang = -1; s_descWrap = -1; s_descMaxW = 0;
     for (i = 0; i < QO_MAX_ROWS; i++)
     {
         qo_retire(s_texLabel[i]); s_texLabel[i] = 0;
@@ -1092,6 +1230,397 @@ static void qo_row_value(const QoRowDef* r, char* out, int n)
 }
 
 /* ------------------------------------------------------------------ */
+/* Row descriptions (right-side help panel)                             */
+/* ------------------------------------------------------------------ */
+
+/* One entry per row, keyed by (kind, key/extra) — plus (cpage, extra) for
+ * cheat rows. Copy lives in pc_port/docs/Quick_Options_Reference.md (ES) and
+ * Quick_Options_Reference_EN.md; keep this table in step when rows change.
+ * Spanish when language == 3, else English. */
+typedef struct
+{
+    int         kind;
+    const char* key;    /* ROW_OPT: config key */
+    int         extra;  /* ROW_EXTRA / ROW_ACTION: QO_X_* / QO_A_* */
+    int         cpage;  /* ROW_CHEAT: PC_CHEATS_PAGE_* */
+    const char* en;
+    const char* es;
+} QoDesc;
+
+#define QO_DK(k_, key_, en_, es_)            { (k_), (key_), -1, -1, (en_), (es_) }
+#define QO_DX(x_, en_, es_)                  { ROW_EXTRA, NULL, (x_), -1, (en_), (es_) }
+#define QO_DA(a_, en_, es_)                  { ROW_ACTION, NULL, (a_), -1, (en_), (es_) }
+#define QO_DC(c_, x_, en_, es_)              { ROW_CHEAT, NULL, (x_), (c_), (en_), (es_) }
+
+static const QoDesc s_descs[] = {
+    /* GRAPHICS */
+    QO_DK(ROW_OPT, "psx_dither", "Texture filtering. Dither is the PSX-faithful look.",
+        "Filtrado de texturas. Dither es el aspecto fiel a PSX."),
+    QO_DK(ROW_OPT, "msaa", "Edge smoothing. Requires restarting the game (marked with *).",
+        "Suavizado de bordes. Requiere reiniciar el juego (marcado con *)."),
+    QO_DK(ROW_OPT, "post_process", "Fullscreen image filter: CRT, scanlines, vignette, grade, grain, sharpen, retro or cinematic.",
+        "Filtro de imagen a pantalla completa: CRT, scanlines, viñeta, grado, grano, nitidez, retro o cinemático."),
+    QO_DK(ROW_OPT, "tonemap", "Final image tone mapping: Reinhard, ACES or Filmic.",
+        "Mapeo de tonos de la imagen final: Reinhard, ACES o Filmic."),
+    QO_DK(ROW_OPT, "fog_strength", "Fog density. 1.1 matches the PSX; lowering it lets you see further.",
+        "Densidad de la niebla. 1.1 equivale a la PSX; bajarlo permite ver más lejos."),
+    QO_DK(ROW_OPT, "flashlight_mode", "Classic is the original per-vertex flashlight; Modern is a stylized per-pixel spotlight, with or without real-time shadows.",
+        "Classic es la linterna original por vértices; Modern es un foco estilizado por píxel, con o sin sombras en tiempo real."),
+    QO_DK(ROW_OPT, "flashlight_intensity", "Flashlight cone brightness, 0 to 3.",
+        "Brillo del cono de la linterna, 0 a 3."),
+    QO_DK(ROW_OPT, "flashlight_size", "Flashlight cone coverage, 0 to 3.",
+        "Cobertura del cono de la linterna, 0 a 3."),
+    QO_DX(QO_X_SHADOW, "Flashlight shadow-map resolution, 256 to 8192. Higher means sharper shadows at a higher performance cost.",
+        "Resolución del mapa de sombras de la linterna, 256 a 8192. Más alto = sombras más nítidas y más costoso para el rendimiento."),
+    QO_DK(ROW_OPT, "bullet_decals", "Bullet marks where the player's shots land, up to 64, cleared on map change.",
+        "Marcas de bala donde los disparos del jugador impactan, hasta 64, se borran al cambiar de mapa."),
+    QO_DX(QO_X_HPBARS, "Red health bars over live enemies in view within 12 m. Not visible through walls.",
+        "Barras rojas de vida sobre enemigos vivos a la vista y a menos de 12 m. No se ven a través de paredes."),
+    /* HUD & AUDIO */
+    QO_DK(ROW_OPT, "minimap", "On-screen minimap, square or circular.",
+        "Minimapa en pantalla con estilos cuadrado y circular."),
+    QO_DK(ROW_OPT, "minimap_scale", "Minimap size, 60 to 120 percent.",
+        "Tamaño del minimapa, 60 a 120 %."),
+    QO_DK(ROW_OPT, "minimap_corner", "Minimap screen corner.",
+        "Esquina del minimapa."),
+    QO_DK(ROW_OPT, "minimap_opacity", "Minimap opacity, 0 to 100 percent.",
+        "Opacidad del minimapa, 0 a 100 %."),
+    QO_DK(ROW_OPT, "minimap_require_map", "Only draws the minimap once Harry has found the area's paper map.",
+        "Solo dibuja el minimapa si Harry ya encontró el mapa de papel de la zona."),
+    QO_DK(ROW_OPT, "crosshair", "Crosshair while aiming in TPS/OTS; always visible in first person.",
+        "Mirilla al apuntar en TPS/OTS; siempre visible en primera persona."),
+    QO_DK(ROW_OPT, "low_health_glow", "Pulsing red edge glow at low health.",
+        "Resplandor rojo pulsante en los bordes con vida baja."),
+    QO_DK(ROW_OPT, "item_toast_corner", "Pickup toast corner.",
+        "Esquina de los avisos de objetos."),
+    QO_DK(ROW_OPT, "item_toast_scale", "Pickup toast size, 60 to 130 percent.",
+        "Tamaño de los avisos, 60 a 130 %."),
+    QO_DK(ROW_OPT, "item_toast_opacity", "Pickup toast opacity, 20 to 100 percent. Toasts cover pickups and used heals; the sound can be customized from the launcher.",
+        "Opacidad de los avisos, 20 a 100 %. Cubren objetos recogidos o curas utilizadas. El sonido de la notificación puede personalizarse desde el launcher."),
+    QO_DX(QO_X_SPEAKERS, "Speaker setup: Auto, Stereo, Quad, 5.1 or 7.1.",
+        "Configuración de altavoces: Auto, Stereo, Quad, 5.1 o 7.1."),
+    QO_DX(QO_X_BGM, "Music volume, 0 to 16.",
+        "Volumen de la música, 0 a 16."),
+    QO_DX(QO_X_SFX, "Effects volume, 0 to 16.",
+        "Volumen de los efectos, 0 a 16."),
+    QO_DK(ROW_OPT, "fmv_volume", "Movie cutscene volume, 0 to 1.",
+        "Volumen de las cinemáticas de vídeo, 0 a 1."),
+    /* HUD 2 */
+    QO_DK(ROW_OPT, "ammo_corner", "Ammo counter corner.",
+        "Esquina del contador de munición."),
+    QO_DK(ROW_OPT, "ammo_scale", "Ammo counter size, 60 to 130 percent.",
+        "Tamaño del contador, 60 a 130 %."),
+    QO_DK(ROW_OPT, "ammo_opacity", "Ammo counter opacity, 20 to 100 percent.",
+        "Opacidad del contador, 20 a 100 %."),
+    QO_DK(ROW_OPT, "ammo_always", "Counter stays up with a firearm equipped; if not, only while aiming.",
+        "El contador queda visible con arma de fuego equipada; si no, solo al apuntar."),
+    QO_DX(QO_X_AMMOHUD, "Master switch for the ammo counter.",
+        "Interruptor general del contador."),
+    QO_DX(QO_X_AUTORELOAD, "Animated auto reload on empty magazine with reserve left.",
+        "Recarga automática con animación al vaciar el cargador habiendo reserva."),
+    QO_DX(QO_X_MANRELOAD, "The R key / Square-X button reloads the aimed weapon when it accepts a reload.",
+        "La tecla R / botón Cuadrado/X recarga el arma apuntando si admite recarga."),
+    QO_DX(QO_X_DPAD_ON, "The controller D-pad picks weapons instead of moving. They can also be assigned from the inventory.",
+        "La cruceta del mando elige armas en vez de mover. También se pueden asignar desde el inventario."),
+    QO_DX(QO_X_DPAD_UP, "Weapon bound Up: a weapon or None. Binding a weapon held elsewhere swaps them.",
+        "Arma asignada arriba: un arma o None. Asignar un arma ocupada en otra dirección las intercambia."),
+    QO_DX(QO_X_DPAD_DOWN, "Weapon bound Down: a weapon or None. Binding a weapon held elsewhere swaps them.",
+        "Arma asignada abajo: un arma o None. Asignar un arma ocupada en otra dirección las intercambia."),
+    QO_DX(QO_X_DPAD_LEFT, "Weapon bound Left: a weapon or None. Binding a weapon held elsewhere swaps them.",
+        "Arma asignada a la izquierda: un arma o None. Asignar un arma ocupada en otra dirección las intercambia."),
+    QO_DX(QO_X_DPAD_RIGHT, "Weapon bound Right: a weapon or None. Binding a weapon held elsewhere swaps them.",
+        "Arma asignada a la derecha: un arma o None. Asignar un arma ocupada en otra dirección las intercambia."),
+    QO_DX(QO_X_QUICKHEAL, "Fast heal with the best item available. Uses L3.",
+        "Curación rápida con el mejor objeto disponible. Utiliza L3."),
+    QO_DX(QO_X_TOASTBG, "Toast background opacity, 0 to 100 percent.",
+        "Opacidad del fondo de los avisos, 0 a 100 %."),
+    QO_DX(QO_X_HEALFLASH, "Green flash intensity when healing; 0 disables it.",
+        "Intensidad del destello verde al curarse; 0 lo desactiva."),
+    /* VIEW & ASPECT */
+    QO_DX(QO_X_ASPECT, "Picture-shape controls. Simple uses Aspect Trim; Advanced uses Horizontal/Vertical FOV and Pixel Aspect.",
+        "Controles de forma de imagen. Simple usa Aspect Trim; Advanced usa Horizontal/Vertical FOV y Pixel Aspect."),
+    QO_DX(QO_X_AIMCAM, "Lets you use a different camera while aiming: Auto, Classic, TPS, OTS or FPS.",
+        "Permite utilizar una cámara diferente al apuntar: Auto, Classic, TPS, OTS o FPS."),
+    QO_DX(QO_X_MELEEAIMWALK, "Aiming melee in TPS/OTS forces a slow walk (like fixed cameras) instead of dropping the weapon to run.",
+        "Apuntar con melee en TPS/OTS fuerza paso lento (como en cámaras fijas) en vez de soltar el arma al correr."),
+    QO_DX(QO_X_CRTTRIM, "Fine 4:3 aspect trim, 0.50 to 1.50 (Simple).",
+        "Ajuste fino del aspecto 4:3, 0.50 a 1.50 (Simple)."),
+    QO_DX(QO_X_HFOV, "Horizontal field of view, 0.25 to 2.00 (Advanced).",
+        "Campo de visión horizontal, 0.25 a 2.00 (Advanced)."),
+    QO_DX(QO_X_VFOV, "Vertical field of view, 0.25 to 2.00 (Advanced).",
+        "Campo de visión vertical, 0.25 a 2.00 (Advanced)."),
+    QO_DX(QO_X_VSHIFT, "In-game vertical view shift, plus/minus 60 rows.",
+        "Desplazamiento vertical de la vista en juego, ±60 filas."),
+    QO_DX(QO_X_CUTSHIFT, "Cutscene vertical view shift, plus/minus 60 rows.",
+        "Desplazamiento vertical en cinemáticas, ±60 filas."),
+    QO_DX(QO_X_PAR, "Pixel aspect, 0.50 to 2.00 (Advanced).",
+        "Aspecto de píxel, 0.50 a 2.00 (Advanced)."),
+    QO_DA(QO_A_VIEWRESET, "Restores every value on this page.",
+        "Restaura todos los valores de esta página."),
+    /* CHEATS */
+    QO_DC(0, 0, "Invincibility, same as key 7.",
+        "Invencibilidad, igual que la tecla 7."),
+    QO_DC(0, 1, "Walk through walls.",
+        "Atravesar paredes."),
+    QO_DC(0, 2, "Enemies ignore Harry, same as key 9.",
+        "Los enemigos ignoran a Harry, igual que la tecla 9."),
+    QO_DC(0, 3, "Raises the per-room concurrent-enemy cap.",
+        "Eleva el límite de enemigos simultáneos por sala."),
+    QO_DC(0, 4, "Grants 15 handgun bullets, instant action.",
+        "Otorga 15 balas de pistola, acción inmediata."),
+    QO_DC(0, 5, "Grants the rifle if missing plus 30 shells, instant action.",
+        "Otorga el rifle si falta más 30 cartuchos, acción inmediata."),
+    QO_DC(0, 6, "Grants the shotgun if missing plus 30 shells, instant action.",
+        "Otorga la escopeta si falta más 30 cartuchos, acción inmediata."),
+    QO_DC(0, 7, "Kills nearby enemies through their normal death path, instant action.",
+        "Mata a los enemigos cercanos por su vía normal de muerte, acción inmediata."),
+    QO_DC(0, 8, "Play as another character, keeps Harry's animations. Browsable as a dropdown.",
+        "Jugar con otro personaje, conserva animaciones de Harry. Navegable como desplegable."),
+    QO_DC(0, 9, "Debug free camera.",
+        "Cámara libre de depuración."),
+    /* DEBUG */
+    QO_DC(1, 0, "Enables the console (~) and dev keys.",
+        "Activa la consola (~) y teclas de desarrollo."),
+    QO_DC(1, 1, "Harry's collision panel and wireframe.",
+        "Panel y líneas de la colisión de Harry."),
+    QO_DC(1, 2, "Animation keyframe inspector (K, comma/period).",
+        "Inspector de keyframes de animación (K, coma/punto)."),
+    QO_DC(1, 3, "Sticky fast-forward (the key is held; it switches itself off if Harry dies).",
+        "Avance rápido conmutable (la tecla es pulsada; se apaga solo si Harry muere)."),
+    QO_DC(1, 4, "Wireframe rendering.",
+        "Render en alambre."),
+    QO_DC(1, 5, "Untextured rendering.",
+        "Render sin texturas."),
+    QO_DC(1, 6, "Spawns a monster from the list on confirm. Browsable as a dropdown.",
+        "Genera un monstruo de la lista al confirmar. Navegable como desplegable."),
+    QO_DC(1, 7, "Writes position and map to the log, instant action.",
+        "Escribe posición y mapa en el log, acción inmediata."),
+    QO_DC(1, 8, "Writes the camera shot to the log, instant action.",
+        "Escribe el plano de cámara en el log, acción inmediata."),
+    QO_DC(1, 9, "Kills Harry instantly, instant action.",
+        "Mata a Harry al instante, acción inmediata."),
+    /* TRAINER */
+    QO_DX(QO_X_TRWEAPON, "Firearm to grant: handgun, rifle, shotgun, blaster. Browsable list.",
+        "Arma a otorgar: pistola, rifle, escopeta, bláster. Lista navegable."),
+    QO_DA(QO_A_GIVEWEAPON, "Grants the chosen firearm plus 30 of its ammo.",
+        "Otorga el arma de fuego elegida más 30 de su munición."),
+    QO_DX(QO_X_TRMELEE, "Melee weapon to grant: knife, pipe, drill, hammer, saw, katana, axe. Browsable list.",
+        "Arma cuerpo a cuerpo a otorgar: cuchillo, tubería, taladro, martillo, sierra, katana, hacha. Lista navegable."),
+    QO_DA(QO_A_GIVEMELEE, "Grants the chosen melee weapon.",
+        "Otorga el arma cuerpo a cuerpo elegida."),
+    QO_DX(QO_X_TRHEAL, "Healing item to grant: drink, kit, ampoule. Browsable list.",
+        "Curación a otorgar: bebida, botiquín, ampolla. Lista navegable."),
+    QO_DA(QO_A_GIVEHEAL, "Grants 3 of the chosen heal.",
+        "Otorga 3 unidades de la curación elegida."),
+    /* IMMERSION */
+    QO_DX(QO_X_IMMWEAPONS, "The equipped weapon hides after a few seconds and comes back on equip, aim, fire, reload, or when Harry senses danger while the radio crackles.",
+        "El arma equipada se oculta a los segundos y reaparece al equipar, apuntar, disparar, recargar o si Harry detecta peligro cuando la radio emite sonidos."),
+    QO_DX(QO_X_IMMFEAR, "Harry pants with fear at random while the radio sounds.",
+        "Harry jadea de miedo al azar mientras la radio suena."),
+    QO_DX(QO_X_IMMBLOOD, "Blood splats on the wall behind bullet-hit enemies.",
+        "Salpicaduras de sangre en la pared tras enemigos heridos por bala."),
+    QO_DX(QO_X_IMMFLICKER, "The flashlight flickers in short bursts near live enemies: 15% when close, 35% while facing. Per-pixel modes only, not Classic.",
+        "La linterna parpadea en ráfagas cortas cerca de enemigos vivos: 15 % cerca, 35 % mirándolo. Solo modos por píxel, no Classic."),
+    /* DIFFICULTY (independent from the native difficulty; Normal = vanilla) */
+    QO_DX(QO_X_DIFFAMMO, "Loot ammo at 15 / 50 / 100 / 170 percent. E.g. 15 bullets become 2 / 8 / 15 / 26.",
+        "Munición del loot al 15 / 50 / 100 / 170 %. P. ej. 15 balas pasan a 2 / 8 / 15 / 26."),
+    QO_DX(QO_X_DIFFHEALS, "Heal power raised or lowered to 25 / 50 / 100 / 150 percent.",
+        "Potencia o disminuye el efecto de curas al 25 / 50 / 100 / 150 %."),
+    QO_DX(QO_X_DIFFENEMY, "Enemy damage raised or lowered: Low 50, Medium 75, Normal 100, High 250, Very High 400, Hell 700 percent.",
+        "Daño enemigo aumenta o baja: Low 50, Medium 75, Normal 100, High 250, Very High 400, Hell 700 %."),
+    /* HEALTH */
+    QO_DX(QO_X_HHHUD, "Master switch for Harry's health indicator.",
+        "Interruptor general del indicador de vida de Harry."),
+    QO_DX(QO_X_HHSTYLE, "Bar: classic bar. Pulse: animated heartbeat line that speeds up at low health.",
+        "Bar: barra clásica. Pulse: línea de pulso cardiaco animado que acelera con vida baja."),
+    QO_DX(QO_X_HHNUMBER, "HP number at the right of the indicator.",
+        "Número de vida a la derecha del indicador."),
+    QO_DX(QO_X_HHCORNER, "Extreme corner for the indicator: top-left, top-right, bottom-left or bottom-right.",
+        "Esquina extrema del indicador: arriba-izquierda, arriba-derecha, abajo-izquierda o abajo-derecha."),
+    QO_DX(QO_X_HHSCALE, "Indicator size, 60 to 130 percent.",
+        "Tamaño del indicador, 60 a 130 %."),
+    QO_DX(QO_X_HHOPACITY, "Indicator opacity, 20 to 100 percent.",
+        "Opacidad del indicador, 20 a 100 %."),
+    QO_DX(QO_X_HHALWAYS, "Always visible; if not, only a few seconds after taking damage or healing.",
+        "Siempre visible; si no, solo unos segundos tras recibir daño o curarse."),
+    /* VISUAL FEEDBACK */
+    QO_DX(QO_X_SHHURT, "Camera kick on taking damage.",
+        "Sacudida de cámara al recibir daño."),
+    QO_DX(QO_X_SHHURTI, "Strength of the hurt kick, 0 to 200 percent.",
+        "Intensidad de la sacudida al recibir daño, 0 a 200 %."),
+    QO_DX(QO_X_SHFIRE, "Kick when firing, as the bullet leaves, same for all 4 guns.",
+        "Sacudida al disparar, al salir la bala, igual en las 4 armas."),
+    QO_DX(QO_X_SHFIREI, "Strength of the fire kick, 0 to 200 percent.",
+        "Intensidad de la sacudida al disparar, 0 a 200 %."),
+    QO_DX(QO_X_SHDEALT, "Kick when damaging an enemy.",
+        "Sacudida al dañar a un enemigo."),
+    QO_DX(QO_X_SHDEALTI, "Strength of the dealt kick, 0 to 200 percent.",
+        "Intensidad de la sacudida al dañar, 0 a 200 %."),
+    QO_DX(QO_X_HITMARKER, "The crosshair flashes red on a kill (needs the crosshair enabled).",
+        "La mirilla parpadea en rojo al matar (requiere la mirilla activa)."),
+    QO_DX(QO_X_KILLFLASH, "Brief fullscreen flash on a kill.",
+        "Destello fugaz a pantalla completa al matar."),
+    QO_DX(QO_X_KILLMODE, "Kill flash style. B&W: black and white. Vignette: black vignette.",
+        "Estilo del kill flash. B&W: blanco y negro. Vignette: viñeta negra."),
+    QO_DX(QO_X_LOWOP, "Low-health glow opacity, 0 to 100 percent.",
+        "Opacidad del resplandor con vida baja, 0 a 100 %."),
+    QO_DX(QO_X_HURTFLASH, "Dark-red fullscreen flash when Harry takes damage.",
+        "Destello rojo oscuro a pantalla completa cuando Harry recibe daño."),
+    QO_DX(QO_X_HURTOP, "Hurt-flash opacity, 0 to 100 percent.",
+        "Opacidad del destello de daño, 0 a 100 %."),
+};
+
+static const char* qo_desc_text(const QoRowDef* r)
+{
+    size_t i;
+    int    wantEs = (g_PcConfig.language == 3) ? 1 : 0;
+    const char* fallbackEn = NULL;
+    const char* fallbackEs = NULL;
+
+    for (i = 0; i < sizeof(s_descs) / sizeof(s_descs[0]); i++)
+    {
+        const QoDesc* d = &s_descs[i];
+        if (d->kind != r->kind)
+            continue;
+        if (r->kind == ROW_OPT)
+        {
+            if (d->key == NULL || r->key == NULL || strcmp(d->key, r->key) != 0)
+                continue;
+        }
+        else if (r->kind == ROW_CHEAT)
+        {
+            if (d->cpage != r->cpage || d->extra != r->extra)
+                continue;
+        }
+        else
+        {
+            if (d->extra != r->extra)
+                continue;
+        }
+        return wantEs ? d->es : d->en;
+    }
+
+    if (r->kind == ROW_PAGE)
+    {
+        fallbackEn = "Go to the next page.";
+        fallbackEs = "Va a la página siguiente.";
+    }
+    else if (r->kind == ROW_PREV)
+    {
+        fallbackEn = "Back to the previous page.";
+        fallbackEs = "Vuelve a la página anterior.";
+    }
+    else if (r->kind == ROW_CLOSE)
+    {
+        fallbackEn = "Close the panel.";
+        fallbackEs = "Cierra el panel.";
+    }
+    if (fallbackEn != NULL)
+        return wantEs ? fallbackEs : fallbackEn;
+    return wantEs ? "Sin descripción." : "No description.";
+}
+
+/* Wrap the selected row's description into baked lines. */
+static void qo_desc_sanitize(const char* src, char* dst, int n)
+{
+    /* The overlay font path only handles plain ASCII (anything else baked
+     * artifacts), so fold Latin-1 accents to their base letter (ñ -> n) and
+     * drop every other non-ASCII byte. The reference mds keep full spelling. */
+    int i = 0;
+    while (*src && i < n - 1)
+    {
+        unsigned char c = (unsigned char)*src;
+        if (c < 0x80)
+        {
+            if (c >= 0x20 || c == '\n')
+                dst[i++] = (char)c;
+            src++;
+        }
+        else if (c == 0xC3 && src[1])
+        {
+            unsigned char d = (unsigned char)src[1];
+            char base = 0;
+            if ((d >= 0xA0 && d <= 0xA5) || (d >= 0x80 && d <= 0x85)) base = 'a';
+            else if (d == 0xA7 || d == 0x87) base = 'c';
+            else if ((d >= 0xA8 && d <= 0xAB) || (d >= 0x88 && d <= 0x8B)) base = 'e';
+            else if ((d >= 0xAC && d <= 0xAF) || (d >= 0x8C && d <= 0x8F)) base = 'i';
+            else if (d == 0xB1 || d == 0x91) base = 'n';
+            else if ((d >= 0xB2 && d <= 0xB6) || d == 0xB0 || (d >= 0x92 && d <= 0x96) || d == 0x90) base = 'o';
+            else if ((d >= 0xB9 && d <= 0xBC) || (d >= 0x99 && d <= 0x9C)) base = 'u';
+            else if (d == 0xBF || d == 0x9F) base = 'y';
+            if (base) dst[i++] = base;
+            src += 2;
+        }
+        else if ((c & 0xE0) == 0xC0 && src[1])
+        {
+            src += 2;
+        }
+        else if ((c & 0xF0) == 0xE0 && src[1] && src[2])
+        {
+            src += 3;
+        }
+        else if ((c & 0xF8) == 0xF0 && src[1] && src[2] && src[3])
+        {
+            src += 4;
+        }
+        else
+        {
+            src++;
+        }
+    }
+    dst[i] = 0;
+}
+
+static void qo_desc_bake(const QoRowDef* r, float px, int wrap)
+{
+    const char* raw = qo_desc_text(r);
+    char clean[512];
+    const char* src = clean;
+    int len;
+    int pos = 0;
+    int li;
+
+    if (wrap < 20) wrap = 20;
+    qo_desc_sanitize(raw, clean, (int)sizeof(clean));
+    len = (int)strlen(src);
+
+    for (li = 0; li < QO_DESC_LINES; li++)
+    {
+        qo_retire(s_texDesc[li]);
+        s_texDesc[li] = 0;
+        s_descW[li] = 0;
+        s_descH[li] = 0;
+    }
+    s_descN = 0;
+
+    while (src[pos] && s_descN < QO_DESC_LINES)
+    {
+        int end, brk, k, n = 0;
+        char line[96];
+
+        while (src[pos] == ' ') pos++;
+        if (!src[pos]) break;
+        end = pos + wrap;
+        if (end >= len)
+        {
+            end = len;
+        }
+        else
+        {
+            brk = end;
+            while (brk > pos && src[brk] != ' ') brk--;
+            if (brk > pos) end = brk; /* break on a space; else hard cut */
+        }
+        for (k = pos; k < end && n < (int)sizeof(line) - 1; k++) line[n++] = src[k];
+        line[n] = 0;
+        if (n > 0)
+            s_texDesc[s_descN] = qo_bake(line, px, &s_descW[s_descN], &s_descH[s_descN]);
+        s_descN++;
+        pos = end;
+    }
+}
+
+/* ------------------------------------------------------------------ */
 /* Open / close                                                        */
 /* ------------------------------------------------------------------ */
 
@@ -1100,12 +1629,20 @@ int Pc_QuickOptions_IsOpen(void)
     return s_phase != QO_CLOSED;
 }
 
+/* Post-open input blackout: the press that opened the panel (pause-menu
+ * confirm, or a held pad button) is still down and would otherwise confirm
+ * the first row instantly. Pad/keyboard levels are gated; the mouse owns its
+ * own edges and is unaffected. */
+#define QO_OPEN_INPUT_MS 150u
+static Uint32 s_inputHoldUntil = 0;
+
 static void qo_open(void)
 {
     if (s_phase == QO_OPENING || s_phase == QO_SHOWN)
         return;
     s_phase      = QO_OPENING;
     s_phaseStart = SDL_GetTicks();
+    s_inputHoldUntil = s_phaseStart + QO_OPEN_INPUT_MS;
     s_sel        = 0;
     g_PcQuickOptionsActive = 1;
 }
@@ -1199,6 +1736,7 @@ static void qo_activate(const QoRowDef* r, int dir)
         case ROW_EXTRA: PcOpt_QuickExtraAdjust(r->extra, dir); break;
         case ROW_CHEAT: Pc_Cheats_Adjust(r->cpage, r->extra, dir); break;
         case ROW_PAGE:  qo_set_page(s_page + (dir < 0 ? -1 : +1)); break;
+        case ROW_PREV:  qo_set_page(s_page - 1); break;
         case ROW_CLOSE: Pc_QuickOptions_Close(); break;
         case ROW_ACTION: break; /* confirm-only; see the ROW_ACTION comment */
         default: break;
@@ -1231,6 +1769,18 @@ static int qo_repeat(int idx, int held)
     return fire;
 }
 
+/* Rising edge for the pad-derived buttons (confirm/close/page). The input
+ * layer asserts clickedBtnFlags every frame a gamepad button reads held, so
+ * without this a held accept machine-guns actions and page turns. Mouse
+ * clicks and keyboard edges arrive pre-edged and bypass this. */
+static int qo_btn_edge(int idx, int held)
+{
+    static int s_prevBtn[4];
+    int fire = held && !s_prevBtn[idx];
+    s_prevBtn[idx] = held;
+    return fire;
+}
+
 void Pc_QuickOptions_Update(int up, int down, int left, int right,
                             int confirm, int close, int pageNext, int pagePrev)
 {
@@ -1238,6 +1788,16 @@ void Pc_QuickOptions_Update(int up, int down, int left, int right,
     const QoRowDef* rows = qo_page_rows(s_page, &nRows);
     int mMoved, mClick, mRClick, wheel;
     float mx, my;
+
+    confirm  = qo_btn_edge(0, confirm);
+    close    = qo_btn_edge(1, close);
+    pageNext = qo_btn_edge(2, pageNext);
+    pagePrev = qo_btn_edge(3, pagePrev);
+
+    if ((Sint32)(s_inputHoldUntil - SDL_GetTicks()) > 0)
+    {
+        up = down = left = right = confirm = close = pageNext = pagePrev = 0;
+    }
 
     /* Advanced has two rows Simple does not, so a switch while parked on one of
      * them would leave the cursor past the end of the array. */
@@ -1393,16 +1953,16 @@ void Pc_QuickOptions_Update(int up, int down, int left, int right,
                 else
                     qo_confirm(&rows[row]);
             }
-            if (mRClick && (QO_IS_VALUE_ROW(rows[row].kind) || rows[row].kind == ROW_PAGE))
+            if (mRClick && (QO_IS_VALUE_ROW(rows[row].kind) || rows[row].kind == ROW_PAGE || rows[row].kind == ROW_PREV))
             { s_sel = row; qo_activate(&rows[row], -1); }
             if (wheel && QO_IS_VALUE_ROW(rows[row].kind))
                 qo_activate(&rows[row], wheel > 0 ? +1 : -1);
         }
     }
 
-    /* The page row adjusts like a value: Left/right-click go back a page,
-     * Right/confirm go forward. */
-    if (QO_IS_VALUE_ROW(rows[s_sel].kind) || rows[s_sel].kind == ROW_PAGE)
+    /* The page rows adjust like values: Left goes back a page,
+     * Right/confirm go forward (Prev rows always go back). */
+    if (QO_IS_VALUE_ROW(rows[s_sel].kind) || rows[s_sel].kind == ROW_PAGE || rows[s_sel].kind == ROW_PREV)
     {
         if (left)  qo_activate(&rows[s_sel], -1);
         if (right) qo_activate(&rows[s_sel], +1);
@@ -1418,10 +1978,18 @@ static void qo_confirm(const QoRowDef* r)
 {
     if (r->kind == ROW_CHEAT)
         Pc_Cheats_Confirm(r->cpage, r->extra);
+    else if (r->kind == ROW_PREV)
+        qo_activate(r, -1);
     else if (r->kind == ROW_ACTION)
     {
         if (r->extra == QO_A_VIEWRESET)
             PcOpt_QuickViewReset();
+        else if (r->extra == QO_A_GIVEWEAPON)
+            PcOpt_TrainerGiveWeapon();
+        else if (r->extra == QO_A_GIVEMELEE)
+            PcOpt_TrainerGiveMelee();
+        else if (r->extra == QO_A_GIVEHEAL)
+            PcOpt_TrainerGiveHeal();
     }
     else
         qo_activate(r, +1);
@@ -1685,6 +2253,51 @@ void Pc_QuickOptions_Draw(void)
         qo_quad(s_texTitle, NX(tx), NY(ty), NX(tx + s_titleW), NY(ty - s_titleH), 1.0f, 0.93f, 0.86f, dim);
     }
 
+    /* Description panel source: re-bake on selection, page, language or
+     * available-width change. Fixed viewport-derived size (x2.5 over the
+     * original), independent from the sibling panel. */
+    {
+        int lang = (g_PcConfig.language == 3) ? 1 : 0;
+        int dpx = (int)(vpH * 0.035f);
+        int wrap;
+        float availW = vpW - 8.0f - (panelR + 14.0f);
+        if (dpx < 12) dpx = 12;
+        wrap = (int)(availW / ((float)dpx * 0.55f));
+        if (wrap > 60) wrap = 60;
+        if (wrap < 20)
+        {
+            /* Too narrow for even a slim box: drop the panel. */
+            if (s_descN > 0)
+            {
+                int li;
+                for (li = 0; li < QO_DESC_LINES; li++)
+                {
+                    qo_retire(s_texDesc[li]);
+                    s_texDesc[li] = 0;
+                }
+                s_descN = 0;
+                s_descMaxW = 0;
+            }
+            s_descWrap = wrap;
+        }
+        else if (s_sel >= 0 && s_sel < nRows &&
+            (s_descSel != s_sel || s_descPage != s_page || s_descLang != lang || s_descWrap != wrap))
+        {
+            int li;
+            qo_desc_bake(&rows[s_sel], (float)dpx, wrap);
+            s_descMaxW = 0;
+            for (li = 0; li < s_descN; li++)
+            {
+                if (s_descW[li] > s_descMaxW)
+                    s_descMaxW = s_descW[li];
+            }
+            s_descSel = s_sel;
+            s_descPage = s_page;
+            s_descLang = lang;
+            s_descWrap = wrap;
+        }
+    }
+
     for (i = 0; i < nRows && i < QO_MAX_ROWS; i++)
     {
         const QoRowDef* r = &rows[i];
@@ -1755,6 +2368,39 @@ void Pc_QuickOptions_Draw(void)
         float hx = panelL + (panelW - (float)s_hintW) * 0.5f;
         float hy = panelB + hintH * 0.72f;
         qo_quad(s_texHint, NX(hx), NY(hy), NX(hx + s_hintW), NY(hy - s_hintH), 0.7f, 0.7f, 0.75f, dim);
+    }
+
+    /* Description panel: hugs the main panel's right edge, sized to the baked
+     * content (not the viewport). Skipped when it would run off-screen. */
+    {
+        float descL, descR, descPad, lineY, descH = 0.0f, boxW;
+        int li;
+
+        descL = panelR + 14.0f;
+        if (descL < vpW - 8.0f && s_descN > 0 && s_descMaxW > 0)
+        {
+            for (li = 0; li < s_descN; li++)
+                descH += (float)s_descH[li] + 6.0f;
+            boxW = (float)s_descMaxW + 24.0f;
+            if (descL + boxW > vpW - 8.0f)
+                boxW = vpW - 8.0f - descL;
+            descPad = 12.0f;
+            descR = descL + boxW;
+            qo_quad(s_texWhite, NX(descL), NY(listT), NX(descR), NY(listT - descH - descPad),
+                    0.04f, 0.04f, 0.05f, 0.58f * dim);
+            lineY = listT - descPad * 0.5f;
+            for (li = 0; li < s_descN; li++)
+            {
+                if (s_texDesc[li])
+                {
+                    float tH = (float)s_descH[li];
+                    qo_quad(s_texDesc[li], NX(descL + descPad), NY(lineY),
+                            NX(descL + descPad + s_descW[li]), NY(lineY - tH),
+                            0.85f, 0.87f, 0.90f, dim);
+                }
+                lineY -= (float)s_descH[li] + 6.0f;
+            }
+        }
     }
 
     /* Dropdown list over the value column of its row, on top of the rows. */

@@ -132,6 +132,15 @@ void Game_WarmBoot(void) // 0x80034264
     prevState                = g_GameWork.gameState;
     g_GameWork.gameState = GameState_MainMenu;
 
+#ifdef SH_PC_PORT
+    /* A horde run never survives the trip back to the title: dying (or
+     * quitting) ends it, so Continue always loads a vanilla save. */
+    {
+        extern void Pc_Horde_EndRun(void);
+        Pc_Horde_EndRun();
+    }
+#endif
+
     g_SysWork.counters_1C[0] = 0;
     g_SysWork.counters_1C[1] = 0;
 

@@ -263,6 +263,7 @@
 		},
 		downloadLog: downloadLog,
 		fs: function () { return Module && Module.FS; },
+		audioContexts: function () { return audioContexts; },
 		/* Every file the game wrote, with the text of small logs/configs. */
 		dumpFiles: function () {
 			if (!Module) return "";
@@ -290,6 +291,42 @@
 	});
 	window.addEventListener("unhandledrejection", function (e) {
 		if (running) showCrash("The game stopped unexpectedly.", String(e.reason && (e.reason.stack || e.reason)));
+	});
+
+	/* ---------------- Audio lifecycle ---------------- */
+
+	/* Browsers suspend a hidden page's AudioContext (phones always; iOS calls
+	 * it "interrupted"), and SDL only resumes it once, when the device opens,
+	 * so audio stayed off for good after the first trip to the home screen.
+	 * Track every context the game creates and resume it on the way back;
+	 * iOS only honours resume() inside a gesture, hence the input listeners. */
+	var audioContexts = [];
+	(function trackAudioContexts() {
+		var Base = window.AudioContext || window.webkitAudioContext;
+		if (!Base) return;
+		var Tracked = function (opts) {
+			var ctx = new Base(opts);
+			audioContexts.push(ctx);
+			return ctx;
+		};
+		Tracked.prototype = Base.prototype;
+		window.AudioContext = Tracked;
+		if (window.webkitAudioContext) window.webkitAudioContext = Tracked;
+	})();
+
+	function resumeAudio() {
+		if (document.visibilityState === "hidden") return;
+		audioContexts.forEach(function (ctx) {
+			if (ctx.state !== "running" && ctx.state !== "closed")
+				ctx.resume().catch(function () {});
+		});
+	}
+
+	document.addEventListener("visibilitychange", resumeAudio);
+	window.addEventListener("focus", resumeAudio);
+	window.addEventListener("pageshow", resumeAudio);
+	["pointerdown", "touchend", "keydown"].forEach(function (ev) {
+		document.addEventListener(ev, resumeAudio, { capture: true, passive: true });
 	});
 
 	/* ---------------- Fullscreen ---------------- */

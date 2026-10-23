@@ -1,5 +1,13 @@
 # Silent Hill PC Enhanced
 
+<p align="center">
+  <a href="pc_port/docs/Enhancements_and_Horde_Mode_EN.md"><b>📖 Features &amp; Horde Mode guide (English)</b></a>
+  &nbsp;·&nbsp;
+  <a href="pc_port/docs/Mejoras_y_Modo_Hordas.md"><b>📖 Guía de mejoras y Modo Hordas (Español)</b></a>
+  <br/>
+  <a href="https://github.com/Matt122Shenk/silent-hill-pc-enhanced/releases/latest"><b>⬇️ Download the latest release / Descargar la última versión</b></a>
+</p>
+
 > **Unofficial fork.** Silent Hill PC Enhanced is a modified version of the
 > [Silent Hill Native PC Port](https://github.com/SlickAmogus/silent-hill-decomp)
 > by Chris Hardin (KushAstronaut). It is **not affiliated with or endorsed by

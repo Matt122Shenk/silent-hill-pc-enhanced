@@ -1,5 +1,10 @@
 # Silent Hill PC Port — Changelog
 
+## Silent Hill PC Enhanced 2026.10.23 -- 2026-10-23 (unofficial fork)
+- Flashlight flicker (Immersion) reworked: a harsher, irregular stutter that ends in a half-second blackout; while the beam is dead the light button does nothing until it recovers by itself. Chance while facing an enemy raised from 35% to 45%
+- New step-by-step guide for custom gunshot and notification sounds (English / Spanish), included in the zip's `docs/` folder
+- README: quick links to the guides and the latest release
+
 ## Silent Hill PC Enhanced 2026.10.22 -- 2026-10-22 (unofficial fork)
 Modified by Matt122Shenk on top of beta-2026.09.04.1 (tag `crossplatform-beta`,
 `5c9a639`), between 2026-10-12 and 2026-10-22. Not an official release. Full

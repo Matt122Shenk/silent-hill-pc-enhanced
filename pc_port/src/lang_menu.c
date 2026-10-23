@@ -191,6 +191,7 @@ static const s_MenuTranslation s_MenuTr[] = {
      * needs its own key or a translated build falls back to English there. */
     { "Android_Options",   { "Android-Optionen",   "Options_Android",     "Opciones_Android",   "Opzioni_Android" } },
     { "iOS_Options",       { "iOS-Optionen",       "Options_iOS",         "Opciones_iOS",       "Opzioni_iOS"    } },
+    { "Web_Options",       { "Web-Optionen",       "Options_Web",         "Opciones_Web",       "Opzioni_Web"    } },
     { "Resolution",        { "Aufl\xF6sung",       "R\xE9solution",       "Resoluci\xF3n",      "Risoluzione"    } },
     { "Window_Mode",       { "Fenstermodus",       "Mode_fen\xEAtre",     "Modo_ventana",       "Modo_finestra"  } },
     { "Texture_Filter",    { "Texturfilter",       "Filtre_texture",      "Filtro_textura",     "Filtro_texture" } },

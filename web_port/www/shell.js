@@ -24,6 +24,7 @@
 	};
 
 	var SECTOR = 2352;
+	var BUILD = "__BUILD__";
 	var isIOS = /iPhone|iPad|iPod/.test(navigator.userAgent) ||
 		(navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
 	/* A coarse primary pointer is a phone or tablet. A touchscreen laptop has a
@@ -350,10 +351,13 @@
 			discBytes = bytes;
 			setStatus("Loading the game…");
 			ui.bar.style.width = "100%";
-			return loadScript("SilentHillPC.js");
+			return loadScript("SilentHillPC.js?v=" + BUILD);
 		}).then(function () {
 			return createSilentHill({
 				canvas: ui.canvas,
+				/* Same stamp on every file, so a cached older .js can never pair with
+				 * a newer .wasm after an update. */
+				locateFile: function (p, dir) { return dir + p + "?v=" + BUILD; },
 				preRun: [function (m) {
 					/* environ is built during runtime init, after preRun and before
 					 * main, so this is the last moment it can be set. */

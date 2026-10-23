@@ -35,6 +35,7 @@
 #endif
 #include <SDL.h>
 #include <SDL_main.h>
+#include "web_platform.h"
 #if defined(__ANDROID__) || defined(SH_IOS) || defined(__EMSCRIPTEN__)
 #include <SDL_system.h>   /* SDL_AndroidGetExternalStoragePath */
 #include <sys/stat.h>    /* mkdir */
@@ -1443,6 +1444,13 @@ int main(int argc, char* argv[])
     }
     int windowWidth = g_PcConfig.windowWidth;
     int windowHeight = g_PcConfig.windowHeight;
+#if defined(__EMSCRIPTEN__)
+    /* A Resolution or Window_Mode saved from any earlier build (the rows are
+     * compiled out here now) must not size the canvas or ask SDL for a
+     * fullscreen the page did not request from a user gesture. */
+    Web_CanvasSize(&windowWidth, &windowHeight);
+    g_PcConfig.fullscreen = 0;
+#endif
 
     SH_LOG("Game data path: %s", g_GameDataPath);
 
@@ -1612,7 +1620,7 @@ int main(int argc, char* argv[])
 
     SH_LOG("PsyCross initialized. Window: %dx%d", windowWidth, windowHeight);
 
-#if defined(__ANDROID__) || defined(SH_IOS)
+#if defined(__ANDROID__) || defined(SH_IOS) || defined(__EMSCRIPTEN__)
     /* On desktop the config IS the window size, so the five per-poly visibility
      * bounds that divide by g_PcConfig.windowWidth/Height agree with what is on
      * screen. Neither mobile target has any say in it — the surface size comes
@@ -1638,6 +1646,10 @@ int main(int argc, char* argv[])
             g_PcConfig.windowHeight = g_windowHeight;
         }
     }
+#endif
+
+#if defined(__EMSCRIPTEN__)
+    Web_TrackWindowSize();
 #endif
 
     /* Needs the GL context, so it runs here rather than beside the system-RAM

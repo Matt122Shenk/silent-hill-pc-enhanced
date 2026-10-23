@@ -291,7 +291,7 @@ static const s_PcOpt PCOPT_G[] = {
      * (see GR_InitialiseGLContext), so picking a number here only desynchronises
      * the viewport and cull bounds from the screen until the next launch.
      * Window_Mode is moot too — the window is always fullscreen. */
-#if !defined(__ANDROID__) && !defined(SH_IOS)
+#if !defined(__ANDROID__) && !defined(SH_IOS) && !defined(__EMSCRIPTEN__)
     { "Resolution",     NULL,                           NULL,                   NULL,      0, NULL,      NULL,                          0, PCK_RES    },
     { "Window_Mode",    &g_PcConfig.fullscreen,         "fullscreen",           VAL_WIN,   3, LBL_WIN,   NULL,                          1, PCK_WINMODE },
 #endif

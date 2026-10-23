@@ -28,6 +28,10 @@ rm -rf "$DIST"
 mkdir -p "$DIST"
 cp -r "$HERE/www/." "$DIST/"
 cp "$BUILD/SilentHillPC.js" "$BUILD/SilentHillPC.wasm" "$BUILD/SilentHillPC.data" "$DIST/"
+# Cache-buster shared by every file the page loads (see shell.js locateFile).
+STAMP="$(date +%Y%m%d%H%M)-$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo dev)"
+sed -i "s/__BUILD__/$STAMP/g" "$DIST/index.html" "$DIST/shell.js"
+echo "Build stamp: $STAMP"
 
 echo
 echo "Site staged in: $DIST"
